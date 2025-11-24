@@ -994,16 +994,17 @@ YTensor<T, dim + 1> YTensor<T, dim>::unfold(int mdim, int mkernel, int mstride, 
 
     mdim = (mdim % dim + dim) % dim; // 循环索引
     
-    // 计算展开后的形状
+    // 计算展开后的形状（nums 放在 kernel 之前：[..., nums, kernel, ...]）
     std::vector<int> newShape = _shape;
     int nums = (_shape[mdim] - (mkernel - 1) * mdilation - 1) / mstride + 1;
-    newShape.insert(newShape.begin() + mdim, mkernel);
-    newShape[mdim + 1] = nums;
+    // 将原维度替换为 nums，然后在其后插入 kernel，这样最终顺序为 nums, kernel
+    newShape[mdim] = nums;
+    newShape.insert(newShape.begin() + mdim + 1, mkernel);
 
-    // 计算新的步长
+    // 计算新的步长：nums 维度步长是原步长 * stride，kernel 维度步长是原步长 * dilation
     std::vector<int> newStride = _stride;
-    newStride.insert(newStride.begin() + mdim, _stride[mdim] * mdilation);// 核内步长
-    newStride[mdim + 1] = _stride[mdim] * mstride; // 窗口移动步长
+    newStride[mdim] = _stride[mdim] * mstride; // 窗口移动步长，用于 nums
+    newStride.insert(newStride.begin() + mdim + 1, _stride[mdim] * mdilation); // 核内步长
 
     YTensor<T, dim + 1> op;
     op._shape = newShape;
@@ -1095,10 +1096,10 @@ YTensor<T, dim> YTensor<T, dim>::ones(const std::initializer_list<int>& shape){
 }
 
 template <typename T, int dim>
-typename YTensor<T, dim>::_RandnGenerator YTensor<T, dim>::randn = YTensor<T, dim>::_RandnGenerator(yt::infos::gen);
+inline typename YTensor<T, dim>::_RandnGenerator YTensor<T, dim>::randn = YTensor<T, dim>::_RandnGenerator(yt::infos::gen);
 
 template <typename T, int dim>
-typename YTensor<T, dim>::_RanduGenerator YTensor<T, dim>::randu = YTensor<T, dim>::_RanduGenerator(yt::infos::gen);
+inline typename YTensor<T, dim>::_RanduGenerator YTensor<T, dim>::randu = YTensor<T, dim>::_RanduGenerator(yt::infos::gen);
 
 template <typename T, int dim>
 void YTensor<T, dim>::seed(unsigned int seed) {

@@ -20,6 +20,8 @@
 #include "./include/ytensor_concepts.hpp"
 #include "./include/ytensor_infos.hpp"
 
+#include "./include/ytensor_base.hpp"
+
 /**
  * @brief 易于使用的张量类。可以处理任意维度的张量。
  * @tparam T 张量元素的数据类型。

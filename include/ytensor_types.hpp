@@ -74,7 +74,18 @@ namespace yt::types {
         else if (typeName == "bool") return 1;
         // non std
         else if (typeName == "bfloat16") return 2;
-        else return 0;
+        else {
+            // registered custom types
+            auto& registry = yt::infos::getTypeRegistry();// std::unordered_map<std::string, std::pair<std::string, int32_t>>
+            for(auto& [key, value] : registry) {
+                if (value.first == typeName) {
+                    return value.second;
+                }
+            }
+            // unk
+            throw std::runtime_error(std::string("Type ") + typeName + " is not registered.");
+            return 0;
+        }
     }
 
     /// @brief 注册自定义类型
