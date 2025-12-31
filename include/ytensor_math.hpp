@@ -9,13 +9,8 @@
 
 public:
 
-/// @brief 最大子元素中量遍历父张量阈值，超过则使用遍历法，否则使用布尔掩码。
-static constexpr int MAX_SUBELEMENT_RATIO = 2;
-
-/// @brief 获取两个张量形状的广播计算后的输出形状
-/// @param otherShape: 形状向量
-/// @return 返回广播后的形状
-std::vector<int> broadcastShape(std::vector<int> otherShape) const;
+/// @brief 最大子元素中量遍历父张量阈值，超过则使用stride遍历法，否则使用布尔掩码遍历底层存储。
+static constexpr double MAX_SUBELEMENT_RATIO = 2.5;
 
 /// @brief 对两个张量广播二元运算
 /// @param other: 另一个张量
@@ -37,6 +32,15 @@ YTensor<T, std::max(dim, dim1)> binaryOpBroadcast(const YTensor<T, dim1> &other,
 /// @return 返回结果张量，维度数为输入两个张量最大值。
 template <int dim1, typename Func>
 YTensor<T, dim> &binaryOpBroadcastInplace(const YTensor<T, dim1> &other, Func &&func, std::string opName = "", double flop = 1.);
+
+/// @brief 统一的广播原地操作函数，支持N元张量/标量操作（转发到yt::kernel::broadcastInplace）
+/// @tparam Func 函数类型，签名为 void func(T&, const T&, ...) 或返回值被忽略
+/// @tparam Args 参数类型，可以是YTensor或标量T
+/// @param func 操作函数，第一个参数为this的元素引用
+/// @param tensors 输入的张量或标量
+/// @return 返回自身引用
+template <typename Func, typename... Args>
+YTensor<T, dim>& broadcastInplace(Func&& func, Args&&... tensors);
 
 /// @brief 对张量进行逐元素二元运算。
 /// @param other: 标量值。
@@ -94,6 +98,13 @@ YTensor<T, dim> sum(int axis) const requires(dim > 1);
 YTensor<T, dim> sum(std::vector<int> axes) const requires (dim > 1);
 T sum(int axis = 0) const requires (dim == 1);
 
+/// @brief 对指定轴求均值
+/// @param axis: 轴索引，当张量的维度为1时，取值无关结果。
+/// @return 均值结果
+YTensor<T, dim> mean(int axis) const requires(dim > 1);
+YTensor<T, dim> mean(std::vector<int> axes) const requires (dim > 1);
+T mean(int axis = 0) const requires (dim == 1);
+
 /// @brief 对指定轴求最大值
 /// @param axis: 轴索引，当张量的维度为1时，取值无关结果。
 /// @return 最大值及其索引
@@ -101,7 +112,7 @@ std::pair<YTensor<T, dim>, YTensor<int, dim>> max(int axis) const requires (dim 
 std::pair<YTensor<T, dim>, YTensor<int, dim>> max(std::vector<int> axes) const requires (dim > 1);
 std::pair<T, int> max(int axis = 0) const requires (dim == 1);
 
-protected:
+// protected:
 
 /// @brief 矩阵乘法的无优化后端实现，只保证规则正确，相当低效。
 /// @param other: 右张量输入。
@@ -109,12 +120,8 @@ protected:
 template<int dim1>
 YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_zero_backend(const YTensor<T, dim1>& other) const;
 
-public: // end of naive math
-
 /////////////// Eigen support ///////////////
 #if YT_USE_EIGEN
-protected:
-
 /// @brief Eigen类型转换
 using EigenMatrixMap = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::Stride<Eigen::Dynamic,Eigen::Dynamic>>;  
 
@@ -128,10 +135,10 @@ EigenMatrixMap matViewEigen() const requires(dim <= 2);
 template<int dim1>
 YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_eigen_backend(const YTensor<T, dim1>& other) const;
 
-public:
 #endif // YT_USE_EIGEN
 public: // end of ytensor_math.hpp
 
 // ********************************
 // TODO:
 // 1. <<左右移运算符仍然未支持
+// 2. 返回布尔值的运算符尚未支持

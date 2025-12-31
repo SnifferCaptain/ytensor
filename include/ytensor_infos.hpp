@@ -16,6 +16,9 @@
 #include <unordered_map>
 #include <string>
 #include <cstdint>
+#include <tuple>
+#include <functional>
+#include <memory>
 
 namespace yt::infos{
     static constexpr double minParOps = 29609.;
@@ -56,10 +59,21 @@ namespace yt::infos{
         truncate = 2    // 直接截断，速度最快，偏低。
     } roundMode = RoundMode::nearestEven;
 
+    struct TypeRegItem{
+        std::string name;
+        int32_t size;
+        std::function<std::string(const void*)> toString;
+        // 非POD类型支持：析构和拷贝构造
+        bool isPOD = true;  // POD类型不需要特殊处理
+        std::function<void(void*)> destructor = nullptr;           // 调用析构函数
+        std::function<void(void*, const void*)> copyConstruct = nullptr;  // placement new + 拷贝构造
+        std::function<void(void*)> defaultConstruct = nullptr;     // placement new + 默认构造
+    };
+
     /// @brief 类型注册表
     /// @return 返回类型注册表的引用
-    inline std::unordered_map<std::string, std::pair<std::string, int32_t>>& getTypeRegistry() {
-        static std::unordered_map<std::string, std::pair<std::string, int32_t>> registry;
+    inline auto& getTypeRegistry() {
+        static std::unordered_map<std::string, yt::infos::TypeRegItem> registry;
         return registry;
     }
 
@@ -71,17 +85,24 @@ namespace yt::infos{
 
     /// @brief 控制是否启用Eigen库的宏，默认启用
     #ifndef YT_USE_EIGEN
-        #if __has_include(<Eigen/Dense>)
+        #if __has_include(<Eigen/Core>)
             #define YT_USE_EIGEN 1
         #else
             #define YT_USE_EIGEN 0
         #endif
+    #endif
+    
+    /// @brief 控制是否启用YTensorBase模板显式实例化（预创建常用类型模板）
+    /// 优点：减少编译时间，可能提升运行时性能（减少模板实例化开销）
+    /// 设为0则不预创建，所有模板按需实例化
+    #ifndef YT_PREINSTANTIATE_TEMPLATES
+        #define YT_PREINSTANTIATE_TEMPLATES 1
     #endif
 }// namespace yt::infos
 
 /////////////// extern includes ///////////////
 
 #if YT_USE_EIGEN
-#include <Eigen/Dense>
+#include <Eigen/Core>
 #endif // YT_USE_EIGEN
     

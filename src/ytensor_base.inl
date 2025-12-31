@@ -1,10 +1,11 @@
-#include "include/ytensor_infos.hpp"
+#include "../include/ytensor_infos.hpp"
+#include "../include/ytensor_types.hpp"
+
+namespace yt{
+
 inline std::vector<int> YTensorBase::shape() const {
     return _shape;
 }
-
-#include "../include/ytensor_types.hpp"
-
 
 inline YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string& dtype) {
     _shape = shape;
@@ -23,7 +24,40 @@ inline YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string
     size_t total = 1;
     for (int v : _shape) total *= std::max(0, v);
     if (total == 0) total = 1;
-    _data = std::shared_ptr<char[]>(new char[total * _element_size]);
+    
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(dtype);
+    if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
+        // 非POD类型：需要使用自定义删除器
+        const auto& typeInfo = typeInfoOpt->get();
+        size_t elemSize = _element_size;
+        size_t numElems = total;
+        auto destructor = typeInfo.destructor;
+        auto defaultConstruct = typeInfo.defaultConstruct;
+        
+        // 分配内存
+        char* rawPtr = new char[total * _element_size];
+        
+        // 调用默认构造函数（如果有）
+        if (defaultConstruct) {
+            for (size_t i = 0; i < numElems; ++i) {
+                defaultConstruct(rawPtr + i * elemSize);
+            }
+        }
+        
+        // 使用自定义删除器
+        _data = std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
+            if (destructor) {
+                for (size_t i = 0; i < numElems; ++i) {
+                    destructor(ptr + i * elemSize);
+                }
+            }
+            delete[] ptr;
+        });
+    } else {
+        // POD类型：简单分配即可
+        _data = std::shared_ptr<char[]>(new char[total * _element_size]);
+    }
     _offset = 0;
 }
 
@@ -34,6 +68,18 @@ inline YTensorBase::YTensorBase(const YTensorBase& other) {
     _data = other._data;
     _element_size = other._element_size;
     _dtype = other._dtype;
+}
+
+inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
+    if (this != &other) {
+        _shape = other._shape;
+        _stride = other._stride;
+        _offset = other._offset;
+        _data = other._data;
+        _element_size = other._element_size;
+        _dtype = other._dtype;
+    }
+    return *this;
 }
 
 inline int YTensorBase::shape(int atDim) const {
@@ -114,6 +160,15 @@ inline int YTensorBase::offset(const std::vector<int>& index) const {
     return static_cast<int>(this->toIndex_(index));
 }
 
+template <typename... Args>
+inline int YTensorBase::offset_(Args... index) const {
+    return _offset + offset(index...);
+}
+
+inline int YTensorBase::offset_(const std::vector<int>& index) const {
+    return _offset + offset(index);
+}
+
 // 数据访问：提供模板化的按类型访问，以及 float 的便捷重载
 #include <cstring>
 
@@ -159,34 +214,277 @@ inline void YTensorBase::shallowCopyTo(YTensorBase &other) const {
 inline YTensorBase YTensorBase::clone() const {
     YTensorBase op;
     op._shape = _shape;
-    op._stride = _stride;
-    op._offset = 0;
     op._dtype = _dtype;
     op._element_size = _element_size;
-    // allocate and copy raw bytes
+    op._offset = 0;
+    
+    // 计算连续排布的stride
+    int ndim = static_cast<int>(_shape.size());
+    op._stride.resize(ndim);
+    if (ndim > 0) {
+        op._stride[ndim - 1] = 1;
+        for (int i = ndim - 2; i >= 0; --i) {
+            op._stride[i] = op._stride[i + 1] * _shape[i + 1];
+        }
+    }
+    
+    // 计算总元素数
     size_t total = 1;
     for (int v : _shape) total *= std::max(0, v);
     if (total == 0) total = 1;
-    op._data = std::shared_ptr<char[]>(new char[total * _element_size]);
-    if (_data) {
-        std::memcpy(op._data.get(), _data.get(), total * _element_size);
+    
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    size_t elemSize = _element_size;
+    
+    if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
+        // 非POD类型：需要使用拷贝构造和自定义删除器
+        const auto& typeInfo = typeInfoOpt->get();
+        size_t numElems = total;
+        auto destructor = typeInfo.destructor;
+        auto copyConstruct = typeInfo.copyConstruct;
+        
+        // 分配内存
+        char* rawPtr = new char[total * elemSize];
+        
+        // 调用拷贝构造函数（处理非连续情况）
+        if (copyConstruct && _data) {
+            for (size_t dst = 0; dst < numElems; ++dst) {
+                // 计算源张量中对应元素的物理位置
+                size_t srcIndex = _offset;
+                size_t index = dst;
+                for (int i = ndim - 1; i >= 0; --i) {
+                    srcIndex += (index % _shape[i]) * _stride[i];
+                    index /= _shape[i];
+                }
+                copyConstruct(rawPtr + dst * elemSize, _data.get() + srcIndex * elemSize);
+            }
+        }
+        
+        // 使用自定义删除器
+        op._data = std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
+            if (destructor) {
+                for (size_t i = 0; i < numElems; ++i) {
+                    destructor(ptr + i * elemSize);
+                }
+            }
+            delete[] ptr;
+        });
+    } else {
+        // POD类型
+        op._data = std::shared_ptr<char[]>(new char[total * elemSize]);
+        if (_data) {
+            // 检查是否连续
+            if (isContiguous()) {
+                // 连续：直接memcpy
+                std::memcpy(op._data.get(), _data.get() + _offset * elemSize, total * elemSize);
+            } else {
+                // 非连续：逐元素复制
+                char* dstPtr = op._data.get();
+                const char* srcBase = _data.get();
+                for (size_t dst = 0; dst < total; ++dst) {
+                    // 计算源张量中对应元素的物理位置
+                    size_t srcIndex = _offset;
+                    size_t index = dst;
+                    for (int i = ndim - 1; i >= 0; --i) {
+                        srcIndex += (index % _shape[i]) * _stride[i];
+                        index /= _shape[i];
+                    }
+                    std::memcpy(dstPtr + dst * elemSize, srcBase + srcIndex * elemSize, elemSize);
+                }
+            }
+        }
     }
     return op;
 }
 
-// non-template atData overloads removed; use template atData<T>() instead
+inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
+    // 验证shape一致
+    if (!this->shapeMatch(src.shape())) {
+        throw std::runtime_error("copy_: source and destination shapes must match");
+    }
+    // 验证dtype一致
+    if (this->_dtype != src._dtype) {
+        throw std::runtime_error("copy_: source and destination dtypes must match");
+    }
+    
+    size_t elemSize = _element_size;
+    int d = ndim();
+    size_t total = size();
+    
+    // 如果两者都是完全连续的，直接memcpy
+    if (this->isContiguous() && src.isContiguous()) {
+        std::memcpy(_data.get() + _offset * elemSize, 
+                    src._data.get() + src._offset * elemSize, 
+                    total * elemSize);
+        return *this;
+    }
+    
+    // 找到从哪个维度开始两者都是连续的
+    int dstCFrom = this->isContiguousFrom();
+    int srcCFrom = src.isContiguousFrom();
+    
+    // 检查两者stride是否完全匹配
+    bool strideMatch = (d == src.ndim());
+    for (int i = 0; i < d && strideMatch; ++i) {
+        if (_stride[i] != src._stride[i]) {
+            strideMatch = false;
+        }
+    }
+    
+    // 只有当两者从相同维度开始都连续，且连续部分的stride也匹配时，才能优化
+    if (dstCFrom == srcCFrom && dstCFrom < d) {
+        // 检查从dstCFrom开始的stride是否匹配
+        bool contiguousMatch = true;
+        for (int i = dstCFrom; i < d && contiguousMatch; ++i) {
+            if (_stride[i] != src._stride[i]) {
+                contiguousMatch = false;
+            }
+        }
+        
+        if (contiguousMatch) {
+            // 连续部分stride匹配，可以分块memcpy
+            size_t contiguousSize = 1;
+            for (int i = dstCFrom; i < d; i++) {
+                contiguousSize *= _shape[i];
+            }
+            
+            size_t outerSize = 1;
+            for (int i = 0; i < dstCFrom; i++) {
+                outerSize *= _shape[i];
+            }
+            
+            char* dstBasePtr = _data.get();
+            const char* srcBasePtr = src._data.get();
+            
+            #pragma omp parallel for if(outerSize > 64)
+            for (size_t outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
+                // 计算非连续部分的坐标
+                std::vector<int> outerCoord(dstCFrom);
+                size_t remaining = outerIdx;
+                for (int i = dstCFrom - 1; i >= 0; i--) {
+                    outerCoord[i] = remaining % _shape[i];
+                    remaining /= _shape[i];
+                }
+                
+                // 计算dst的偏移
+                size_t dstOffset = _offset;
+                for (int i = 0; i < dstCFrom; i++) {
+                    dstOffset += outerCoord[i] * _stride[i];
+                }
+                
+                // 计算src的偏移
+                size_t srcOffset = src._offset;
+                for (int i = 0; i < dstCFrom; i++) {
+                    srcOffset += outerCoord[i] * src._stride[i];
+                }
+                
+                // 复制连续部分
+                std::memcpy(dstBasePtr + dstOffset * elemSize, 
+                            srcBasePtr + srcOffset * elemSize, 
+                            contiguousSize * elemSize);
+            }
+            
+            return *this;
+        }
+    }
+    
+    // 通用情况：逐元素复制
+    auto thisLogicStride = this->stride();
+    auto srcLogicStride = src.stride();
+    
+    char* dstBasePtr = _data.get();
+    const char* srcBasePtr = src._data.get();
+    
+    #pragma omp parallel for if(total > 1024)
+    for (size_t index = 0; index < total; ++index) {
+        // 计算逻辑坐标
+        std::vector<int> coord(d);
+        size_t remaining = index;
+        for (int i = 0; i < d; i++) {
+            coord[i] = (remaining / thisLogicStride[i]) % _shape[i];
+        }
+        
+        // 计算dst的物理索引
+        size_t dstIndex = _offset;
+        for (int i = 0; i < d; i++) {
+            dstIndex += coord[i] * _stride[i];
+        }
+        
+        // 计算src的物理索引
+        size_t srcIndex = src._offset;
+        for (int i = 0; i < d; i++) {
+            srcIndex += coord[i] * src._stride[i];
+        }
+        
+        std::memcpy(dstBasePtr + dstIndex * elemSize, 
+                    srcBasePtr + srcIndex * elemSize, 
+                    elemSize);
+    }
+    
+    return *this;
+}
 
 inline std::ostream &operator<<(std::ostream &out, const YTensorBase &tensor){
-    out << "YTensorBase(shape=[";
+    out << "[YTensorBase]:<" << tensor.dtype() << ">" << std::endl;
+    out << "[itemSize]: " << tensor.size() << std::endl;
+    out << "[byteSize]: " << tensor.size() * tensor.elementSize() << std::endl;
+    out << "[shape]: [";
     for (int i = 0; i < tensor.ndim(); ++i){
         out << tensor.shape(i) << (i + 1 == tensor.ndim() ? "" : ", ");
     }
-    out << "]";
-    // use public accessors if available
-    try {
-        out << ", dtype=" << tensor.dtype() << ", element_size=" << tensor.elementSize();
-    } catch (...) {}
-    out << ")";
+    out << "]" << std::endl;
+    out << "[data]:" << std::endl;
+
+    // Print data using runtime dtype and a centralized formatting helper
+    std::vector<int> dims = tensor.shape();
+    if (dims.size() == 0) {
+        // scalar case
+        if (!tensor._data) {
+            out << "[data]: null" << std::endl;
+        } else {
+            size_t phys = 0; // scalar
+            size_t addressIndex = static_cast<size_t>(tensor._offset) + phys;
+            const void* valPtr = static_cast<const void*>(tensor._data.get() + addressIndex * tensor.elementSize());
+            out << yt::types::formatValue(valPtr, tensor.dtype());
+        }
+    } else {
+        std::function<void(std::vector<int>&, int, int)> printRecursive;
+        printRecursive = [&](std::vector<int>& indices, int currentDim, int indent) {
+            for (int i = 0; i < indent; ++i) out << "  ";
+            if (currentDim == static_cast<int>(dims.size()) - 1) {
+                out << "[";
+                for (int i = 0; i < dims[currentDim]; ++i) {
+                    indices[currentDim] = i;
+                    try {
+                        size_t phys = tensor.toIndex_(indices);
+                        size_t addressIndex = static_cast<size_t>(tensor._offset) + phys;
+                        const void* valPtr = static_cast<const void*>(tensor._data.get() + addressIndex * tensor.elementSize());
+                        out << yt::types::formatValue(valPtr, tensor.dtype());
+                    } catch (...) {
+                        out << "...";
+                    }
+                    if (i < dims[currentDim] - 1) out << " ";
+                }
+                out << "]";
+                if (dims.size() < 1) out << std::endl;
+            } else {
+                out << "[" << std::endl;
+                for (int i = 0; i < dims[currentDim]; ++i) {
+                    indices[currentDim] = i;
+                    printRecursive(indices, currentDim + 1, indent + 1);
+                    if (i < dims[currentDim] - 1) out << std::endl;
+                }
+                out << std::endl;
+                for (int i = 0; i < indent; ++i) out << "  ";
+                out << "]";
+            }
+        };
+        std::vector<int> indices(static_cast<int>(dims.size()), 0);
+        printRecursive(indices, 0, 0);
+    }
+
+    out << std::endl;
     return out;
 }
 
@@ -265,26 +563,8 @@ inline size_t YTensorBase::toIndex(const std::vector<int> &pos) const {
     return index;
 }
 
-inline size_t YTensorBase::toIndex(const int pos[]) const {
-    size_t index = 0;
-    auto logical_strides = this->stride();
-    for (int i = 0; i < ndim(); ++i) {
-        index += static_cast<size_t>(pos[i]) * static_cast<size_t>(logical_strides[i]);
-    }
-    return index;
-}
-
-inline size_t YTensorBase::toIndex_(const int pos[]) const {
-    size_t index = 0;
-    for (int i = 0; i < ndim(); ++i) {
-        index += static_cast<size_t>(pos[i]) * static_cast<size_t>(_stride[i]);
-    }
-    return index;
-}
-
 inline std::vector<int> YTensorBase::toCoord(size_t index) const {
     std::vector<int> pos(ndim());
-    #pragma omp simd
     for (int i = ndim() - 1; i >= 0; --i) {
         pos[i] = (index % _shape[i]);
         index /= _shape[i];
@@ -313,11 +593,23 @@ inline const T& YTensorBase::at(const std::vector<int>& pos) const {
 
 template <typename T>
 inline T& YTensorBase::atData(int index) {
-    return this->data<T>()[index + _offset];
+    auto coord = toCoord(index);
+    return at<T>(coord);
 }
 
 template <typename T>
 inline const T& YTensorBase::atData(int index) const {
+    auto coord = toCoord(index);
+    return at<T>(coord);
+}
+
+template <typename T>
+inline T& YTensorBase::atData_(int index) {
+    return this->data<T>()[index + _offset];
+}
+
+template <typename T>
+inline const T& YTensorBase::atData_(int index) const {
     return this->data<T>()[index + _offset];
 }
 
@@ -386,6 +678,12 @@ inline std::vector<int> YTensorBase::autoShape(const std::vector<int>& shape) co
     return op;
 }
 
+template<typename... Args>
+std::vector<int> YTensorBase::autoShape(const Args... shape0) const {
+    std::vector<int> shape({shape0...});
+    return autoShape(shape);  // 委托给 vector 版本
+}
+
 inline YTensorBase YTensorBase::slice(int atDim, int start, int end, int step, bool autoFix) const {
     int d = ndim();
     if (d == 0) {
@@ -446,6 +744,11 @@ inline YTensorBase YTensorBase::permute(const std::vector<int>& newOrder) const 
     return op;
 }
 
+template<typename... Args>
+inline YTensorBase YTensorBase::permute(const Args... newOrder) const {
+    return permute(std::vector<int>{static_cast<int>(newOrder)...});
+}
+
 inline YTensorBase& YTensorBase::permute_(const std::vector<int>& newOrder) {
     if (newOrder.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("permute_: order size must match ndim");
@@ -490,6 +793,100 @@ inline YTensorBase YTensorBase::view(const std::vector<int>& newShape) const {
     return op;
 }
 
+template<typename... Args>
+inline YTensorBase YTensorBase::view(const Args... newShape) const {
+    return view(std::vector<int>{static_cast<int>(newShape)...});
+}
+
+inline YTensorBase YTensorBase::reshape(const std::vector<int>& newShape) const {
+    return contiguous().view(newShape);
+}
+
+template<typename... Args>
+inline YTensorBase YTensorBase::reshape(const Args... newShape) const {
+    return reshape(std::vector<int>{static_cast<int>(newShape)...});
+}
+
+inline YTensorBase YTensorBase::unsqueeze(int dim) const {
+    int d = ndim();
+    // 循环索引：dim 的有效范围是 [0, d]（共 d+1 个位置）
+    dim = ((dim % (d + 1)) + (d + 1)) % (d + 1);
+    YTensorBase op = *this;
+    op._shape.insert(op._shape.begin() + dim, 1);
+    // 新维度的 stride 可以设为任意值（因为 size=1），通常设为下一维度的 stride * size
+    int newStride = (dim < d) ? op._stride[dim] * op._shape[dim + 1] : 1;
+    op._stride.insert(op._stride.begin() + dim, newStride);
+    return op;
+}
+
+inline YTensorBase& YTensorBase::unsqueeze_(int dim) {
+    int d = ndim();
+    // 循环索引
+    dim = ((dim % (d + 1)) + (d + 1)) % (d + 1);
+    int newStride = (dim < d) ? _stride[dim] * _shape[dim] : 1;
+    _shape.insert(_shape.begin() + dim, 1);
+    _stride.insert(_stride.begin() + dim, newStride);
+    return *this;
+}
+
+inline YTensorBase YTensorBase::squeeze(int dim) const {
+    YTensorBase op = *this;
+    if (dim >= 0) {
+        // 移除指定维度
+        int d = ndim();
+        dim = (dim % d + d) % d;
+        if (_shape[dim] != 1) {
+            throw std::runtime_error("squeeze: can only squeeze dimensions of size 1");
+        }
+        op._shape.erase(op._shape.begin() + dim);
+        op._stride.erase(op._stride.begin() + dim);
+    } else {
+        // dim < 0：移除所有大小为1的维度
+        std::vector<int> newShape, newStride;
+        for (int i = 0; i < ndim(); ++i) {
+            if (_shape[i] != 1) {
+                newShape.push_back(_shape[i]);
+                newStride.push_back(_stride[i]);
+            }
+        }
+        if (newShape.empty()) {
+            // 如果全部维度都是1，保留一个
+            newShape.push_back(1);
+            newStride.push_back(1);
+        }
+        op._shape = newShape;
+        op._stride = newStride;
+    }
+    return op;
+}
+
+inline YTensorBase& YTensorBase::squeeze_(int dim) {
+    if (dim >= 0) {
+        int d = ndim();
+        dim = (dim % d + d) % d;
+        if (_shape[dim] != 1) {
+            throw std::runtime_error("squeeze_: can only squeeze dimensions of size 1");
+        }
+        _shape.erase(_shape.begin() + dim);
+        _stride.erase(_stride.begin() + dim);
+    } else {
+        std::vector<int> newShape, newStride;
+        for (int i = 0; i < ndim(); ++i) {
+            if (_shape[i] != 1) {
+                newShape.push_back(_shape[i]);
+                newStride.push_back(_stride[i]);
+            }
+        }
+        if (newShape.empty()) {
+            newShape.push_back(1);
+            newStride.push_back(1);
+        }
+        _shape = newShape;
+        _stride = newStride;
+    }
+    return *this;
+}
+
 inline YTensorBase YTensorBase::repeat(const std::vector<int>& times) const {
     if (times.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("repeat: times size must match ndim");
@@ -504,6 +901,11 @@ inline YTensorBase YTensorBase::repeat(const std::vector<int>& times) const {
         op._stride[i] = 0;
     }
     return op;
+}
+
+template<typename... Args>
+inline YTensorBase YTensorBase::repeat(const Args... times) const {
+    return repeat(std::vector<int>{static_cast<int>(times)...});
 }
 
 inline YTensorBase& YTensorBase::repeat_(const std::vector<int>& times) {
@@ -614,7 +1016,7 @@ inline void YTensorBase::seed(unsigned int seed) {
     yt::infos::gen.seed(seed);
 }
 
-YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
+inline YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
     YTensorBase op(shape, dtype);
     size_t max = op.size();
     std::normal_distribution<double> dist(0.0, 1.0);
@@ -647,7 +1049,7 @@ YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<int>& sha
     return op;
 }
 
-YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
+inline YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
     YTensorBase op(shape, dtype);
     size_t max = op.size();
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -676,10 +1078,7 @@ YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<int>& sha
     return op;
 }
 
-inline auto YTensorBase::randn = YTensorBase::_RandnGenerator(yt::infos::gen);
-inline auto YTensorBase::randu = YTensorBase::_RanduGenerator(yt::infos::gen);
-
-YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype) {
+inline YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype) {
     YTensorBase op(shape, dtype);
     size_t total = op.size();
     size_t bytes = total * op.elementSize();
@@ -687,7 +1086,7 @@ YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype)
     return op;
 }
 
-YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string dtype) {
+inline YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string dtype) {
     YTensorBase op(shape, dtype);
     size_t total = op.size();
     const std::string dt = op.dtype();
@@ -719,16 +1118,154 @@ YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string dtype) 
 }
 
 inline YTensorBase YTensorBase::contiguous() const {
-    YTensorBase op = *this;
-    if (_data == nullptr) return op;
-    op._stride = op.stride();
-    op._offset = 0;
-    return op;
+    if (_data == nullptr) {
+        return YTensorBase(_shape, _dtype);
+    }
+    if (isContiguous()) {
+        return *this;  // 已经连续，直接返回浅拷贝
+    }
+    // 非连续，返回深拷贝（clone会生成连续排布）
+    return clone();
 }
 
 inline YTensorBase& YTensorBase::contiguous_() {
     if (_data == nullptr) return *this;
-    _stride = stride();
-    _offset = 0;
+    if (isContiguous()) {
+        return *this;  // 已经连续，无需操作
+    }
+    // 非连续，用clone替换自己
+    YTensorBase cloned = clone();
+    _data = cloned._data;
+    _shape = cloned._shape;
+    _stride = cloned._stride;
+    _offset = cloned._offset;
     return *this;
 }
+
+inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, int axis) {
+    if (tensors.empty()) {
+        throw std::invalid_argument("[YTensorBase::concat] Empty tensor list");
+    }
+    if (tensors.size() == 1) {
+        return tensors[0].clone();
+    }
+    
+    const auto& first = tensors[0];
+    int d = first.ndim();
+    axis = (axis % d + d) % d;
+    
+    // 验证所有张量的形状兼容性
+    std::vector<int> resultShape = first.shape();
+    int totalAxisSize = resultShape[axis];
+    
+    for (size_t i = 1; i < tensors.size(); ++i) {
+        const auto& t = tensors[i];
+        if (t.ndim() != d) {
+            throw std::invalid_argument("[YTensorBase::concat] Dimension mismatch");
+        }
+        if (t.dtype() != first.dtype()) {
+            throw std::invalid_argument("[YTensorBase::concat] dtype mismatch");
+        }
+        for (int dim = 0; dim < d; ++dim) {
+            if (dim != axis && t.shape(dim) != resultShape[dim]) {
+                throw std::invalid_argument("[YTensorBase::concat] Shape mismatch on non-concat axis");
+            }
+        }
+        totalAxisSize += t.shape(axis);
+    }
+    resultShape[axis] = totalAxisSize;
+    
+    // 创建结果张量
+    YTensorBase result(resultShape, first.dtype());
+    
+    // 逐个复制数据 - 需要正确处理非连续的 slice
+    int offset = 0;
+    size_t elemSize = first._element_size;
+    for (const auto& t : tensors) {
+        int axisSize = t.shape(axis);
+        YTensorBase src = t.contiguous();
+        
+        // 计算每个 axis 维度块的大小
+        size_t blockSize = 1;
+        for (int i = axis + 1; i < d; ++i) {
+            blockSize *= resultShape[i];
+        }
+        
+        // 计算有多少个块（axis 前面的维度乘积）
+        size_t numBlocks = 1;
+        for (int i = 0; i < axis; ++i) {
+            numBlocks *= resultShape[i];
+        }
+        
+        // 逐块复制
+        char* resultData = result._data.get();
+        const char* srcData = src._data.get() + src._offset * elemSize;
+        
+        for (size_t blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
+            // 计算 result 中的起始位置
+            // 在 result 中，每个块的起始偏移 = blockIdx * (totalAxisSize * blockSize) + offset * blockSize
+            size_t resultOffset = blockIdx * resultShape[axis] * blockSize + offset * blockSize;
+            
+            // 在 src 中，每个块的大小 = axisSize * blockSize
+            size_t srcBlockOffset = blockIdx * axisSize * blockSize;
+            
+            std::memcpy(resultData + resultOffset * elemSize,
+                        srcData + srcBlockOffset * elemSize,
+                        axisSize * blockSize * elemSize);
+        }
+        
+        offset += axisSize;
+    }
+    
+    return result;
+}
+
+inline YTensorBase YTensorBase::concat(const YTensorBase& other, int axis) const {
+    return YTensorBase::concat({*this, other}, axis);
+}
+
+inline std::vector<YTensorBase> YTensorBase::split(const std::vector<int>& splitSizes, int axis) const {
+    int d = ndim();
+    axis = (axis % d + d) % d;
+    
+    // 验证分割大小总和
+    int total = 0;
+    for (int s : splitSizes) {
+        if (s <= 0) {
+            throw std::invalid_argument("[YTensorBase::split] Split size must be positive");
+        }
+        total += s;
+    }
+    if (total != _shape[axis]) {
+        throw std::invalid_argument("[YTensorBase::split] Split sizes sum doesn't match axis size");
+    }
+    
+    // 使用 slice 创建视图
+    std::vector<YTensorBase> result;
+    result.reserve(splitSizes.size());
+    int offset = 0;
+    for (int s : splitSizes) {
+        result.push_back(slice(axis, offset, offset + s));
+        offset += s;
+    }
+    return result;
+}
+
+inline std::vector<YTensorBase> YTensorBase::split(int n, int axis) const {
+    int d = ndim();
+    axis = (axis % d + d) % d;
+    int axisSize = _shape[axis];
+    
+    if (n <= 0) {
+        throw std::invalid_argument("[YTensorBase::split] n must be positive");
+    }
+    if (axisSize % n != 0) {
+        throw std::invalid_argument("[YTensorBase::split] Axis size not divisible by n");
+    }
+    
+    int chunkSize = axisSize / n;
+    std::vector<int> splitSizes(n, chunkSize);
+    return split(splitSizes, axis);
+}
+
+}//namespace yt

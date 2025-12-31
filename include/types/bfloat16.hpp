@@ -253,13 +253,7 @@ public:
 };
 }  // namespace std
 
-
-
 static_assert(sizeof(yt::bfloat16) == 2, "class bfloat16 must be exactly 2 bytes");
-
-inline bool float_isnan(const float& x) {
-    return std::isnan(x);
-}
 
 inline std::vector<float> yt::bfloat16::to_float_vector(const std::vector<yt::bfloat16>& v_bf16) {
     std::vector<float> v_f32(v_bf16.begin(), v_bf16.end());

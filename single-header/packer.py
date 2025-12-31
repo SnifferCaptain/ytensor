@@ -1,12 +1,16 @@
 import os
 import re
 
-def process_file(file_path, processed_files=None, indent_prefix=""):
+def process_file(file_path, processed_files=None, indent_prefix="", pragma_state=None):
     """
     递归处理文件，展开双引号include
+    pragma_state: 用于在所有递归调用之间共享#pragma once状态的字典
     """
     if processed_files is None:
         processed_files = set()
+    
+    if pragma_state is None:
+        pragma_state = {'pragma_once_added': False}
     
     # 避免循环包含
     abs_path = os.path.abspath(file_path)
@@ -18,7 +22,6 @@ def process_file(file_path, processed_files=None, indent_prefix=""):
         return [f"{indent_prefix}// File not found: {file_path}"]
     
     result = []
-    pragma_once_added = False
     
     # 获取当前文件所在的目录，用于解析相对路径
     current_file_dir = os.path.dirname(file_path)
@@ -42,17 +45,18 @@ def process_file(file_path, processed_files=None, indent_prefix=""):
             include_path = os.path.join(current_file_dir, include_file)
             include_path = os.path.normpath(include_path)  # 标准化路径
             
-            # 递归处理include文件
+            # 递归处理include文件，共享pragma_state
             new_indent = indent_prefix + line_indent
-            included_content = process_file(include_path, processed_files, new_indent)
+            included_content = process_file(include_path, processed_files, new_indent, pragma_state)
             result.extend(included_content)
             continue
         
-        # 处理#pragma once - 只保留第一个
+        # 处理#pragma once - 整个单头文件只保留第一个
         if line.strip() == "#pragma once":
-            if not pragma_once_added:
+            if not pragma_state['pragma_once_added']:
                 result.append(indent_prefix + line.rstrip())
-                pragma_once_added = True
+                pragma_state['pragma_once_added'] = True
+            # 后续的#pragma once全部忽略
             continue
         
         # 其他行直接添加，加上缩进前缀

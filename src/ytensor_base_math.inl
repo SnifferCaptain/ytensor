@@ -1,0 +1,1367 @@
+/***************
+* @file: ytensor_base_math.inl
+* @brief: YTensorBase 数学运算的实现
+* @author: SnifferCaptain
+* @date: 2025-12-1
+* @version 1.0
+* @email: 3586554865@qq.com
+***************/
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <omp.h>
+#include "../include/ytensor_infos.hpp"
+#include "../include/ytensor_types.hpp"
+#include "../include/kernel/parallel_for.hpp"
+#include "../include/kernel/math_utils.hpp"
+#include "../include/kernel/memory_utils.hpp"
+#include "../include/kernel/broadcast.hpp"
+
+namespace yt{
+
+template<typename T, typename Func>
+YTensorBase& YTensorBase::binaryOpBroadcastInplace(const YTensorBase& other, Func&& func, 
+    const std::string& opName, double flop) {
+    auto thisShape = this->shape();
+    auto otherShape = other.shape();
+    int thisDim = ndim();
+    int otherDim = other.ndim();
+    
+    // other维度不能大于this
+    if (otherDim > thisDim) {
+        throwShapeNotMatch(opName, otherShape);
+    }
+    
+    // 填充other的shape和stride到this的维度
+    std::vector<int> paddedOtherShape(thisDim, 1);
+    std::vector<int> paddedOtherStride(thisDim, 0);
+    int otherOffset = thisDim - otherDim;
+    for (int i = 0; i < otherDim; ++i) {
+        paddedOtherShape[otherOffset + i] = otherShape[i];
+        paddedOtherStride[otherOffset + i] = other._stride[i];
+    }
+    
+    // 检查形状兼容性并调整stride
+    bool equalShape = true;
+    for (int i = 0; i < thisDim; ++i) {
+        if (thisShape[i] != paddedOtherShape[i]) {
+            if (paddedOtherShape[i] == 1) {
+                paddedOtherStride[i] = 0;  // 广播维度stride设为0
+            } else {
+                throwShapeNotMatch(opName, otherShape);
+            }
+            equalShape = false;
+        }
+    }
+    
+    size_t totalSize = this->size();
+    T* thisData = this->data<T>();
+    const T* otherData = other.data<T>();
+    
+    // 快速路径：形状相同且连续
+    if (equalShape && this->isContiguous() && other.isContiguous()) {
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
+            T thisVal = static_cast<T>(thisData[i]);
+            T otherVal = static_cast<T>(otherData[i]);
+            // 检查func是否有返回值（返回非void类型）
+            if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
+                // void返回类型：func直接修改thisVal
+                func(thisVal, otherVal);
+                thisData[i] = thisVal;
+            } else {
+                // 非void返回类型：使用返回值
+                thisData[i] = func(thisVal, otherVal);
+            }
+        }, flop);
+        return *this;
+    }
+    
+    // 通用路径：需要计算索引
+    auto logicStride = this->stride();
+    yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
+        int thisIdx = 0, otherIdx = 0;
+        int remaining = index;
+        for (int i = 0; i < thisDim; ++i) {
+            int coord = remaining / logicStride[i];
+            remaining = remaining % logicStride[i];
+            thisIdx += coord * _stride[i];
+            otherIdx += coord * paddedOtherStride[i];
+        }
+        
+        T thisVal = static_cast<T>(*(reinterpret_cast<const T*>(_data.get() + (_offset + thisIdx) * _element_size)));
+        T otherVal = static_cast<T>(*(reinterpret_cast<const T*>(other._data.get() + (other._offset + otherIdx) * other._element_size)));
+        
+        T* destPtr = reinterpret_cast<T*>(_data.get() + (_offset + thisIdx) * _element_size);
+        // 检查func是否有返回值（返回非void类型）
+        if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
+            // void返回类型：func直接修改thisVal
+            func(thisVal, otherVal);
+            *destPtr = thisVal;
+        } else {
+            // 非void返回类型：使用返回值
+            *destPtr = func(thisVal, otherVal);
+        }
+    }, flop);
+    
+    return *this;
+}
+
+template<typename T, typename Func>
+YTensorBase YTensorBase::binaryOpBroadcast(const YTensorBase& other, Func&& func, 
+    [[maybe_unused]] const std::string& opName, YTensorBase* result, double flop) const {
+    // opName保留用于将来的错误消息扩展（如broadcastShape错误时）
+    // 计算输出形状
+    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});
+    
+    // 准备结果张量
+    YTensorBase op;
+    if (result != nullptr) {
+        if (result->shape() != opShape) {
+            *result = YTensorBase(opShape, yt::types::getTypeName<T>());
+        }
+        op = *result;
+    } else {
+        op = YTensorBase(opShape, yt::types::getTypeName<T>());
+    }
+    
+    // 将this广播到结果张量
+    // 这里简化实现：先复制this的数据到op（带广播），然后调用inplace版本
+    int opDim = static_cast<int>(opShape.size());
+    int thisDim = ndim();
+    int otherDim = other.ndim();
+    
+    // 计算this和other相对于op的stride
+    std::vector<int> thisStride(opDim, 0);
+    std::vector<int> otherStride(opDim, 0);
+    
+    int thisLack = opDim - thisDim;
+    int otheLack = opDim - otherDim;
+    
+    for (int i = 0; i < thisDim; ++i) {
+        if (_shape[i] != 1) {
+            thisStride[thisLack + i] = _stride[i];
+        }
+    }
+    for (int i = 0; i < otherDim; ++i) {
+        if (other._shape[i] != 1) {
+            otherStride[otheLack + i] = other._stride[i];
+        }
+    }
+    
+    size_t totalSize = op.size();
+    auto opLogicStride = op.stride();
+    T* opData = op.data<T>();
+
+    // 快速路径：this和other形状相同且都连续
+    if(this->isContiguous() && other.isContiguous() && this->shapeMatch(other.shape())){
+        const T* thisData = this->data<T>();
+        const T* otherData = other.data<T>();
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
+            T thisVal = static_cast<T>(thisData[i]);
+            T otherVal = static_cast<T>(otherData[i]);
+            // 检查func是否有返回值（返回非void类型）
+            if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
+                // void返回类型：func直接修改thisVal
+                func(thisVal, otherVal);
+                opData[i] = thisVal;
+            } else {
+                // 非void返回类型：使用返回值
+                opData[i] = func(thisVal, otherVal);
+            }
+        }, flop);
+        return op;
+    }
+    
+    // 通用路径：需要计算索引
+    yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
+        int thisIdx = 0, otherIdx = 0;
+        int remaining = index;
+        for (int i = 0; i < opDim; ++i) {
+            int coord = remaining / opLogicStride[i];
+            remaining = remaining % opLogicStride[i];
+            thisIdx += coord * thisStride[i];
+            otherIdx += coord * otherStride[i];
+        }
+        
+        T thisVal = static_cast<T>(*(reinterpret_cast<const T*>(_data.get() + (_offset + thisIdx) * _element_size)));
+        T otherVal = static_cast<T>(*(reinterpret_cast<const T*>(other._data.get() + (other._offset + otherIdx) * other._element_size)));
+        
+        // 检查func是否有返回值（返回非void类型）
+        if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
+            // void返回类型：func直接修改thisVal
+            func(thisVal, otherVal);
+            opData[index] = thisVal;
+        } else {
+            // 非void返回类型：使用返回值
+            opData[index] = func(thisVal, otherVal);
+        }
+    }, flop);
+    
+    return op;
+}
+
+#define YT_DISPATCH_BY_DTYPE(dtype, BLOCK)                                                 \
+    if (dtype == "float32") { using DType = float; BLOCK }                                 \
+    else if (dtype == "float64") { using DType = double; BLOCK }                           \
+    else if (dtype == "int8") { using DType = int8_t; BLOCK }                              \
+    else if (dtype == "int16") { using DType = int16_t; BLOCK }                            \
+    else if (dtype == "int32") { using DType = int32_t; BLOCK }                            \
+    else if (dtype == "int64") { using DType = int64_t; BLOCK }                            \
+    else if (dtype == "uint8") { using DType = uint8_t; BLOCK }                            \
+    else if (dtype == "uint16") { using DType = uint16_t; BLOCK }                          \
+    else if (dtype == "uint32") { using DType = uint32_t; BLOCK }                          \
+    else if (dtype == "uint64") { using DType = uint64_t; BLOCK }                          \
+    else if (dtype == "bfloat16") { using DType = yt::bfloat16; BLOCK }                    \
+    else { throwOperatorNotSupport(dtype, "dispatch"); }
+
+template<typename Func, typename... Args>
+YTensorBase& YTensorBase::broadcastInplace(Func&& func, Args&&... tensors) {
+    using namespace yt::traits;
+    
+    // 收集所有张量的shape（包括this）
+    std::vector<std::vector<int>> shapes;
+    shapes.push_back(this->shape());
+    
+    auto collectShape = [&shapes](auto&& arg) {
+        if constexpr (is_ytensor_v<decltype(arg)>) {
+            shapes.push_back(arg.shape());
+        }
+    };
+    (collectShape(tensors), ...);
+    
+    // 计算广播shape
+    auto broadcastShape = yt::kernel::computeBroadcastShape(shapes);
+    int thisDim = this->ndim();
+    
+    // 验证this的shape与广播shape兼容
+    auto thisShapeVec = this->shape();
+    if (static_cast<int>(broadcastShape.size()) != thisDim) {
+        throw std::runtime_error("broadcastInplace: result dimension mismatch");
+    }
+    for (int i = 0; i < thisDim; ++i) {
+        if (thisShapeVec[i] != broadcastShape[i]) {
+            throw std::runtime_error("broadcastInplace: this tensor shape must match broadcast shape");
+        }
+    }
+    
+    int totalSize = this->size();
+    bool allContiguous = this->isContiguous();
+    bool allEqualShape = true;
+    
+    auto checkContiguousAndShape = [&](auto&& arg) {
+        if constexpr (is_ytensor_v<decltype(arg)>) {
+            if (!arg.isContiguous()) {
+                allContiguous = false;
+            }
+            auto argShape = arg.shape();
+            if (argShape.size() != shapes[0].size()) {
+                allEqualShape = false;
+            } else {
+                for (size_t i = 0; i < argShape.size(); ++i) {
+                    if (argShape[i] != shapes[0][i]) {
+                        allEqualShape = false;
+                        break;
+                    }
+                }
+            }
+        }
+    };
+    (checkContiguousAndShape(tensors), ...);
+    
+    // 根据dtype分发类型
+    auto _dtype = this->dtype();
+    YT_DISPATCH_BY_DTYPE(_dtype, {
+        if (allContiguous && allEqualShape) {
+            // 快速路径：所有张量连续且shape相同
+            DType* thisDataPtr = this->data<DType>();
+            
+            // 收集所有张量的数据指针
+            std::vector<const DType*> dataPtrs;
+            auto collectPtrs = [&](auto&& arg) {
+                if constexpr (is_ytensor_v<decltype(arg)>) {
+                    if constexpr (is_ytensor_template_v<decltype(arg)>) {
+                        dataPtrs.push_back(reinterpret_cast<const DType*>(arg.data()));
+                    } else {
+                        dataPtrs.push_back(arg.template data<DType>());
+                    }
+                }
+            };
+            (collectPtrs(tensors), ...);
+            
+            // 创建fastpath的getValue lambda
+            auto getValueFast = [&](auto&& arg, int index, int& tensorIdx) -> decltype(auto) {
+                if constexpr (is_ytensor_v<decltype(arg)>) {
+                    ++tensorIdx;
+                    return dataPtrs[tensorIdx - 1][index];
+                } else {
+                    return static_cast<DType>(std::forward<decltype(arg)>(arg));
+                }
+            };
+            
+            yt::kernel::parallelFor(0, totalSize, [&](int index) {
+                int tensorIdx = 0;
+                func(thisDataPtr[index], getValueFast(tensors, index, tensorIdx)...);
+            });
+        } else {
+            // 慢速路径：需要计算广播索引
+            DType* thisDataPtr = this->data<DType>();
+            auto logicStride = this->stride();
+            auto thisStride = this->stride_();
+            
+            // 收集每个张量的广播stride和数据指针
+            std::vector<std::vector<int>> broadcastStrides;
+            std::vector<const DType*> dataPtrs;
+            
+            auto collectBroadcastInfo = [&](auto&& arg) {
+                if constexpr (is_ytensor_v<decltype(arg)>) {
+                    broadcastStrides.push_back(yt::kernel::getBroadcastStride(arg.shape(), arg.stride_(), broadcastShape));
+                    if constexpr (is_ytensor_template_v<decltype(arg)>) {
+                        dataPtrs.push_back(reinterpret_cast<const DType*>(arg.data()));
+                    } else {
+                        dataPtrs.push_back(arg.template data<DType>());
+                    }
+                }
+            };
+            (collectBroadcastInfo(tensors), ...);
+            
+            size_t numTensors = dataPtrs.size();
+            
+            yt::kernel::parallelFor(0, totalSize, [&](int index) {
+                // 运行时计算索引
+                int thisIdx = 0;
+                std::vector<int> otherIndices(numTensors, 0);
+                yt::kernel::computeBroadcastIndicesRuntime(index, logicStride, thisShapeVec, thisStride, 
+                    broadcastStrides, thisIdx, otherIndices, thisDim);
+                
+                // 获取值并调用func
+                size_t tensorIdx = 0;
+                auto getValue = [&](auto&& arg) -> decltype(auto) {
+                    if constexpr (is_ytensor_v<decltype(arg)>) {
+                        size_t idx = tensorIdx++;
+                        return dataPtrs[idx][otherIndices[idx]];
+                    } else {
+                        return static_cast<DType>(std::forward<decltype(arg)>(arg));
+                    }
+                };
+                
+                func(thisDataPtr[thisIdx + _offset], getValue(tensors)...);
+            });
+        }
+    });
+    
+    return *this;
+}
+
+// ======================== binaryOpTransformInplace ========================
+
+template<typename T, typename Func>
+YTensorBase& YTensorBase::binaryOpTransformInplace(const T& scalar, Func&& func, double flop) {
+    size_t totalSize = this->size();
+    
+    if (this->isContiguous()) {
+        T* dataPtr = this->data<T>();
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
+            T val = dataPtr[i];
+            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
+                func(val, scalar);
+                dataPtr[i] = val;
+            } else {
+                dataPtr[i] = func(val, scalar);
+            }
+        }, flop);
+    } else {
+        auto logicStride = this->stride();
+        int dim = ndim();
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
+            int physIdx = 0;
+            int remaining = index;
+            for (int i = 0; i < dim; ++i) {
+                int coord = remaining / logicStride[i];
+                remaining = remaining % logicStride[i];
+                physIdx += coord * _stride[i];
+            }
+            
+            T* ptr = reinterpret_cast<T*>(_data.get() + (_offset + physIdx) * _element_size);
+            T val = *ptr;
+            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
+                func(val, scalar);
+                *ptr = val;
+            } else {
+                *ptr = func(val, scalar);
+            }
+        }, flop);
+    }
+    return *this;
+}
+
+// ======================== binaryOpTransform ========================
+
+template<typename T, typename Func>
+YTensorBase YTensorBase::binaryOpTransform(const T& scalar, Func&& func, 
+    YTensorBase* result, double flop) const {
+    
+    YTensorBase op;
+    if (result != nullptr) {
+        if (result->shape() != _shape) {
+            *result = YTensorBase(_shape, yt::types::getTypeName<T>());
+        }
+        op = *result;
+    } else {
+        op = YTensorBase(_shape, yt::types::getTypeName<T>());
+    }
+    
+    size_t totalSize = this->size();
+    T* opData = op.data<T>();
+    
+    if (this->isContiguous()) {
+        const T* thisData = this->data<T>();
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
+            T val = thisData[i];
+            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
+                func(val, scalar);
+                opData[i] = val;
+            } else {
+                opData[i] = func(val, scalar);
+            }
+        }, flop);
+    } else {
+        auto logicStride = this->stride();
+        int dim = ndim();
+        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
+            int physIdx = 0;
+            int remaining = index;
+            for (int i = 0; i < dim; ++i) {
+                int coord = remaining / logicStride[i];
+                remaining = remaining % logicStride[i];
+                physIdx += coord * _stride[i];
+            }
+            
+            const T* srcPtr = reinterpret_cast<const T*>(_data.get() + (_offset + physIdx) * _element_size);
+            T val = *srcPtr;
+            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
+                func(val, scalar);
+                opData[index] = val;
+            } else {
+                opData[index] = func(val, scalar);
+            }
+        }, flop);
+    }
+    return op;
+}
+
+// ======================== 类型分发宏 ========================
+// 用于在运行时根据dtype调用对应类型的模板函数
+
+#define YT_DISPATCH_NUMERIC_TYPES(dtype, FUNC, ...)                          \
+    do {                                                                      \
+        if (dtype == "float32") { FUNC<float>(__VA_ARGS__); }                \
+        else if (dtype == "float64") { FUNC<double>(__VA_ARGS__); }          \
+        else if (dtype == "int8") { FUNC<int8_t>(__VA_ARGS__); }             \
+        else if (dtype == "int16") { FUNC<int16_t>(__VA_ARGS__); }           \
+        else if (dtype == "int32") { FUNC<int32_t>(__VA_ARGS__); }           \
+        else if (dtype == "int64") { FUNC<int64_t>(__VA_ARGS__); }           \
+        else if (dtype == "uint8") { FUNC<uint8_t>(__VA_ARGS__); }           \
+        else if (dtype == "uint16") { FUNC<uint16_t>(__VA_ARGS__); }         \
+        else if (dtype == "uint32") { FUNC<uint32_t>(__VA_ARGS__); }         \
+        else if (dtype == "uint64") { FUNC<uint64_t>(__VA_ARGS__); }         \
+        else if (dtype == "bfloat16") { FUNC<yt::bfloat16>(__VA_ARGS__); }   \
+        else { YTensorBase::throwOperatorNotSupport(dtype, "dispatch"); }    \
+    } while(0)
+
+#define YT_DISPATCH_NUMERIC_TYPES_RET(dtype, FUNC, result, ...)              \
+    do {                                                                      \
+        if (dtype == "float32") { result = FUNC<float>(__VA_ARGS__); }       \
+        else if (dtype == "float64") { result = FUNC<double>(__VA_ARGS__); } \
+        else if (dtype == "int8") { result = FUNC<int8_t>(__VA_ARGS__); }    \
+        else if (dtype == "int16") { result = FUNC<int16_t>(__VA_ARGS__); }  \
+        else if (dtype == "int32") { result = FUNC<int32_t>(__VA_ARGS__); }  \
+        else if (dtype == "int64") { result = FUNC<int64_t>(__VA_ARGS__); }  \
+        else if (dtype == "uint8") { result = FUNC<uint8_t>(__VA_ARGS__); }  \
+        else if (dtype == "uint16") { result = FUNC<uint16_t>(__VA_ARGS__); }\
+        else if (dtype == "uint32") { result = FUNC<uint32_t>(__VA_ARGS__); }\
+        else if (dtype == "uint64") { result = FUNC<uint64_t>(__VA_ARGS__); }\
+        else if (dtype == "bfloat16") { result = FUNC<yt::bfloat16>(__VA_ARGS__); }\
+        else { YTensorBase::throwOperatorNotSupport(dtype, "dispatch"); }    \
+    } while(0)
+
+// ======================== 算术运算符实现 ========================
+
+// Eigen原生支持的类型分发宏（不包含bfloat16）
+// 原因：Eigen的矩阵乘法需要完整的表达式模板支持，bfloat16的运算符模板与Eigen内部类型不兼容
+#define YT_DISPATCH_EIGEN_NATIVE_TYPES(dtype, BLOCK)                                       \
+    if (dtype == "float32") { using DType = float; BLOCK }                                 \
+    else if (dtype == "float64") { using DType = double; BLOCK }                           \
+    else if (dtype == "int8") { using DType = int8_t; BLOCK }                              \
+    else if (dtype == "int16") { using DType = int16_t; BLOCK }                            \
+    else if (dtype == "int32") { using DType = int32_t; BLOCK }                            \
+    else if (dtype == "int64") { using DType = int64_t; BLOCK }                            \
+    else if (dtype == "uint8") { using DType = uint8_t; BLOCK }                            \
+    else if (dtype == "uint16") { using DType = uint16_t; BLOCK }                          \
+    else if (dtype == "uint32") { using DType = uint32_t; BLOCK }                          \
+    else if (dtype == "uint64") { using DType = uint64_t; BLOCK }                          \
+    else { throwOperatorNotSupport(dtype, "eigen_native_dispatch"); }
+
+// 带概念约束的类型分发宏 - 使用 if constexpr 在编译时检查类型是否支持运算符
+// ConceptCheck: yt::concepts中的concept（如 yt::concepts::HAVE_MUL）
+// BLOCK: 需要执行的代码块
+// FALLBACK: 类型不支持时的处理
+#define YT_DISPATCH_IF_TRAIT(dtype, ConceptCheck, BLOCK, FALLBACK)                         \
+    if (dtype == "float32") {                                                              \
+        using DType = float;                                                               \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "float64") {                                                         \
+        using DType = double;                                                              \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "int8") {                                                            \
+        using DType = int8_t;                                                              \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "int16") {                                                           \
+        using DType = int16_t;                                                             \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "int32") {                                                           \
+        using DType = int32_t;                                                             \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "int64") {                                                           \
+        using DType = int64_t;                                                             \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "uint8") {                                                           \
+        using DType = uint8_t;                                                             \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "uint16") {                                                          \
+        using DType = uint16_t;                                                            \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "uint32") {                                                          \
+        using DType = uint32_t;                                                            \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "uint64") {                                                          \
+        using DType = uint64_t;                                                            \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else if (dtype == "bfloat16") {                                                        \
+        using DType = yt::bfloat16;                                                        \
+        if constexpr (ConceptCheck<DType>) { BLOCK } else { FALLBACK }                     \
+    }                                                                                      \
+    else { throwOperatorNotSupport(dtype, "trait_dispatch"); }
+
+// 简化版：不支持时抛出异常
+#define YT_DISPATCH_WITH_TRAIT(dtype, ConceptCheck, BLOCK)                                 \
+    YT_DISPATCH_IF_TRAIT(dtype, ConceptCheck, BLOCK, { throwOperatorNotSupport(dtype, "op_not_supported"); })
+
+// 整数类型分发宏
+#define YT_DISPATCH_INT_TYPES(dtype, BLOCK)                                                \
+    if (dtype == "int8") { using DType = int8_t; BLOCK }                                   \
+    else if (dtype == "int16") { using DType = int16_t; BLOCK }                            \
+    else if (dtype == "int32") { using DType = int32_t; BLOCK }                            \
+    else if (dtype == "int64") { using DType = int64_t; BLOCK }                            \
+    else if (dtype == "uint8") { using DType = uint8_t; BLOCK }                            \
+    else if (dtype == "uint16") { using DType = uint16_t; BLOCK }                          \
+    else if (dtype == "uint32") { using DType = uint32_t; BLOCK }                          \
+    else if (dtype == "uint64") { using DType = uint64_t; BLOCK }                          \
+    else { throwOperatorNotSupport(dtype, "int_op"); }
+
+// 统一运算符宏 - 同时生成 Tensor op Tensor 和 Tensor op Scalar 的4个版本
+#define YT_IMPL_BINARY_OP(OP, OP_NAME, DISPATCH_MACRO)                                     \
+/* Tensor op Tensor */                                                                     \
+inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
+    YTensorBase result;                                                                    \
+    DISPATCH_MACRO(_dtype, {                                                               \
+        result = binaryOpBroadcast<DType>(other,                                           \
+            [](DType& a, const DType& b) { a = a OP b; }, OP_NAME);                        \
+    });                                                                                    \
+    return result;                                                                         \
+}                                                                                          \
+inline YTensorBase& YTensorBase::operator OP##=(const YTensorBase& other) {                \
+    DISPATCH_MACRO(_dtype, {                                                               \
+        binaryOpBroadcastInplace<DType>(other,                                             \
+            [](DType& a, const DType& b) { a = a OP b; }, OP_NAME "=");                    \
+    });                                                                                    \
+    return *this;                                                                          \
+}                                                                                          \
+/* Tensor op Scalar */                                                                     \
+template<typename T>                                                                       \
+YTensorBase YTensorBase::operator OP(const T& scalar) const {                              \
+    return binaryOpTransform<T>(scalar, [](T& a, const T& b) { a = a OP b; });             \
+}                                                                                          \
+template<typename T>                                                                       \
+YTensorBase& YTensorBase::operator OP##=(const T& scalar) {                                \
+    return binaryOpTransformInplace<T>(scalar, [](T& a, const T& b) { a = a OP b; });      \
+}
+
+// 实例化所有运算符 - 数值类型
+YT_IMPL_BINARY_OP(+, "+", YT_DISPATCH_BY_DTYPE)
+YT_IMPL_BINARY_OP(-, "-", YT_DISPATCH_BY_DTYPE)
+YT_IMPL_BINARY_OP(*, "*", YT_DISPATCH_BY_DTYPE)
+YT_IMPL_BINARY_OP(/, "/", YT_DISPATCH_BY_DTYPE)
+
+// 实例化所有运算符 - 仅整数类型
+YT_IMPL_BINARY_OP(%, "%", YT_DISPATCH_INT_TYPES)
+YT_IMPL_BINARY_OP(&, "&", YT_DISPATCH_INT_TYPES)
+YT_IMPL_BINARY_OP(|, "|", YT_DISPATCH_INT_TYPES)
+YT_IMPL_BINARY_OP(^, "^", YT_DISPATCH_INT_TYPES)
+
+// 清理宏
+#undef YT_IMPL_BINARY_OP
+#undef YT_DISPATCH_INT_TYPES
+
+// ======================== sum ========================
+
+inline YTensorBase YTensorBase::sum(int axis) const {
+    int dim = ndim();
+    if (dim == 0) {
+        throw std::runtime_error("[YTensorBase::sum] Cannot sum a 0-dim tensor");
+    }
+    axis = (axis % dim + dim) % dim;
+    
+    // 计算输出形状（对应轴设为1）
+    auto newShape = this->shape();
+    int axisSize = newShape[axis];
+    newShape[axis] = 1;
+    
+    YTensorBase op(newShape, _dtype);
+    size_t outSize = op.size();
+    
+    YT_DISPATCH_BY_DTYPE(_dtype, {
+        DType* opData = op.data<DType>();
+        yt::kernel::parallelFor(0, static_cast<int>(outSize), [&](int i) {
+            auto coord = op.toCoord(i);
+            DType sum = 0;
+            for (int j = 0; j < axisSize; j++) {
+                auto subCoord = coord;
+                subCoord[axis] = j;
+                int physIdx = 0;
+                for (int k = 0; k < dim; ++k) {
+                    physIdx += subCoord[k] * _stride[k];
+                }
+                sum += *(reinterpret_cast<const DType*>(_data.get() + (_offset + physIdx) * _element_size));
+            }
+            opData[i] = sum;
+        }, static_cast<double>(axisSize));
+    });
+    
+    return op;
+}
+
+inline YTensorBase YTensorBase::sum(const std::vector<int>& axes) const {
+    // 简单实现：逐个轴求和
+    YTensorBase result = *this;
+    // 排序axes，从大到小，避免轴索引变化问题
+    std::vector<int> sortedAxes = axes;
+    std::sort(sortedAxes.begin(), sortedAxes.end(), std::greater<int>());
+    for (int ax : sortedAxes) {
+        result = result.sum(ax);
+    }
+    return result;
+}
+
+// ======================== max ========================
+
+inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
+    int dim = ndim();
+    if (dim == 0) {
+        throw std::runtime_error("[YTensorBase::max] Cannot max a 0-dim tensor");
+    }
+    
+    // 处理负索引
+    axis = (axis % dim + dim) % dim;
+    
+    // 计算输出形状（对应轴设为1）
+    auto newShape = this->shape();
+    int axisSize = newShape[axis];
+    newShape[axis] = 1;
+    
+    YTensorBase values(newShape, _dtype);
+    YTensorBase indices(newShape, "int32");
+    size_t outSize = values.size();
+    
+    YT_DISPATCH_BY_DTYPE(_dtype, {
+        DType* valData = values.data<DType>();
+        int32_t* idxData = indices.data<int32_t>();
+        yt::kernel::parallelFor(0, static_cast<int>(outSize), [&](int i) {
+            auto coord = values.toCoord(i);
+            DType maxVal = std::numeric_limits<DType>::lowest();
+            int32_t maxIdx = 0;
+            for (int j = 0; j < axisSize; j++) {
+                auto subCoord = coord;
+                subCoord[axis] = j;
+                int physIdx = 0;
+                for (int k = 0; k < dim; ++k) {
+                    physIdx += subCoord[k] * _stride[k];
+                }
+                DType val = *(reinterpret_cast<const DType*>(_data.get() + (_offset + physIdx) * _element_size));
+                if (val > maxVal) {
+                    maxVal = val;
+                    maxIdx = j;
+                }
+            }
+            valData[i] = maxVal;
+            idxData[i] = maxIdx;
+        }, static_cast<double>(axisSize));
+    });
+    
+    return {values, indices};
+}
+
+inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(const std::vector<int>& axes) const {
+    // 简单实现：逐个轴求最大值
+    YTensorBase values = *this;
+    YTensorBase indices;
+    std::vector<int> sortedAxes = axes;
+    std::sort(sortedAxes.begin(), sortedAxes.end(), std::greater<int>());
+    for (int ax : sortedAxes) {
+        auto [v, idx] = values.max(ax);
+        values = v;
+        indices = idx;  // 只保留最后一次的索引
+    }
+    return {values, indices};
+}
+
+// ======================== matView ========================
+
+// 注意：YTensorBase的matView实现与YTensor不同
+// YTensorBase是类型擦除的，我们返回一个特殊的YTensorBase，其"标量"是YTensorBase子视图
+// 
+// 为什么这里需要手动处理非POD（YTensorBase）？
+// 1. ytensor_base.inl 中的非POD支持是针对"用户通过registerType注册的自定义类型"
+// 2. 但 YTensorBase 本身不能被注册（循环依赖：YTensorBase 在 ytensor_types.hpp 之前定义）
+// 3. matView 返回的张量的元素类型就是 YTensorBase 本身，这是一个特殊情况
+// 4. 因此必须手动使用 placement new 和自定义删除器来正确管理 YTensorBase 元素的生命周期
+
+inline YTensorBase YTensorBase::matView() const {
+    int dim = ndim();
+    if (dim < 1) {
+        throw std::runtime_error("[YTensorBase::matView] Tensor must have at least 1 dimension");
+    }
+    
+    // 对于1D张量，视为1xN矩阵
+    if (dim == 1) {
+        // 创建一个2D视图 [1, shape[0]]
+        YTensorBase mat2d;
+        mat2d._shape = {1, _shape[0]};
+        mat2d._stride = {0, _stride[0]};  // 第0维stride=0因为只有1行
+        mat2d._offset = _offset;
+        mat2d._data = _data;
+        mat2d._element_size = _element_size;
+        mat2d._dtype = _dtype;
+        
+        // 返回一个shape=[1]的YTensorBase，元素是YTensorBase类型
+        // 由于YTensorBase不在类型注册表中，我们用特殊方式处理
+        YTensorBase result;
+        result._shape = {1};
+        result._stride = {1};
+        result._offset = 0;
+        result._element_size = sizeof(YTensorBase);
+        result._dtype = "YTensorBase";
+        
+        // 分配存储并放置构造YTensorBase元素
+        result._data = std::shared_ptr<char[]>(
+            new char[sizeof(YTensorBase)],
+            [](char* p) {
+                // 析构YTensorBase对象
+                reinterpret_cast<YTensorBase*>(p)->~YTensorBase();
+                delete[] p;
+            }
+        );
+        new (result._data.get()) YTensorBase(mat2d);
+        return result;
+    }
+    
+    // 对于2D张量，返回shape=[1]的matView
+    if (dim == 2) {
+        YTensorBase result;
+        result._shape = {1};
+        result._stride = {1};
+        result._offset = 0;
+        result._element_size = sizeof(YTensorBase);
+        result._dtype = "YTensorBase";
+        
+        result._data = std::shared_ptr<char[]>(
+            new char[sizeof(YTensorBase)],
+            [](char* p) {
+                reinterpret_cast<YTensorBase*>(p)->~YTensorBase();
+                delete[] p;
+            }
+        );
+        // 直接复制当前张量作为2D视图
+        new (result._data.get()) YTensorBase(*this);
+        return result;
+    }
+    
+    // 对于高维张量，前dim-2维是batch维度
+    std::vector<int> batchShape(_shape.begin(), _shape.end() - 2);
+    int matRows = _shape[dim - 2];
+    int matCols = _shape[dim - 1];
+    int matRowStride = _stride[dim - 2];
+    int matColStride = _stride[dim - 1];
+    
+    // 计算batch数量
+    size_t batchSize = 1;
+    for (int s : batchShape) batchSize *= s;
+    
+    // 创建结果tensor
+    YTensorBase result;
+    result._shape = batchShape;
+    result._element_size = sizeof(YTensorBase);
+    result._dtype = "YTensorBase";
+    
+    // 计算stride（按连续存储）
+    result._stride.resize(batchShape.size());
+    if (!batchShape.empty()) {
+        result._stride.back() = 1;
+        for (int i = static_cast<int>(batchShape.size()) - 2; i >= 0; --i) {
+            result._stride[i] = result._stride[i + 1] * batchShape[i + 1];
+        }
+    }
+    result._offset = 0;
+    
+    // 使用封装函数分配存储
+    result._data = yt::kernel::makeSharedPlacementArray<YTensorBase>(batchSize);
+    
+    // 为每个batch创建2D视图
+    YTensorBase* dataPtr = reinterpret_cast<YTensorBase*>(result._data.get());
+    
+    // 计算原始tensor的batch stride（前dim-2维）
+    std::vector<int> batchStride(_stride.begin(), _stride.end() - 2);
+    
+    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
+        // 计算坐标
+        std::vector<int> coord(batchShape.size());
+        int remaining = batchIdx;
+        for (int i = static_cast<int>(batchShape.size()) - 1; i >= 0; --i) {
+            coord[i] = remaining % batchShape[i];
+            remaining /= batchShape[i];
+        }
+        
+        // 计算偏移
+        int batchOffset = 0;
+        for (size_t i = 0; i < batchShape.size(); ++i) {
+            batchOffset += coord[i] * batchStride[i];
+        }
+        
+        // 创建2D视图
+        YTensorBase mat2d;
+        mat2d._shape = {matRows, matCols};
+        mat2d._stride = {matRowStride, matColStride};
+        mat2d._offset = _offset + batchOffset;
+        mat2d._data = _data;  // 共享数据
+        mat2d._element_size = _element_size;
+        mat2d._dtype = _dtype;
+        
+        // placement new
+        new (&dataPtr[batchIdx]) YTensorBase(std::move(mat2d));
+    });
+    
+    return result;
+}
+
+// ======================== matmul ========================
+
+// 模板化的naive matmul实现（零后端）
+template<typename DType>
+inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase& other) {
+    // 获取matView
+    auto thisMatView = self.matView();
+    auto otherMatView = other.matView();
+    
+    // 获取矩阵维度
+    int ah = (self.ndim() >= 2) ? self.shape(self.ndim() - 2) : 1;
+    int aw = self.shape(self.ndim() - 1);
+    int bw = other.shape(other.ndim() - 1);
+    
+    // 计算广播后的batch形状
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    
+    // 计算输出的batch维度数量
+    int thisBatchDim = std::max(0, self.ndim() - 2);
+    int otherBatchDim = std::max(0, other.ndim() - 2);
+    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
+    
+    // 计算输出形状
+    std::vector<int> opShape;
+    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
+    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
+        opShape.push_back(opBatchShape[i]);
+    }
+    opShape.push_back(ah);
+    opShape.push_back(bw);
+    
+    // 创建输出tensor
+    YTensorBase op(opShape, self.dtype());
+    auto opMatView = op.matView();
+    
+    // 广播矩阵乘法
+    size_t batchSize = opMatView.size();
+    YTensorBase* opMats = opMatView.template data<YTensorBase>();
+    YTensorBase* thisMats = thisMatView.template data<YTensorBase>();
+    YTensorBase* otherMats = otherMatView.template data<YTensorBase>();
+    
+    auto getBroadcastIdx = [](int idx, const std::vector<int>& shape, const std::vector<int>& targetShape) -> int {
+        if (shape.size() == 0) return 0;
+        std::vector<int> coord(targetShape.size());
+        int remaining = idx;
+        for (int i = static_cast<int>(targetShape.size()) - 1; i >= 0; --i) {
+            coord[i] = remaining % targetShape[i];
+            remaining /= targetShape[i];
+        }
+        int result = 0;
+        int stride = 1;
+        int offset = static_cast<int>(targetShape.size()) - static_cast<int>(shape.size());
+        for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
+            int c = coord[i + offset];
+            if (shape[i] == 1) c = 0;
+            result += c * stride;
+            stride *= shape[i];
+        }
+        return result;
+    };
+    
+    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
+        int thisIdx = getBroadcastIdx(batchIdx, thisMatView.shape(), opBatchShape);
+        int otherIdx = getBroadcastIdx(batchIdx, otherMatView.shape(), opBatchShape);
+        
+        YTensorBase& A = thisMats[thisIdx];
+        YTensorBase& B = otherMats[otherIdx];
+        YTensorBase& C = opMats[batchIdx];
+        
+        for (int i = 0; i < ah; ++i) {
+            for (int j = 0; j < bw; ++j) {
+                DType sum = 0;
+                for (int k = 0; k < aw; ++k) {
+                    sum += A.template at<DType>({i, k}) * B.template at<DType>({k, j});
+                }
+                C.template at<DType>({i, j}) = sum;
+            }
+        }
+    }, static_cast<double>(ah * bw * aw));
+    
+    return op;
+}
+
+inline YTensorBase YTensorBase::matmul(const YTensorBase& other) const {
+    // 验证维度
+    if (ndim() < 1 || other.ndim() < 1) {
+        throw std::runtime_error("[YTensorBase::matmul] Both tensors must have at least 1 dimension");
+    }
+    
+    // 检查类型匹配
+    if (_dtype != other._dtype) {
+        throw std::runtime_error("[YTensorBase::matmul] dtype mismatch: " + _dtype + " vs " + other._dtype);
+    }
+    
+    // 获取矩阵维度
+    [[maybe_unused]] int thisRows = (ndim() >= 2) ? _shape[ndim() - 2] : 1;
+    int thisCols = _shape[ndim() - 1];
+    int otherRows = (other.ndim() >= 2) ? other._shape[other.ndim() - 2] : 1;
+    [[maybe_unused]] int otherCols = other._shape[other.ndim() - 1];
+    
+    if (thisCols != otherRows) {
+        throw std::runtime_error("[YTensorBase::matmul] Inner dimensions mismatch: " + 
+            std::to_string(thisCols) + " vs " + std::to_string(otherRows));
+    }
+    
+    // 在matmul层完成类型分发，直接调用模板化后端
+#if YT_USE_EIGEN
+    return matmul_eigen_backend(other);
+#else
+    // 无Eigen时使用naive实现
+    YT_DISPATCH_BY_DTYPE(_dtype, {
+        return matmul_naive_impl<DType>(*this, other);
+    });
+#endif
+    
+    // 不应该到达这里
+    throw std::runtime_error("[YTensorBase::matmul] Unsupported dtype: " + _dtype);
+}
+
+// 保留原始的零后端接口（直接调用模板实现）
+// 使用yt::concepts::HAVE_MUL概念检查，确保类型支持乘法运算
+inline YTensorBase YTensorBase::matmul_zero_backend(const YTensorBase& other) const {
+    YT_DISPATCH_WITH_TRAIT(_dtype, yt::concepts::HAVE_MUL, {
+        return matmul_naive_impl<DType>(*this, other);
+    });
+    throw std::runtime_error("[YTensorBase::matmul_zero_backend] Unsupported dtype: " + _dtype);
+}
+
+
+inline void YTensorBase::throwOperatorNotSupport(const std::string& typeName, const std::string& opName) {
+    throw std::runtime_error("[YTensorBase] Operator " + opName + " not support for type " + typeName);
+}
+
+inline void YTensorBase::throwShapeNotMatch(const std::string& opName, const std::vector<int>& otherShape) const {
+    std::string thisShapeStr = "[";
+    for (size_t i = 0; i < _shape.size(); ++i) {
+        thisShapeStr += std::to_string(_shape[i]);
+        if (i + 1 < _shape.size()) thisShapeStr += ", ";
+    }
+    thisShapeStr += "]";
+    
+    std::string otherShapeStr = "[";
+    for (size_t i = 0; i < otherShape.size(); ++i) {
+        otherShapeStr += std::to_string(otherShape[i]);
+        if (i + 1 < otherShape.size()) otherShapeStr += ", ";
+    }
+    otherShapeStr += "]";
+    
+    throw std::runtime_error("[YTensorBase::" + opName + "] Shape mismatch: " + thisShapeStr + " vs " + otherShapeStr);
+}
+
+// ======================== Eigen Support ========================
+#if YT_USE_EIGEN
+
+// Eigen类型映射宏 - 使用Stride支持非连续数据
+// OuterStride: 行间距离（对于RowMajor）
+// InnerStride: 列间距离（对于RowMajor）
+#define YT_EIGEN_STRIDED_MAP(Scalar, rows, cols, data, outerStride, innerStride) \
+    Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, \
+               0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>( \
+        data, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(outerStride, innerStride))
+
+#define YT_EIGEN_CONST_STRIDED_MAP(Scalar, rows, cols, data, outerStride, innerStride) \
+    Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, \
+               0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>( \
+        data, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(outerStride, innerStride))
+
+// 辅助函数：获取广播索引
+inline int _getBroadcastIdx(int idx, const std::vector<int>& shape, const std::vector<int>& targetShape) {
+    if (shape.size() == 0) return 0;
+    std::vector<int> coord(targetShape.size());
+    int remaining = idx;
+    for (int i = static_cast<int>(targetShape.size()) - 1; i >= 0; --i) {
+        coord[i] = remaining % targetShape[i];
+        remaining /= targetShape[i];
+    }
+    int result = 0;
+    int stride = 1;
+    int offset = static_cast<int>(targetShape.size()) - static_cast<int>(shape.size());
+    for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
+        int c = coord[i + offset];
+        if (shape[i] == 1) c = 0;
+        result += c * stride;
+        stride *= shape[i];
+    }
+    return result;
+}
+
+// 模板化的matmul Eigen批量乘法实现
+template<typename T>
+inline void matmul_eigen_batch_impl(
+    YTensorBase* thisMats, YTensorBase* otherMats, YTensorBase* opMats,
+    const std::vector<int>& thisMatViewShape, const std::vector<int>& otherMatViewShape,
+    const std::vector<int>& opBatchShape,
+    int ah, int aw, int bw, size_t batchSize
+) {
+    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
+        int thisIdx = _getBroadcastIdx(batchIdx, thisMatViewShape, opBatchShape);
+        int otherIdx = _getBroadcastIdx(batchIdx, otherMatViewShape, opBatchShape);
+        
+        YTensorBase& A = thisMats[thisIdx];
+        YTensorBase& B = otherMats[otherIdx];
+        YTensorBase& C = opMats[batchIdx];
+        
+        // 使用Stride Map支持非连续数据
+        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, ah, aw, A.template data<T>(), A.stride_(0), A.stride_(1));
+        auto eigenB = YT_EIGEN_CONST_STRIDED_MAP(T, aw, bw, B.template data<T>(), B.stride_(0), B.stride_(1));
+        auto eigenC = YT_EIGEN_STRIDED_MAP(T, ah, bw, C.template data<T>(), C.stride_(0), C.stride_(1));
+        
+        eigenC.noalias() = eigenA * eigenB;
+    }, static_cast<double>(ah * bw * aw));
+}
+
+// 模板化的Eigen matmul后端实现
+template<typename DType>
+inline YTensorBase matmul_eigen_impl(const YTensorBase& self, const YTensorBase& other) {
+    // 获取matView
+    auto thisMatView = self.matView();
+    auto otherMatView = other.matView();
+    
+    // 获取矩阵维度
+    int ah = (self.ndim() >= 2) ? self.shape(self.ndim() - 2) : 1;
+    int aw = self.shape(self.ndim() - 1);
+    int bw = other.shape(other.ndim() - 1);
+    
+    // 计算广播后的batch形状
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    
+    // 计算输出的batch维度数量
+    int thisBatchDim = std::max(0, self.ndim() - 2);
+    int otherBatchDim = std::max(0, other.ndim() - 2);
+    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
+    
+    // 计算输出形状
+    std::vector<int> opShape;
+    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
+    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
+        opShape.push_back(opBatchShape[i]);
+    }
+    opShape.push_back(ah);
+    opShape.push_back(bw);
+    
+    // 创建输出tensor
+    YTensorBase op(opShape, self.dtype());
+    auto opMatView = op.matView();
+    
+    size_t batchSize = opMatView.size();
+    YTensorBase* opMats = opMatView.template data<YTensorBase>();
+    YTensorBase* thisMats = thisMatView.template data<YTensorBase>();
+    YTensorBase* otherMats = otherMatView.template data<YTensorBase>();
+    
+    auto thisShape = thisMatView.shape();
+    auto otherShape = otherMatView.shape();
+    
+    matmul_eigen_batch_impl<DType>(thisMats, otherMats, opMats, thisShape, otherShape, opBatchShape, ah, aw, bw, batchSize);
+    
+    return op;
+}
+
+// 保留原始接口（直接调用模板实现）
+inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) const {
+    // bfloat16需要特殊处理：转换为float32执行Eigen matmul，再转回bfloat16
+    // 原因：Eigen内部使用表达式模板，需要与Eigen兼容的operator+=等，
+    // 而yt::bfloat16的模板化运算符无法处理Eigen的表达式类型
+    if (_dtype == "bfloat16") {
+        YTensorBase thisF32(this->shape(), "float32");
+        YTensorBase otherF32(other.shape(), "float32");
+        
+        const yt::bfloat16* thisBf16 = this->data<yt::bfloat16>();
+        const yt::bfloat16* otherBf16 = other.data<yt::bfloat16>();
+        float* thisF32Ptr = thisF32.data<float>();
+        float* otherF32Ptr = otherF32.data<float>();
+        
+        for (size_t i = 0; i < this->size(); ++i) thisF32Ptr[i] = static_cast<float>(thisBf16[i]);
+        for (size_t i = 0; i < other.size(); ++i) otherF32Ptr[i] = static_cast<float>(otherBf16[i]);
+        
+        YTensorBase opF32 = matmul_eigen_impl<float>(thisF32, otherF32);
+        
+        YTensorBase result(opF32.shape(), "bfloat16");
+        const float* opF32Ptr = opF32.data<float>();
+        yt::bfloat16* resultPtr = result.data<yt::bfloat16>();
+        for (size_t i = 0; i < opF32.size(); ++i) resultPtr[i] = yt::bfloat16(opF32Ptr[i]);
+        return result;
+    }
+    
+    YT_DISPATCH_EIGEN_NATIVE_TYPES(_dtype, {
+        return matmul_eigen_impl<DType>(*this, other);
+    });
+    
+    throw std::runtime_error("[YTensorBase::matmul_eigen_backend] Unsupported dtype: " + _dtype);
+}
+
+// 模板化的applyEigenOp实现
+template<typename T, typename Func>
+inline YTensorBase _applyEigenOpImpl(
+    const YTensorBase& self, Func&& func, int rows, int cols
+) {
+    auto thisMatView = self.matView();
+    size_t batchSize = thisMatView.size();
+    YTensorBase* thisMats = thisMatView.data<YTensorBase>();
+    
+    // 推断输出形状
+    auto eigenMat0 = YT_EIGEN_CONST_STRIDED_MAP(T, rows, cols, thisMats[0].template data<T>(), 
+                                                thisMats[0].stride_(0), thisMats[0].stride_(1));
+    auto result0 = func(eigenMat0);
+    int outRows = static_cast<int>(result0.rows());
+    int outCols = static_cast<int>(result0.cols());
+    
+    // 构建输出形状
+    std::vector<int> outShape;
+    for (int i = 0; i < self.ndim() - 2; ++i) {
+        outShape.push_back(self.shape(i));
+    }
+    outShape.push_back(outRows);
+    outShape.push_back(outCols);
+    
+    YTensorBase op(outShape, yt::types::getTypeName<T>());
+    auto opMatView = op.matView();
+    YTensorBase* opMats = opMatView.data<YTensorBase>();
+    
+    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
+        YTensorBase& A = thisMats[batchIdx];
+        YTensorBase& C = opMats[batchIdx];
+        
+        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, rows, cols, A.template data<T>(), A.stride_(0), A.stride_(1));
+        auto eigenC = YT_EIGEN_STRIDED_MAP(T, outRows, outCols, C.template data<T>(), C.stride_(0), C.stride_(1));
+        
+        eigenC = func(eigenA);
+    }, static_cast<double>(rows * cols));
+    
+    return op;
+}
+
+template<typename Func>
+inline YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opName) const {
+    int dim = ndim();
+    if (dim < 2) {
+        throw std::runtime_error("[YTensorBase::" + opName + "] Tensor must have at least 2 dimensions");
+    }
+    
+    int rows = _shape[dim - 2];
+    int cols = _shape[dim - 1];
+    
+    // 类型分发
+    if (_dtype == "float32") {
+        return _applyEigenOpImpl<float>(*this, std::forward<Func>(func), rows, cols);
+    } else if (_dtype == "float64") {
+        return _applyEigenOpImpl<double>(*this, std::forward<Func>(func), rows, cols);
+    } else if (_dtype == "int32") {
+        return _applyEigenOpImpl<int32_t>(*this, std::forward<Func>(func), rows, cols);
+    } else if (_dtype == "int64") {
+        return _applyEigenOpImpl<int64_t>(*this, std::forward<Func>(func), rows, cols);
+    } else if (_dtype == "bfloat16") {
+        // bfloat16: 转换为float32执行
+        YTensorBase thisF32 = YTensorBase(this->shape(), "float32");
+        size_t thisSize = this->size();
+        const yt::bfloat16* thisBf16 = this->data<yt::bfloat16>();
+        float* thisF32Data = thisF32.data<float>();
+        for (size_t i = 0; i < thisSize; ++i) thisF32Data[i] = static_cast<float>(thisBf16[i]);
+        
+        YTensorBase opF32 = _applyEigenOpImpl<float>(thisF32, std::forward<Func>(func), rows, cols);
+        
+        // 转回bfloat16
+        YTensorBase op(opF32.shape(), "bfloat16");
+        size_t opSize = op.size();
+        const float* opF32Data = opF32.data<float>();
+        yt::bfloat16* opBf16Data = op.data<yt::bfloat16>();
+        for (size_t i = 0; i < opSize; ++i) opBf16Data[i] = yt::bfloat16(opF32Data[i]);
+        return op;
+    } else {
+        throw std::runtime_error("[YTensorBase::" + opName + "] Unsupported dtype: " + _dtype);
+    }
+}
+
+// 模板化的applyEigenBinaryOp实现
+template<typename T, typename Func>
+inline YTensorBase _applyEigenBinaryOpImpl(
+    const YTensorBase& self, const YTensorBase& other, Func&& func,
+    int aRows, int aCols, int bRows, int bCols
+) {
+    auto thisMatView = self.matView();
+    auto otherMatView = other.matView();
+    
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    
+    int thisBatchDim = std::max(0, self.ndim() - 2);
+    int otherBatchDim = std::max(0, other.ndim() - 2);
+    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
+    
+    size_t batchSize = 1;
+    for (int s : opBatchShape) batchSize *= s;
+    
+    YTensorBase* thisMats = thisMatView.data<YTensorBase>();
+    YTensorBase* otherMats = otherMatView.data<YTensorBase>();
+    
+    auto thisShape = thisMatView.shape();
+    auto otherShape = otherMatView.shape();
+    
+    // 推断输出形状
+    int thisIdx0 = _getBroadcastIdx(0, thisShape, opBatchShape);
+    int otherIdx0 = _getBroadcastIdx(0, otherShape, opBatchShape);
+    YTensorBase& A0 = thisMats[thisIdx0];
+    YTensorBase& B0 = otherMats[otherIdx0];
+    
+    auto eigenA0 = YT_EIGEN_CONST_STRIDED_MAP(T, aRows, aCols, A0.template data<T>(), A0.stride_(0), A0.stride_(1));
+    auto eigenB0 = YT_EIGEN_CONST_STRIDED_MAP(T, bRows, bCols, B0.template data<T>(), B0.stride_(0), B0.stride_(1));
+    auto result0 = func(eigenA0, eigenB0);
+    int outRows = static_cast<int>(result0.rows());
+    int outCols = static_cast<int>(result0.cols());
+    
+    // 构建输出形状
+    std::vector<int> opShape;
+    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
+    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
+        opShape.push_back(opBatchShape[i]);
+    }
+    opShape.push_back(outRows);
+    opShape.push_back(outCols);
+    
+    YTensorBase op(opShape, yt::types::getTypeName<T>());
+    auto opMatView = op.matView();
+    YTensorBase* opMats = opMatView.data<YTensorBase>();
+    
+    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
+        int thisIdx = _getBroadcastIdx(batchIdx, thisShape, opBatchShape);
+        int otherIdx = _getBroadcastIdx(batchIdx, otherShape, opBatchShape);
+        
+        YTensorBase& A = thisMats[thisIdx];
+        YTensorBase& B = otherMats[otherIdx];
+        YTensorBase& C = opMats[batchIdx];
+        
+        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, aRows, aCols, A.template data<T>(), A.stride_(0), A.stride_(1));
+        auto eigenB = YT_EIGEN_CONST_STRIDED_MAP(T, bRows, bCols, B.template data<T>(), B.stride_(0), B.stride_(1));
+        auto eigenC = YT_EIGEN_STRIDED_MAP(T, outRows, outCols, C.template data<T>(), C.stride_(0), C.stride_(1));
+        
+        eigenC = func(eigenA, eigenB);
+    }, static_cast<double>(aRows * aCols + bRows * bCols));
+    
+    return op;
+}
+
+template<typename Func>
+inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Func&& func, const std::string& opName) const {
+    int dim = ndim();
+    int otherDim = other.ndim();
+    if (dim < 2 || otherDim < 2) {
+        throw std::runtime_error("[YTensorBase::" + opName + "] Both tensors must have at least 2 dimensions");
+    }
+    
+    if (_dtype != other._dtype) {
+        throw std::runtime_error("[YTensorBase::" + opName + "] dtype mismatch: " + _dtype + " vs " + other._dtype);
+    }
+    
+    int aRows = _shape[dim - 2];
+    int aCols = _shape[dim - 1];
+    int bRows = other._shape[otherDim - 2];
+    int bCols = other._shape[otherDim - 1];
+    
+    // 类型分发
+    if (_dtype == "float32") {
+        return _applyEigenBinaryOpImpl<float>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+    } else if (_dtype == "float64") {
+        return _applyEigenBinaryOpImpl<double>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+    } else if (_dtype == "int32") {
+        return _applyEigenBinaryOpImpl<int32_t>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+    } else if (_dtype == "int64") {
+        return _applyEigenBinaryOpImpl<int64_t>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+    } else if (_dtype == "bfloat16") {
+        // bfloat16: 转换为float32执行
+        YTensorBase thisF32 = YTensorBase(this->shape(), "float32");
+        YTensorBase otherF32 = YTensorBase(other.shape(), "float32");
+        
+        size_t thisSize = this->size();
+        size_t otherSize = other.size();
+        const yt::bfloat16* thisBf16 = this->data<yt::bfloat16>();
+        const yt::bfloat16* otherBf16 = other.data<yt::bfloat16>();
+        float* thisF32Data = thisF32.data<float>();
+        float* otherF32Data = otherF32.data<float>();
+        
+        for (size_t i = 0; i < thisSize; ++i) thisF32Data[i] = static_cast<float>(thisBf16[i]);
+        for (size_t i = 0; i < otherSize; ++i) otherF32Data[i] = static_cast<float>(otherBf16[i]);
+        
+        YTensorBase opF32 = _applyEigenBinaryOpImpl<float>(thisF32, otherF32, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+        
+        // 转回bfloat16
+        YTensorBase op(opF32.shape(), "bfloat16");
+        size_t opSize = op.size();
+        const float* opF32Data = opF32.data<float>();
+        yt::bfloat16* opBf16Data = op.data<yt::bfloat16>();
+        for (size_t i = 0; i < opSize; ++i) opBf16Data[i] = yt::bfloat16(opF32Data[i]);
+        return op;
+    } else {
+        throw std::runtime_error("[YTensorBase::" + opName + "] Unsupported dtype: " + _dtype);
+    }
+}
+
+#undef YT_EIGEN_STRIDED_MAP
+#undef YT_EIGEN_CONST_STRIDED_MAP
+
+#endif // YT_USE_EIGEN
+
+} // namespace yt

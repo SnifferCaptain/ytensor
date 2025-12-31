@@ -28,7 +28,7 @@
  * @tparam dim 张量的维度数。
  */
 template <typename T=float, int dim=1>
-class YTensor{
+class YTensor : public yt::YTensorBase {
 protected:
     /// @brief 抛出维度不匹配的异常
     void throwShapeNotMatch(const std::string& funcName, const std::vector<int>& otherShape) const;
@@ -96,8 +96,13 @@ public:
 
     /// @brief 构造函数。
     /// @param list 张量的形状。
-    /// @example YTensor<float, 3> a={3, 4, 5};
+    /// @example YTensor<float, 3> a = {3, 4, 5};
     YTensor(std::initializer_list<int> list);
+
+    /// @brief 从 YTensorBase 构造。
+    /// @param base 源 YTensorBase 对象。
+    /// @note 类型和维度必须匹配，否则行为未定义。
+    explicit YTensor(const YTensorBase& base);
 
     /// @brief 拷贝构造函数。默认行为是浅拷贝。
     /// @param other 源张量。
@@ -135,6 +140,13 @@ public:
     /// @return 返回当前的张量的引用。
     YTensor& reserve(const std::vector<int>& shape);
 
+    /// @brief 预留连续空间。注意原本的数据会被清空。与构造函数的逻辑相同。
+    /// @param args 张量的形状。
+    /// @return 返回当前的张量的引用。
+    /// @example auto t = YTensor<float, 3>().reserve(3, 4, 5);
+    template<typename... Args>
+    YTensor& reserve(Args... args);
+
     /// @brief 获取张量的数据指针，可以使用stride_()的步长进行安全访问。已经包含偏移量。
     /// @return 返回张量数据的指针。
     /// @note 如果需要获取内存段的数据指针，请使用data_()方法。
@@ -146,75 +158,31 @@ public:
     T *data_();
     const T *data_() const;
 
-    /// @brief 获取张量的数据智能指针（在非contiguous情况下不建议使用）
-    /// @return 返回张量数据的指针。
-    std::vector<T>& dataVector();
-    const std::vector<const T>& dataVector() const;
+    using YTensorBase::size;
+    using YTensorBase::shape;
+    using YTensorBase::shapeMatch;
+    using YTensorBase::shape_;
+    using YTensorBase::stride;
+    using YTensorBase::stride_;
+    using YTensorBase::isContiguous;
+    using YTensorBase::isContiguousFrom;
+    using YTensorBase::isDisjoint;
+    using YTensorBase::toCoord;
 
-    /// @brief 获取张量的元素个数
-    /// @return 返回张量的元素个数。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto size = a.size(); // size = 60
-    /// @note 如果张量是非contiguous的，size()方法返回的是逻辑个数，而不是实际个数。
-    size_t size() const;
-
-    /// @brief 获取张量的形状。可以根据这个形状信息进行数据的访问和操作。如at()方法或者下标(operator[])。
-    /// @return 返回张量的形状。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto shape = a.shape(); // shape = [3, 4, 5]
-    std::vector<int> shape() const;
-
-    /// @brief 获取张量的形状在某个轴上的大小
-    /// @param atDim 维度索引，从0开始。
-    /// @return 返回指定维度的大小。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimSize = a.shape(1); // dimSize = 4
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimSize = a.shape(-1); // dimSize = 5
-    int shape(int atDim) const;
-
-    /// @brief 检查张量的形状是否与另一个形状匹配
-    /// @param otherShape 另一个张量的形状。
-    /// @return 如果形状匹配则返回true，否则返回false。
-    bool shapeMatch(const std::vector<int> &otherShape) const;
-
-    /// @brief 获取张量的形状在某个轴上的大小（无安全检查、循环版的高效实现）
-    /// @param atDim 维度索引，从0开始。
-    /// @return 返回指定维度的大小。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimSize = a.shape(1); // dimSize = 4
-    int shape_(int atDim) const;
-
+    /// @brief 获取张量的维度数（编译时常量，区别于基类的运行时版本）
     constexpr int shapeSize() const;
-
-    /// @brief 获取张量的步长
-    /// @return 返回张量的步长。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto stride = a.stride();// stride = [20, 5, 1]
-    /// @note 如果张量是非contiguous的，stride()方法返回的是逻辑步长，而不是实际的内存步长。
-    //       如果需要获取实际的内存步长，请使用stride_()方法。
-    std::vector<int> stride() const;
-
-    /// @brief 获取张量在某个轴上的步长
-    /// @param atDim 维度索引
-    /// @return 返回指定维度的步长。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimStride = a.stride(1); // dimStride = 4
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimStride = a.stride(-1); // dimStride = 5
-    /// @note 如果张量是非contiguous的，stride(int)方法返回的是逻辑步长，而不是实际的内存步长。
-    //       如果需要获取实际的内存步长，请使用stride_(int)方法。
-    int stride(int atDim) const;
-
-    /// @brief 获取张量的真实步长
-    /// @return 返回张量的实际内存步长。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto stride = a.stride_(); // stride = [20, 5, 1]
-    std::vector<int> stride_() const;
-
-    /// @brief 获取张量在某个轴上的真实步长
-    /// @param atDim 维度索引
-    /// @return 返回指定维度的真实步长。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimStride = a.stride(1); // dimStride = 4
-    /// @example YTensor<float, 3> a(3, 4, 5); auto dimStride = a.stride(-1); // dimStride = 5
-    int stride_(int atDim) const;
 
     /// @brief 获取张量相对数据指针的真实偏移量，或者对应子张量或元素的偏移量
     /// @param index 元素的索引
     /// @return 返回张量、子张量或者对应元素的偏移量。
     template<typename... Args> int offset(Args... index) const;
     int offset(const std::vector<int>& index) const;
+
+    /// @brief 获取张量的物理偏移量，考虑了张量自身的_offset
+    /// @param index 元素的索引
+    /// @return 返回 _offset + offset(index)
+    template<typename... Args> int offset_(Args... index) const;
+    int offset_(const std::vector<int>& index) const;
 
     /// @brief 获取张量的连续版本
     /// @return 返回连续张量。
@@ -227,24 +195,10 @@ public:
     /// @note 这会导致原先的“引用”失效
     YTensor &contiguous_();
 
-    /// @brief 张量是否是连续的
-    /// @param fromDim 从该维度开始检查
-    /// @return 如果张量是连续的，返回true；否则返回false。
-    /// @example YTensor<float, 3> a(3, 4, 5); bool is_contiguous = a.isContiguous(); // is_contiguous = true
-    bool isContiguous(int fromDim = 0) const;
-
-    /// @brief 获取张量从哪个维度开始是连续的
-    /// @return 返回从哪个维度开始是连续的。如果完全不连续的话，就返回dim
-    int isContiguousFrom() const;
-
     /// @brief 获取这个张量尽可能连续的视图，注意张量的形状会发生变化。
     /// @return 返回一个张量，表示当前张量最大可能的连续排布的视图。
-    /// @note 这个张量并不能保证连续。
+    /// @note 这个张量并不能保证连续。适用于处理elementwise操作加速。
     YTensor mostContinuousView() const;
-
-    /// @brief 张量是否是不重叠的
-    /// @return 如果张量是不重叠的，返回true；否则返回false。
-    bool isDisjoint() const;
 
     /// @brief 获取坐标对应的位置，可以使用atData()方法获取数据。
     /// @return 偏移量
@@ -253,20 +207,12 @@ public:
     //       如果需要获取实际的内存索引，请使用toIndex_()方法
     template <typename... Args> size_t toIndex(const Args... args) const;
     size_t toIndex(const std::vector<int> &pos) const;
-    size_t toIndex(const int pos[]) const;
 
     /// @brief 获取坐标对应的物理位置，可以使用atData_()方法获取数据。
     /// @return 相对data的偏移量
     /// @example YTensor<float, 3> a(3, 4, 5); auto offset = a.toIndex_(1, 2, 3); // offset = 31
     template <typename... Args> size_t toIndex_(const Args... args) const;
     size_t toIndex_(const std::vector<int> &pos) const;
-    size_t toIndex_(const int pos[]) const;
-
-    /// @brief 获取位置对应的坐标
-    /// @param index 位置
-    /// @return 坐标
-    /// @note 输入必须是逻辑位置。
-    std::vector<int> toCoord(size_t index) const;
 
     /// @brief 获取对应地址的数据
     /// @return 返回张量元素的引用。
@@ -287,10 +233,8 @@ public:
     /// @example YTensor<float, 3> a(3, 4, 5); a.at(1, 2, 3) = 10.0f; auto value = a.at(1, 2, 3);
     template <typename... Args> T& at(const Args... args);
     T& at(const std::vector<int> &pos);
-    T& at(const int pos[]);
     template <typename... Args> const T& at(const Args... args) const;
     const T& at(const std::vector<int> &pos) const;
-    const T& at(const int pos[]) const;
 
     /// @brief 通过坐标获取张量的元素，或者获取子张量
     /// @return 返回张量元素的引用。
@@ -355,6 +299,23 @@ public:
     template <int newdim> YTensor<T, newdim> view(const std::vector<int>& newShape) const;
     template <int newdim> YTensor<T, newdim> view(const int newShape[]) const;
 
+    /// @brief 重塑张量形状
+    /// @param newShape 新的形状
+    /// @return 返回一个新的张量（可能是视图，也可能是拷贝）
+    template <typename... Args> auto reshape(const Args... newShape) const -> YTensor<T, sizeof...(Args)>;
+    template <int newdim> YTensor<T, newdim> reshape(const std::vector<int>& newShape) const;
+
+    /// @brief 在指定位置插入一个大小为1的维度（零拷贝）
+    /// @param d 插入的位置（支持负索引）
+    /// @return 返回新维度的张量视图
+    YTensor<T, dim + 1> unsqueeze(int d) const;
+
+    /// @brief 移除指定位置的大小为1的维度（零拷贝）
+    /// @param d 要移除的维度（支持负索引）
+    /// @return 返回减少维度后的张量视图
+    /// @note dim 必须大于1，否则编译失败
+    YTensor<T, dim - 1> squeeze(int d) const requires (dim > 1);
+
     /// @brief 张量的维度进行重复，要求会被重复的维度，其长度必须为1。
     /// @param times 重复的个数，如果是小于等于1表示当前维度不变。
     /// @return 返回新张量
@@ -375,17 +336,13 @@ public:
     /// @param shape 张量的形状
     /// @return 返回张量
     static YTensor<T, dim> zeros(const std::vector<int>& shape);
-    static YTensor<T, dim> zeros(const int shape[]);
     template<typename... Args> static YTensor<T, sizeof...(Args)> zeros(Args... args);
-    static YTensor<T, dim> zeros(const std::initializer_list<int>& shape);
 
     /// @brief 创建指定大小的，全1张量
     /// @param shape 张量的形状
     /// @return 返回张量
     static YTensor<T, dim> ones(const std::vector<int>& shape);
-    static YTensor<T, dim> ones(const int shape[]);
     template<typename... Args> static YTensor<T, sizeof...(Args)> ones(const Args... args);
-    static YTensor<T, dim> ones(const std::initializer_list<int>& shape);
 
     /// @brief 创建指定大小的，高斯分布U(0, 1)的张量
     /// @param shape 张量的形状
@@ -404,11 +361,13 @@ public:
     /// @example YTensor<>::seed(42);
     static void seed(unsigned int seed = std::random_device{}());
 
-    /// @brief 按置进行操作
-    /// @param func 对每个元素进行操作的函数，函数签名为void func(T& value, const std::vector<int>& coord) -> T/void
-    /// @param flop 每次操作的运算量，用于判断是否需要多线程计算，默认值为1e-11即禁用多线程
+    /// @brief 按位置进行操作
+    /// @param func 对每个元素进行操作的函数：
+    ///        - 带坐标版本：void/T func(T& value, const std::vector<int>& coord)
+    ///        - 无坐标版本：void/T func(T& value)
+    /// @param flop 每次操作的运算量，用于判断是否需要多线程计算
     /// @return 返回自身引用
-    /// @note foreach的速度没有使用binaryOpTransformInplace快。但是它提供了coord的接口。
+    /// @note 当func只接受一个参数时，会自动使用更高效的实现
     template<typename Func>
     YTensor<T, dim>& foreach(Func&& func, double flop = 1e-11);
 
@@ -417,18 +376,18 @@ public:
     /// @return 返回自身引用
     YTensor<T, dim>& fill(T value);
 
+    /// @brief 从源张量复制元素到本张量（原地操作，不重新分配内存）
+    /// @param src 源张量，shape和dtype必须与本张量一致
+    /// @return 返回自身引用
+    /// @note 目前不支持src与dst的内存重叠，若存在重叠则行为未定义
+    YTensor<T, dim>& copy_(const yt::YTensorBase& src);
+
     /// @brief 标准cout输出流
     template<typename U, int d>
     friend std::ostream& operator<<(std::ostream& os, const YTensor<U, d>& tensor);
 
 /////////////////// externs ////////////////
     #include "./include/ytensor_math.hpp"
-
-protected:
-    std::shared_ptr<std::vector<T>> _data; // 张量数据
-    std::vector<int> _shape;    // 张量的形状
-    std::vector<int> _stride;   // 张量的步长
-    int _offset;                // 张量距离指针的偏移量
 };
 
 //////////// implementation /////////////

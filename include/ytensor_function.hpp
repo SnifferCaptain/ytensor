@@ -27,6 +27,9 @@ namespace yt::function{
     template<typename T, int dim>
     YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
 
+    template<typename T, int dim>
+    YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+
     enum struct sdpaBackend{
         MATH
     };
@@ -37,7 +40,7 @@ namespace yt::function{
         YTensor<T, dim>& key,
         YTensor<T, dim>& value,
         T scale = static_cast<T>(0.0),
-        YTensor<T, dim>* mask = nullptr,
+        YTensor<T, 2>* mask = nullptr,
         sdpaBackend backend = sdpaBackend::MATH
     );
 
