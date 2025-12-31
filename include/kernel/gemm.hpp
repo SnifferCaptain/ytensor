@@ -50,7 +50,9 @@ constexpr int KC = 500;
 // NC should be divisible by both NR_ROW(16) and NR_COL(6): 4800 = 300*16 = 800*6
 constexpr int NC = 4800;
 
-// Thread configuration (use set_num_threads() to configure)
+// Thread configuration for GEMM operations
+// Note: This only configures the number of threads for GEMM operations.
+// The actual thread count is specified via num_threads() clause in OpenMP pragmas.
 inline int g_num_threads = 1;
 
 inline void set_num_threads(int n) {
