@@ -1003,65 +1003,141 @@ inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int 
 
 // ============================================================================
 // Parallel row-major GEMM with OpenMP
+// Following the original sgemm pattern: shared packed buffers, parallel micro-kernel
 // ============================================================================
 
 #ifdef _OPENMP
+// Global shared buffers for parallel GEMM (allocated on first use)
+inline float* g_packed_a = nullptr;
+inline float* g_packed_b = nullptr;
+inline size_t g_packed_a_size = 0;
+inline size_t g_packed_b_size = 0;
+
+inline void ensure_parallel_buffers(size_t a_size, size_t b_size) {
+    if (g_packed_a_size < a_size) {
+        if (g_packed_a) aligned_free_64(g_packed_a);
+        g_packed_a = static_cast<float*>(aligned_alloc_64(a_size * sizeof(float)));
+        g_packed_a_size = g_packed_a ? a_size : 0;
+    }
+    if (g_packed_b_size < b_size) {
+        if (g_packed_b) aligned_free_64(g_packed_b);
+        g_packed_b = static_cast<float*>(aligned_alloc_64(b_size * sizeof(float)));
+        g_packed_b_size = g_packed_b ? b_size : 0;
+    }
+}
+
+// Parallel pack B into panels (each panel is kc x NR_ROW)
+inline void pack_b_row_parallel(const float* B, float* packed, int kc, int nc, int ldb, int nthreads) {
+    #pragma omp parallel for schedule(static) num_threads(nthreads)
+    for (int j = 0; j < nc; j += NR_ROW) {
+        int nr = std::min(NR_ROW, nc - j);
+        float* dest = packed + (j / NR_ROW) * NR_ROW * kc;
+        for (int p = 0; p < kc; ++p) {
+            for (int jj = 0; jj < nr; ++jj) {
+                dest[jj] = B[p * ldb + j + jj];
+            }
+            for (int jj = nr; jj < NR_ROW; ++jj) {
+                dest[jj] = 0.0f;
+            }
+            dest += NR_ROW;
+        }
+    }
+}
+
+// Parallel pack A into panels (each panel is MR_ROW x kc)
+inline void pack_a_row_parallel(const float* A, float* packed, int mc, int kc, int lda, int nthreads) {
+    #pragma omp parallel for schedule(static) num_threads(nthreads)
+    for (int i = 0; i < mc; i += MR_ROW) {
+        int mr = std::min(MR_ROW, mc - i);
+        float* dest = packed + (i / MR_ROW) * MR_ROW * kc;
+        for (int p = 0; p < kc; ++p) {
+            for (int ii = 0; ii < mr; ++ii) {
+                dest[ii] = A[(i + ii) * lda + p];
+            }
+            for (int ii = mr; ii < MR_ROW; ++ii) {
+                dest[ii] = 0.0f;
+            }
+            dest += MR_ROW;
+        }
+    }
+}
+
 inline void sgemm_rowmajor_parallel(const float* A, const float* B, float* C, int m, int n, int k, int nthreads) {
-    // For parallel execution, we need shared B buffer and per-thread A buffer
+    // Allocate shared buffers
+    size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
     size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
-    float* buf_b_shared = static_cast<float*>(aligned_alloc_64(b_buf_size * sizeof(float)));
-    if (!buf_b_shared) {
+    ensure_parallel_buffers(a_buf_size, b_buf_size);
+    
+    if (!g_packed_a || !g_packed_b) {
         // Fallback to sequential
         sgemm_rowmajor(A, B, C, m, n, k);
         return;
     }
     
+    omp_set_num_threads(nthreads);
+    
     for (int j = 0; j < n; j += NC) {
         int nc = std::min(NC, n - j);
+        int kc = std::min(KC, k);
+        bool first = true;
         
-        for (int p = 0; p < k; p += KC) {
-            int kc = std::min(KC, k - p);
-            bool first = (p == 0);
+        // Pack B in parallel
+        pack_b_row_parallel(B + j, g_packed_b, kc, nc, n, nthreads);
+        
+        for (int i = 0; i < m; i += MC) {
+            int mc = std::min(MC, m - i);
             
-            // Pack B once (shared)
-            pack_b_row(B + p * n + j, buf_b_shared, kc, nc, n);
+            // Pack A in parallel
+            pack_a_row_parallel(A + i * k, g_packed_a, mc, kc, k, nthreads);
             
-            // Parallelize over rows
-            #pragma omp parallel num_threads(nthreads)
-            {
-                // Each thread has its own A buffer
-                static thread_local AlignedBuffer buf_a_local;
-                size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
-                buf_a_local.ensure(a_buf_size);
+            // Compute micro-kernels in parallel (over ir loop for better load balancing)
+            #pragma omp parallel for schedule(static) num_threads(nthreads)
+            for (int ir = 0; ir < mc; ir += MR_ROW) {
+                int mr = std::min(MR_ROW, mc - ir);
+                for (int jr = 0; jr < nc; jr += NR_ROW) {
+                    int nr = std::min(NR_ROW, nc - jr);
+                    
+                    float* C_ij = C + (i + ir) * n + (j + jr);
+                    float* packed_a = g_packed_a + (ir / MR_ROW) * MR_ROW * kc;
+                    float* packed_b = g_packed_b + (jr / NR_ROW) * NR_ROW * kc;
+                    
+                    if (first) {
+                        kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                    } else {
+                        kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                    }
+                }
+            }
+        }
+        
+        // Continue with remaining k tiles
+        for (int p = kc; p < k; p += KC) {
+            kc = std::min(KC, k - p);
+            first = false;
+            
+            pack_b_row_parallel(B + p * n + j, g_packed_b, kc, nc, n, nthreads);
+            
+            for (int i = 0; i < m; i += MC) {
+                int mc = std::min(MC, m - i);
                 
-                #pragma omp for schedule(dynamic)
-                for (int i = 0; i < m; i += MC) {
-                    int mc = std::min(MC, m - i);
-                    
-                    pack_a_row(A + i * k + p, buf_a_local.data, mc, kc, k);
-                    
-                    for (int ir = 0; ir < mc; ir += MR_ROW) {
-                        int mr = std::min(MR_ROW, mc - ir);
-                        for (int jr = 0; jr < nc; jr += NR_ROW) {
-                            int nr = std::min(NR_ROW, nc - jr);
-                            
-                            float* C_ij = C + (i + ir) * n + (j + jr);
-                            float* packed_a = buf_a_local.data + (ir / MR_ROW) * MR_ROW * kc;
-                            float* packed_b = buf_b_shared + (jr / NR_ROW) * NR_ROW * kc;
-                            
-                            if (first) {
-                                kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
-                            } else {
-                                kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
-                            }
-                        }
+                pack_a_row_parallel(A + i * k + p, g_packed_a, mc, kc, k, nthreads);
+                
+                #pragma omp parallel for schedule(static) num_threads(nthreads)
+                for (int ir = 0; ir < mc; ir += MR_ROW) {
+                    int mr = std::min(MR_ROW, mc - ir);
+                    for (int jr = 0; jr < nc; jr += NR_ROW) {
+                        int nr = std::min(NR_ROW, nc - jr);
+                        
+                        float* C_ij = C + (i + ir) * n + (j + jr);
+                        float* packed_a = g_packed_a + (ir / MR_ROW) * MR_ROW * kc;
+                        float* packed_b = g_packed_b + (jr / NR_ROW) * NR_ROW * kc;
+                        
+                        kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
                     }
                 }
             }
         }
     }
-    
-    aligned_free_64(buf_b_shared);
 }
 #endif
 
