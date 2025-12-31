@@ -5,3 +5,4 @@ build
 legacy
 main.cpp
 CMakeLists.txt
+_codeql*
