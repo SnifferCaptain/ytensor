@@ -8,6 +8,13 @@
  * BLAS-style GEMM: C = alpha * A @ B + beta * C (inplace)
  * Automatically detects row/column major and selects optimal kernel
  * Based on: https://salykova.github.io/matmul-cpu
+ * 
+ * Features:
+ * - Dual micro-kernel: 16x6 (column-major) and 6x16 (row-major)
+ * - Automatic layout detection and kernel selection
+ * - OpenMP parallel support (define GEMM_NTHREADS or use set_num_threads())
+ * - Specialized kernels for dot product and outer product
+ * - Arbitrary stride support
  ***************/
 
 #include <immintrin.h>
@@ -15,6 +22,10 @@
 #include <cstring>
 #include <algorithm>
 #include <memory>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace yt::kernel::gemm {
 
@@ -37,6 +48,24 @@ constexpr int MC = 642;
 constexpr int KC = 500;
 // NC should be divisible by both NR_ROW(16) and NR_COL(6): 4800 = 300*16 = 800*6
 constexpr int NC = 4800;
+
+// Thread configuration
+#ifndef GEMM_NTHREADS
+#define GEMM_NTHREADS 1
+#endif
+
+inline int g_num_threads = GEMM_NTHREADS;
+
+inline void set_num_threads(int n) {
+    g_num_threads = std::max(1, n);
+#ifdef _OPENMP
+    omp_set_num_threads(g_num_threads);
+#endif
+}
+
+inline int get_num_threads() {
+    return g_num_threads;
+}
 
 // ============================================================================
 // Memory Alignment
@@ -501,6 +530,149 @@ inline void kernel_6x16_generic_store(float* A, float* B, float* C,
 }
 
 // ============================================================================
+// Specialized kernels for extreme shapes
+// ============================================================================
+
+// Dot product: C[1x1] = A[1xk] @ B[kx1] - SIMD optimized
+inline float dot_product_simd(const float* A, const float* B, int k, 
+                              int64_t csa, int64_t rsb) {
+    float sum = 0.0f;
+    
+    // Fast path: both contiguous
+    if (csa == 1 && rsb == 1) {
+        __m256 acc = _mm256_setzero_ps();
+        int p = 0;
+        for (; p + 8 <= k; p += 8) {
+            __m256 a = _mm256_loadu_ps(A + p);
+            __m256 b = _mm256_loadu_ps(B + p);
+            acc = _mm256_fmadd_ps(a, b, acc);
+        }
+        // Horizontal sum
+        __m128 lo = _mm256_castps256_ps128(acc);
+        __m128 hi = _mm256_extractf128_ps(acc, 1);
+        lo = _mm_add_ps(lo, hi);
+        lo = _mm_hadd_ps(lo, lo);
+        lo = _mm_hadd_ps(lo, lo);
+        sum = _mm_cvtss_f32(lo);
+        // Tail
+        for (; p < k; ++p) sum += A[p] * B[p];
+    } else {
+        // Strided case
+        for (int p = 0; p < k; ++p) {
+            sum += A[p * csa] * B[p * rsb];
+        }
+    }
+    return sum;
+}
+
+// Outer product: C[mxn] = A[mx1] @ B[1xn] - optimized for SIMD stores
+inline void outer_product_simd(const float* A, const float* B, float* C,
+                               int m, int n, float alpha, float beta,
+                               int64_t rsa, int64_t csb, int64_t rsc, int64_t csc) {
+    // Fast path: C is row-major contiguous
+    if (csc == 1 && rsc >= n) {
+        for (int i = 0; i < m; ++i) {
+            float a_val = alpha * A[i * rsa];
+            float* c_row = C + i * rsc;
+            
+            int j = 0;
+            if (csb == 1) {
+                // B is also contiguous
+                __m256 va = _mm256_set1_ps(a_val);
+                __m256 vbeta = _mm256_set1_ps(beta);
+                
+                for (; j + 8 <= n; j += 8) {
+                    __m256 vb = _mm256_loadu_ps(B + j);
+                    __m256 vc = _mm256_loadu_ps(c_row + j);
+                    vc = _mm256_fmadd_ps(va, vb, _mm256_mul_ps(vbeta, vc));
+                    _mm256_storeu_ps(c_row + j, vc);
+                }
+            }
+            // Tail or strided B
+            for (; j < n; ++j) {
+                c_row[j] = a_val * B[j * csb] + beta * c_row[j];
+            }
+        }
+    } else {
+        // Generic strided case
+        for (int i = 0; i < m; ++i) {
+            float a_val = alpha * A[i * rsa];
+            for (int j = 0; j < n; ++j) {
+                float* c_ptr = C + i * rsc + j * csc;
+                *c_ptr = a_val * B[j * csb] + beta * (*c_ptr);
+            }
+        }
+    }
+}
+
+// Inner product-like: C[1xn] = A[1xk] @ B[kxn] - optimized
+inline void gemv_row_simd(const float* A, const float* B, float* C,
+                          int n, int k, float alpha, float beta,
+                          int64_t csa, int64_t rsb, int64_t csb, int64_t csc) {
+    // Process n columns
+    for (int j = 0; j < n; ++j) {
+        float sum = 0.0f;
+        const float* b_col = B + j * csb;
+        
+        if (csa == 1 && rsb == 1) {
+            // Both contiguous in k direction
+            __m256 acc = _mm256_setzero_ps();
+            int p = 0;
+            for (; p + 8 <= k; p += 8) {
+                __m256 va = _mm256_loadu_ps(A + p);
+                __m256 vb = _mm256_loadu_ps(b_col + p);
+                acc = _mm256_fmadd_ps(va, vb, acc);
+            }
+            // Horizontal sum
+            __m128 lo = _mm256_castps256_ps128(acc);
+            __m128 hi = _mm256_extractf128_ps(acc, 1);
+            lo = _mm_add_ps(lo, hi);
+            lo = _mm_hadd_ps(lo, lo);
+            lo = _mm_hadd_ps(lo, lo);
+            sum = _mm_cvtss_f32(lo);
+            for (; p < k; ++p) sum += A[p] * b_col[p];
+        } else {
+            for (int p = 0; p < k; ++p) {
+                sum += A[p * csa] * b_col[p * rsb];
+            }
+        }
+        C[j * csc] = alpha * sum + beta * C[j * csc];
+    }
+}
+
+// C[mx1] = A[mxk] @ B[kx1] - optimized
+inline void gemv_col_simd(const float* A, const float* B, float* C,
+                          int m, int k, float alpha, float beta,
+                          int64_t rsa, int64_t csa, int64_t rsb, int64_t rsc) {
+    for (int i = 0; i < m; ++i) {
+        float sum = 0.0f;
+        const float* a_row = A + i * rsa;
+        
+        if (csa == 1 && rsb == 1) {
+            __m256 acc = _mm256_setzero_ps();
+            int p = 0;
+            for (; p + 8 <= k; p += 8) {
+                __m256 va = _mm256_loadu_ps(a_row + p);
+                __m256 vb = _mm256_loadu_ps(B + p);
+                acc = _mm256_fmadd_ps(va, vb, acc);
+            }
+            __m128 lo = _mm256_castps256_ps128(acc);
+            __m128 hi = _mm256_extractf128_ps(acc, 1);
+            lo = _mm_add_ps(lo, hi);
+            lo = _mm_hadd_ps(lo, lo);
+            lo = _mm_hadd_ps(lo, lo);
+            sum = _mm_cvtss_f32(lo);
+            for (; p < k; ++p) sum += a_row[p] * B[p];
+        } else {
+            for (int p = 0; p < k; ++p) {
+                sum += a_row[p * csa] * B[p * rsb];
+            }
+        }
+        C[i * rsc] = alpha * sum + beta * C[i * rsc];
+    }
+}
+
+// ============================================================================
 // Column-major GEMM (uses 16x6 kernel)
 // C[m x n] = A[m x k] @ B[k x n], all column-major
 // ============================================================================
@@ -603,6 +775,70 @@ inline void sgemm_rowmajor(float* A, float* B, float* C, int m, int n, int k) {
 }
 
 // ============================================================================
+// Parallel row-major GEMM with OpenMP
+// ============================================================================
+
+#ifdef _OPENMP
+inline void sgemm_rowmajor_parallel(float* A, float* B, float* C, int m, int n, int k, int nthreads) {
+    // For parallel execution, we need shared B buffer and per-thread A buffer
+    size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
+    float* buf_b_shared = static_cast<float*>(aligned_alloc_64(b_buf_size * sizeof(float)));
+    if (!buf_b_shared) {
+        // Fallback to sequential
+        sgemm_rowmajor(A, B, C, m, n, k);
+        return;
+    }
+    
+    for (int j = 0; j < n; j += NC) {
+        int nc = std::min(NC, n - j);
+        
+        for (int p = 0; p < k; p += KC) {
+            int kc = std::min(KC, k - p);
+            bool first = (p == 0);
+            
+            // Pack B once (shared)
+            pack_b_row(B + p * n + j, buf_b_shared, kc, nc, n);
+            
+            // Parallelize over rows
+            #pragma omp parallel num_threads(nthreads)
+            {
+                // Each thread has its own A buffer
+                static thread_local AlignedBuffer buf_a_local;
+                size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
+                buf_a_local.ensure(a_buf_size);
+                
+                #pragma omp for schedule(dynamic)
+                for (int i = 0; i < m; i += MC) {
+                    int mc = std::min(MC, m - i);
+                    
+                    pack_a_row(A + i * k + p, buf_a_local.data, mc, kc, k);
+                    
+                    for (int ir = 0; ir < mc; ir += MR_ROW) {
+                        int mr = std::min(MR_ROW, mc - ir);
+                        for (int jr = 0; jr < nc; jr += NR_ROW) {
+                            int nr = std::min(NR_ROW, nc - jr);
+                            
+                            float* C_ij = C + (i + ir) * n + (j + jr);
+                            float* packed_a = buf_a_local.data + (ir / MR_ROW) * MR_ROW * kc;
+                            float* packed_b = buf_b_shared + (jr / NR_ROW) * NR_ROW * kc;
+                            
+                            if (first) {
+                                kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                            } else {
+                                kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    aligned_free_64(buf_b_shared);
+}
+#endif
+
+// ============================================================================
 // Generic GEMM with stride support
 // Automatically detects layout and chooses optimal kernel
 // ============================================================================
@@ -649,6 +885,39 @@ inline void sgemm(
         }
         return;
     }
+    
+    // =========================================================================
+    // Specialized kernels for extreme shapes
+    // =========================================================================
+    
+    // Dot product: m=1, n=1 -> scalar result
+    if (m == 1 && n == 1) {
+        float result = dot_product_simd(A, B, k, csa, rsb);
+        *C = alpha * result + beta * (*C);
+        return;
+    }
+    
+    // Outer product: k=1 -> rank-1 update
+    if (k == 1) {
+        outer_product_simd(A, B, C, m, n, alpha, beta, rsa, csb, rsc, csc);
+        return;
+    }
+    
+    // Row vector times matrix: m=1
+    if (m == 1) {
+        gemv_row_simd(A, B, C, n, k, alpha, beta, csa, rsb, csb, csc);
+        return;
+    }
+    
+    // Matrix times column vector: n=1
+    if (n == 1) {
+        gemv_col_simd(A, B, C, m, k, alpha, beta, rsa, csa, rsb, rsc);
+        return;
+    }
+    
+    // =========================================================================
+    // Standard GEMM paths
+    // =========================================================================
     
     // Detect layout: row-major has csx=1, column-major has rsx=1
     // For optimized paths, we need EXACTLY contiguous layout (stride == dimension)
@@ -745,7 +1014,30 @@ inline void matmul(const float* A, const float* B, float* C, int m, int n, int k
 
 inline void matmul(const float* A, const float* B, float* C, int m, int n, int k) {
     // Row-major: rsa=k, csa=1, rsb=n, csb=1, rsc=n, csc=1
+#ifdef _OPENMP
+    if (g_num_threads > 1) {
+        sgemm_rowmajor_parallel(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k, g_num_threads);
+    } else {
+        sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+    }
+#else
     sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+#endif
+}
+
+// Parallel matmul with explicit thread count
+inline void matmul_parallel(const float* A, const float* B, float* C, int m, int n, int k, int nthreads = 0) {
+#ifdef _OPENMP
+    if (nthreads <= 0) nthreads = g_num_threads;
+    if (nthreads > 1) {
+        sgemm_rowmajor_parallel(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k, nthreads);
+    } else {
+        sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+    }
+#else
+    (void)nthreads;
+    sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+#endif
 }
 
 // Column-major convenience function (matches original sgemm.c interface)
