@@ -12,7 +12,7 @@
  * Features:
  * - Dual micro-kernel: 16x6 (column-major) and 6x16 (row-major)
  * - Automatic layout detection and kernel selection
- * - OpenMP parallel support (define GEMM_NTHREADS or use set_num_threads())
+ * - OpenMP parallel support (use set_num_threads() to configure)
  * - Specialized kernels for dot product and outer product
  * - Arbitrary stride support
  ***************/
@@ -50,18 +50,11 @@ constexpr int KC = 500;
 // NC should be divisible by both NR_ROW(16) and NR_COL(6): 4800 = 300*16 = 800*6
 constexpr int NC = 4800;
 
-// Thread configuration
-#ifndef GEMM_NTHREADS
-#define GEMM_NTHREADS 1
-#endif
-
-inline int g_num_threads = GEMM_NTHREADS;
+// Thread configuration (use set_num_threads() to configure)
+inline int g_num_threads = 1;
 
 inline void set_num_threads(int n) {
     g_num_threads = std::max(1, n);
-#ifdef _OPENMP
-    omp_set_num_threads(g_num_threads);
-#endif
 }
 
 inline int get_num_threads() {
@@ -1038,7 +1031,7 @@ inline void ensure_parallel_buffers(size_t a_size, size_t b_size) {
 
 // Parallel pack B into panels (each panel is kc x NR_ROW)
 inline void pack_b_row_parallel(const float* B, float* packed, int kc, int nc, int ldb, int nthreads) {
-    #pragma omp parallel for schedule(static) num_threads(nthreads)
+    #pragma omp parallel for schedule(static) num_threads(nthreads) proc_bind(close)
     for (int j = 0; j < nc; j += NR_ROW) {
         int nr = std::min(NR_ROW, nc - j);
         float* dest = packed + (j / NR_ROW) * NR_ROW * kc;
@@ -1056,7 +1049,7 @@ inline void pack_b_row_parallel(const float* B, float* packed, int kc, int nc, i
 
 // Parallel pack A into panels (each panel is MR_ROW x kc)
 inline void pack_a_row_parallel(const float* A, float* packed, int mc, int kc, int lda, int nthreads) {
-    #pragma omp parallel for schedule(static) num_threads(nthreads)
+    #pragma omp parallel for schedule(static) num_threads(nthreads) proc_bind(close)
     for (int i = 0; i < mc; i += MR_ROW) {
         int mr = std::min(MR_ROW, mc - i);
         float* dest = packed + (i / MR_ROW) * MR_ROW * kc;
@@ -1101,7 +1094,7 @@ inline void sgemm_rowmajor_parallel(const float* A, const float* B, float* C, in
                 pack_a_row_parallel(A + ii * k + pp, g_packed_a, mc, kc, k, nthreads);
                 
                 // Compute micro-kernels in parallel (over ir loop for better load balancing)
-                #pragma omp parallel for schedule(static) num_threads(nthreads)
+                #pragma omp parallel for schedule(static) num_threads(nthreads) proc_bind(close)
                 for (int ir = 0; ir < mc; ir += MR_ROW) {
                     int mr = std::min(MR_ROW, mc - ir);
                     for (int jr = 0; jr < nc; jr += NR_ROW) {
