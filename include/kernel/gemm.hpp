@@ -677,7 +677,7 @@ inline void gemv_col_simd(const float* A, const float* B, float* C,
 // C[m x n] = A[m x k] @ B[k x n], all column-major
 // ============================================================================
 
-inline void sgemm_colmajor(float* A, float* B, float* C, int m, int n, int k) {
+inline void sgemm_colmajor(const float* A, const float* B, float* C, int m, int n, int k) {
     static thread_local AlignedBuffer buf_a, buf_b;
     // Allocate buffers with proper padding for alignment
     // For col-major: A panels are MR_COL x kc, B panels are kc x NR_COL
@@ -728,7 +728,7 @@ inline void sgemm_colmajor(float* A, float* B, float* C, int m, int n, int k) {
 // C[m x n] = A[m x k] @ B[k x n], all row-major
 // ============================================================================
 
-inline void sgemm_rowmajor(float* A, float* B, float* C, int m, int n, int k) {
+inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int n, int k) {
     static thread_local AlignedBuffer buf_a, buf_b;
     // Allocate buffers with proper padding for alignment
     // For row-major: A panels are MR_ROW x kc, B panels are kc x NR_ROW
@@ -779,7 +779,7 @@ inline void sgemm_rowmajor(float* A, float* B, float* C, int m, int n, int k) {
 // ============================================================================
 
 #ifdef _OPENMP
-inline void sgemm_rowmajor_parallel(float* A, float* B, float* C, int m, int n, int k, int nthreads) {
+inline void sgemm_rowmajor_parallel(const float* A, const float* B, float* C, int m, int n, int k, int nthreads) {
     // For parallel execution, we need shared B buffer and per-thread A buffer
     size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
     float* buf_b_shared = static_cast<float*>(aligned_alloc_64(b_buf_size * sizeof(float)));
@@ -1016,32 +1016,32 @@ inline void matmul(const float* A, const float* B, float* C, int m, int n, int k
     // Row-major: rsa=k, csa=1, rsb=n, csb=1, rsc=n, csc=1
 #ifdef _OPENMP
     if (g_num_threads > 1) {
-        sgemm_rowmajor_parallel(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k, g_num_threads);
+        sgemm_rowmajor_parallel(A, B, C, m, n, k, g_num_threads);
     } else {
-        sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+        sgemm_rowmajor(A, B, C, m, n, k);
     }
 #else
-    sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+    sgemm_rowmajor(A, B, C, m, n, k);
 #endif
 }
 
 // Parallel matmul with explicit thread count
-inline void matmul_parallel(const float* A, const float* B, float* C, int m, int n, int k, int nthreads = 0) {
+inline void matmul_parallel(const float* A, const float* B, float* C, int m, int n, int k, [[maybe_unused]] int nthreads = 0) {
 #ifdef _OPENMP
     if (nthreads <= 0) nthreads = g_num_threads;
     if (nthreads > 1) {
-        sgemm_rowmajor_parallel(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k, nthreads);
+        sgemm_rowmajor_parallel(A, B, C, m, n, k, nthreads);
     } else {
-        sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+        sgemm_rowmajor(A, B, C, m, n, k);
     }
 #else
-    (void)nthreads;
-    sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+    // OpenMP not available, use sequential version
+    sgemm_rowmajor(A, B, C, m, n, k);
 #endif
 }
 
 // Column-major convenience function (matches original sgemm.c interface)
-inline void matmul_colmajor(float* A, float* B, float* C, int m, int n, int k) {
+inline void matmul_colmajor(const float* A, const float* B, float* C, int m, int n, int k) {
     sgemm_colmajor(A, B, C, m, n, k);
 }
 
