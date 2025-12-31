@@ -22,6 +22,7 @@
 #include <cstring>
 #include <algorithm>
 #include <memory>
+#include <mutex>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -697,7 +698,13 @@ inline void gemv_row_simd(const float* A, const float* B, float* C,
             }
             for (; j < n; ++j) C[j] *= beta;
         } else if (beta == 0.0f) {
-            memset(C, 0, n * sizeof(float));
+            // Zero C using SIMD stores
+            __m256 vzero = _mm256_setzero_ps();
+            int j = 0;
+            for (; j + 8 <= n; j += 8) {
+                _mm256_storeu_ps(C + j, vzero);
+            }
+            for (; j < n; ++j) C[j] = 0.0f;
         }
         
         // Tiled computation
@@ -1007,13 +1014,16 @@ inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int 
 // ============================================================================
 
 #ifdef _OPENMP
+
 // Global shared buffers for parallel GEMM (allocated on first use)
 inline float* g_packed_a = nullptr;
 inline float* g_packed_b = nullptr;
 inline size_t g_packed_a_size = 0;
 inline size_t g_packed_b_size = 0;
+inline std::mutex g_buffer_mutex;
 
 inline void ensure_parallel_buffers(size_t a_size, size_t b_size) {
+    std::lock_guard<std::mutex> lock(g_buffer_mutex);
     if (g_packed_a_size < a_size) {
         if (g_packed_a) aligned_free_64(g_packed_a);
         g_packed_a = static_cast<float*>(aligned_alloc_64(a_size * sizeof(float)));
@@ -1074,65 +1084,38 @@ inline void sgemm_rowmajor_parallel(const float* A, const float* B, float* C, in
         return;
     }
     
-    omp_set_num_threads(nthreads);
-    
-    for (int j = 0; j < n; j += NC) {
-        int nc = std::min(NC, n - j);
-        int kc = std::min(KC, k);
-        bool first = true;
+    for (int jj = 0; jj < n; jj += NC) {
+        int nc = std::min(NC, n - jj);
         
-        // Pack B in parallel
-        pack_b_row_parallel(B + j, g_packed_b, kc, nc, n, nthreads);
-        
-        for (int i = 0; i < m; i += MC) {
-            int mc = std::min(MC, m - i);
+        for (int pp = 0; pp < k; pp += KC) {
+            int kc = std::min(KC, k - pp);
+            bool first = (pp == 0);
             
-            // Pack A in parallel
-            pack_a_row_parallel(A + i * k, g_packed_a, mc, kc, k, nthreads);
+            // Pack B in parallel: B starting at row pp, column jj
+            pack_b_row_parallel(B + pp * n + jj, g_packed_b, kc, nc, n, nthreads);
             
-            // Compute micro-kernels in parallel (over ir loop for better load balancing)
-            #pragma omp parallel for schedule(static) num_threads(nthreads)
-            for (int ir = 0; ir < mc; ir += MR_ROW) {
-                int mr = std::min(MR_ROW, mc - ir);
-                for (int jr = 0; jr < nc; jr += NR_ROW) {
-                    int nr = std::min(NR_ROW, nc - jr);
-                    
-                    float* C_ij = C + (i + ir) * n + (j + jr);
-                    float* packed_a = g_packed_a + (ir / MR_ROW) * MR_ROW * kc;
-                    float* packed_b = g_packed_b + (jr / NR_ROW) * NR_ROW * kc;
-                    
-                    if (first) {
-                        kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
-                    } else {
-                        kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
-                    }
-                }
-            }
-        }
-        
-        // Continue with remaining k tiles
-        for (int p = kc; p < k; p += KC) {
-            kc = std::min(KC, k - p);
-            first = false;
-            
-            pack_b_row_parallel(B + p * n + j, g_packed_b, kc, nc, n, nthreads);
-            
-            for (int i = 0; i < m; i += MC) {
-                int mc = std::min(MC, m - i);
+            for (int ii = 0; ii < m; ii += MC) {
+                int mc = std::min(MC, m - ii);
                 
-                pack_a_row_parallel(A + i * k + p, g_packed_a, mc, kc, k, nthreads);
+                // Pack A in parallel: A starting at row ii, column pp
+                pack_a_row_parallel(A + ii * k + pp, g_packed_a, mc, kc, k, nthreads);
                 
+                // Compute micro-kernels in parallel (over ir loop for better load balancing)
                 #pragma omp parallel for schedule(static) num_threads(nthreads)
                 for (int ir = 0; ir < mc; ir += MR_ROW) {
                     int mr = std::min(MR_ROW, mc - ir);
                     for (int jr = 0; jr < nc; jr += NR_ROW) {
                         int nr = std::min(NR_ROW, nc - jr);
                         
-                        float* C_ij = C + (i + ir) * n + (j + jr);
+                        float* C_ij = C + (ii + ir) * n + (jj + jr);
                         float* packed_a = g_packed_a + (ir / MR_ROW) * MR_ROW * kc;
                         float* packed_b = g_packed_b + (jr / NR_ROW) * NR_ROW * kc;
                         
-                        kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                        if (first) {
+                            kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                        } else {
+                            kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                        }
                     }
                 }
             }
