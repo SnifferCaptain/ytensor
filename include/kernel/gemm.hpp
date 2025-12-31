@@ -651,20 +651,24 @@ inline void sgemm(
     }
     
     // Detect layout: row-major has csx=1, column-major has rsx=1
-    bool a_rowmajor = (csa == 1 && rsa >= k);
-    bool a_colmajor = (rsa == 1 && csa >= m);
-    bool b_rowmajor = (csb == 1 && rsb >= n);
-    bool b_colmajor = (rsb == 1 && csb >= k);
-    bool c_rowmajor = (csc == 1 && rsc >= n);
-    bool c_colmajor = (rsc == 1 && csc >= m);
+    // For optimized paths, we need EXACTLY contiguous layout (stride == dimension)
+    bool a_rowmajor_exact = (csa == 1 && rsa == k);  // A is m x k, row-major, no padding
+    bool a_colmajor_exact = (rsa == 1 && csa == m);  // A is m x k, column-major, no padding
+    bool b_rowmajor_exact = (csb == 1 && rsb == n);  // B is k x n, row-major, no padding
+    bool b_colmajor_exact = (rsb == 1 && csb == k);  // B is k x n, column-major, no padding
+    bool c_rowmajor_exact = (csc == 1 && rsc == n);  // C is m x n, row-major, no padding
+    bool c_colmajor_exact = (rsc == 1 && csc == m);  // C is m x n, column-major, no padding
     
-    // Best case: all matrices have same layout, use optimized path
-    if (a_colmajor && b_colmajor && c_colmajor && alpha == 1.0f && beta == 0.0f) {
+    // For generic path, check if C is at least row-major (even with padding)
+    bool c_rowmajor = (csc == 1 && rsc >= n);
+    
+    // Best case: all matrices have EXACT layout, use optimized path
+    if (a_colmajor_exact && b_colmajor_exact && c_colmajor_exact && alpha == 1.0f && beta == 0.0f) {
         sgemm_colmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
         return;
     }
     
-    if (a_rowmajor && b_rowmajor && c_rowmajor && alpha == 1.0f && beta == 0.0f) {
+    if (a_rowmajor_exact && b_rowmajor_exact && c_rowmajor_exact && alpha == 1.0f && beta == 0.0f) {
         sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
         return;
     }
