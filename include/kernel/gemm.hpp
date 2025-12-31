@@ -31,9 +31,12 @@ constexpr int MR_COL = 16;
 constexpr int NR_COL = 6;
 
 // Block sizes (must be multiples of micro-kernel sizes for proper alignment)
-constexpr int MC = 642;  // Multiple of MR_ROW=6 and MR_COL=16: lcm(6,16)=48, use 642=107*6
+// MC should be divisible by both MR_ROW(6) and MR_COL(16) ideally, or at least reasonable
+// 642 = 107 * 6 = 40.125 * 16, chosen to balance cache usage and alignment
+constexpr int MC = 642;
 constexpr int KC = 500;
-constexpr int NC = 4800; // Multiple of NR_ROW=16 and NR_COL=6: lcm(16,6)=48, use 4800=300*16=800*6
+// NC should be divisible by both NR_ROW(16) and NR_COL(6): 4800 = 300*16 = 800*6
+constexpr int NC = 4800;
 
 // ============================================================================
 // Memory Alignment
