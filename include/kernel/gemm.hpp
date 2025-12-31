@@ -416,6 +416,22 @@ inline void pack_a_row(const float* A, float* packed, int mc, int kc, int lda) {
     }
 }
 
+// Pack A with generic strides (6xkc panels for row-major kernel)
+inline void pack_a_generic(const float* A, float* packed, int mc, int kc, int64_t rsa, int64_t csa) {
+    for (int i = 0; i < mc; i += MR_ROW) {
+        int mr = std::min(MR_ROW, mc - i);
+        for (int p = 0; p < kc; ++p) {
+            for (int ii = 0; ii < mr; ++ii) {
+                packed[ii] = A[(i + ii) * rsa + p * csa];
+            }
+            for (int ii = mr; ii < MR_ROW; ++ii) {
+                packed[ii] = 0.0f;
+            }
+            packed += MR_ROW;
+        }
+    }
+}
+
 // Pack B for row-major kernel (kcx16 panels)
 inline void pack_b_row(const float* B, float* packed, int kc, int nc, int ldb) {
     for (int j = 0; j < nc; j += NR_ROW) {
@@ -428,6 +444,58 @@ inline void pack_b_row(const float* B, float* packed, int kc, int nc, int ldb) {
                 packed[jj] = 0.0f;
             }
             packed += NR_ROW;
+        }
+    }
+}
+
+// Pack B with generic strides (kcx16 panels for row-major kernel)
+inline void pack_b_generic(const float* B, float* packed, int kc, int nc, int64_t rsb, int64_t csb) {
+    for (int j = 0; j < nc; j += NR_ROW) {
+        int nr = std::min(NR_ROW, nc - j);
+        for (int p = 0; p < kc; ++p) {
+            for (int jj = 0; jj < nr; ++jj) {
+                packed[jj] = B[p * rsb + (j + jj) * csb];
+            }
+            for (int jj = nr; jj < NR_ROW; ++jj) {
+                packed[jj] = 0.0f;
+            }
+            packed += NR_ROW;
+        }
+    }
+}
+
+// 6x16 kernel that stores to generic stride C (slower but flexible)
+inline void kernel_6x16_generic_store(float* A, float* B, float* C, 
+                                      int mr, int nr, int kc, 
+                                      int64_t rsc, int64_t csc,
+                                      float alpha, float beta, bool first) {
+    // Compute in registers
+    float acc[MR_ROW][NR_ROW] = {};
+    
+    // Use SIMD for compute (same as FMA loop but store to local array)
+    __m256 c00={}, c01={}, c10={}, c11={}, c20={}, c21={};
+    __m256 c30={}, c31={}, c40={}, c41={}, c50={}, c51={};
+    
+    fma_loop_row_6x16(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
+    
+    // Extract to local array
+    alignas(32) float tmp[MR_ROW][NR_ROW];
+    _mm256_storeu_ps(&tmp[0][0], c00); _mm256_storeu_ps(&tmp[0][8], c01);
+    _mm256_storeu_ps(&tmp[1][0], c10); _mm256_storeu_ps(&tmp[1][8], c11);
+    _mm256_storeu_ps(&tmp[2][0], c20); _mm256_storeu_ps(&tmp[2][8], c21);
+    _mm256_storeu_ps(&tmp[3][0], c30); _mm256_storeu_ps(&tmp[3][8], c31);
+    _mm256_storeu_ps(&tmp[4][0], c40); _mm256_storeu_ps(&tmp[4][8], c41);
+    _mm256_storeu_ps(&tmp[5][0], c50); _mm256_storeu_ps(&tmp[5][8], c51);
+    
+    // Store with generic strides
+    for (int i = 0; i < mr; ++i) {
+        for (int j = 0; j < nr; ++j) {
+            float* c_ptr = C + i * rsc + j * csc;
+            if (first) {
+                *c_ptr = alpha * tmp[i][j] + beta * (*c_ptr);
+            } else {
+                *c_ptr += alpha * tmp[i][j];
+            }
         }
     }
 }
@@ -601,14 +669,14 @@ inline void sgemm(
         return;
     }
     
-    // Generic fallback with stride support
+    // Generic fallback with stride support - uses SIMD micro-kernel
     static thread_local AlignedBuffer buf_a, buf_b;
     size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
     size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
     buf_a.ensure(a_buf_size);
     buf_b.ensure(b_buf_size);
     
-    // Use row-major kernel for generic case
+    // Use row-major 6x16 kernel for generic case
     for (int jj = 0; jj < n; jj += NC) {
         int nc = std::min(NC, n - jj);
         
@@ -617,70 +685,40 @@ inline void sgemm(
             bool first = (pp == 0);
             
             // Pack B with generic strides
-            float* bp = buf_b.data;
-            for (int j = 0; j < nc; j += NR_ROW) {
-                int nr = std::min(NR_ROW, nc - j);
-                for (int p = 0; p < kc; ++p) {
-                    for (int jjj = 0; jjj < nr; ++jjj) {
-                        bp[jjj] = B[(pp + p) * rsb + (jj + j + jjj) * csb];
-                    }
-                    for (int jjj = nr; jjj < NR_ROW; ++jjj) {
-                        bp[jjj] = 0.0f;
-                    }
-                    bp += NR_ROW;
-                }
-            }
+            pack_b_generic(B + pp * rsb + jj * csb, buf_b.data, kc, nc, rsb, csb);
             
             for (int ii = 0; ii < m; ii += MC) {
                 int mc = std::min(MC, m - ii);
                 
                 // Pack A with generic strides
-                float* ap = buf_a.data;
-                for (int i = 0; i < mc; i += MR_ROW) {
-                    int mr = std::min(MR_ROW, mc - i);
-                    for (int p = 0; p < kc; ++p) {
-                        for (int iii = 0; iii < mr; ++iii) {
-                            ap[iii] = A[(ii + i + iii) * rsa + (pp + p) * csa];
-                        }
-                        for (int iii = mr; iii < MR_ROW; ++iii) {
-                            ap[iii] = 0.0f;
-                        }
-                        ap += MR_ROW;
-                    }
-                }
+                pack_a_generic(A + ii * rsa + pp * csa, buf_a.data, mc, kc, rsa, csa);
                 
-                // Compute
+                // Compute using SIMD micro-kernel
                 for (int ir = 0; ir < mc; ir += MR_ROW) {
                     int mr = std::min(MR_ROW, mc - ir);
                     for (int jr = 0; jr < nc; jr += NR_ROW) {
                         int nr = std::min(NR_ROW, nc - jr);
                         
-                        // Compute micro-kernel result
-                        float acc[MR_ROW][NR_ROW] = {};
-                        const float* ap2 = buf_a.data + ir * kc;
-                        const float* bp2 = buf_b.data + jr * kc;
+                        float* packed_a = buf_a.data + (ir / MR_ROW) * MR_ROW * kc;
+                        float* packed_b = buf_b.data + (jr / NR_ROW) * NR_ROW * kc;
+                        float* C_ij = C + (ii + ir) * rsc + (jj + jr) * csc;
                         
-                        for (int p = 0; p < kc; ++p) {
-                            for (int i = 0; i < mr; ++i) {
-                                float a_val = ap2[i];
-                                for (int j = 0; j < nr; ++j) {
-                                    acc[i][j] += a_val * bp2[j];
-                                }
+                        // Use optimized SIMD kernel when C is row-major contiguous
+                        if (c_rowmajor && alpha == 1.0f) {
+                            if (first && beta == 0.0f) {
+                                kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, rsc);
+                            } else if (first) {
+                                // Need to scale existing C by beta first
+                                for (int i = 0; i < mr; ++i)
+                                    for (int j = 0; j < nr; ++j)
+                                        C_ij[i * rsc + j] *= beta;
+                                kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, rsc);
+                            } else {
+                                kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, rsc);
                             }
-                            ap2 += MR_ROW;
-                            bp2 += NR_ROW;
-                        }
-                        
-                        // Store with alpha/beta scaling
-                        for (int i = 0; i < mr; ++i) {
-                            for (int j = 0; j < nr; ++j) {
-                                float* c_ptr = C + (ii + ir + i) * rsc + (jj + jr + j) * csc;
-                                if (first) {
-                                    *c_ptr = alpha * acc[i][j] + beta * (*c_ptr);
-                                } else {
-                                    *c_ptr += alpha * acc[i][j];
-                                }
-                            }
+                        } else {
+                            // Generic store for non-contiguous C or when alpha != 1
+                            kernel_6x16_generic_store(packed_a, packed_b, C_ij, mr, nr, kc, rsc, csc, alpha, beta, first);
                         }
                     }
                 }
