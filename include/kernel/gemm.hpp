@@ -1,12 +1,13 @@
 #pragma once
 /***************
  * @file gemm.hpp
- * @brief Row-major GEMM implementation (based on https://salykova.github.io/matmul-cpu)
+ * @brief High-performance GEMM with automatic layout detection
  * @author SnifferCaptain
  * @date 2025-12-31
  * 
  * BLAS-style GEMM: C = alpha * A @ B + beta * C (inplace)
- * Supports arbitrary stride inputs with automatic kernel selection
+ * Automatically detects row/column major and selects optimal kernel
+ * Based on: https://salykova.github.io/matmul-cpu
  ***************/
 
 #include <immintrin.h>
@@ -21,11 +22,18 @@ namespace yt::kernel::gemm {
 // Configuration
 // ============================================================================
 
-constexpr int MR = 6;    // Micro-kernel row count
-constexpr int NR = 16;   // Micro-kernel column count
-constexpr int MC = 72;   // A block row count
-constexpr int KC = 256;  // K dimension block size
-constexpr int NC = 4080; // B block column count
+// Row-major micro-kernel: 6 rows x 16 columns
+constexpr int MR_ROW = 6;
+constexpr int NR_ROW = 16;
+
+// Column-major micro-kernel: 16 rows x 6 columns (original sgemm.c)
+constexpr int MR_COL = 16;
+constexpr int NR_COL = 6;
+
+// Block sizes (must be multiples of micro-kernel sizes for proper alignment)
+constexpr int MC = 642;  // Multiple of MR_ROW=6 and MR_COL=16: lcm(6,16)=48, use 642=107*6
+constexpr int KC = 500;
+constexpr int NC = 4800; // Multiple of NR_ROW=16 and NR_COL=6: lcm(16,6)=48, use 4800=300*16=800*6
 
 // ============================================================================
 // Memory Alignment
@@ -52,6 +60,10 @@ inline void aligned_free_64(void* ptr) {
 struct AlignedBuffer {
     float* data = nullptr;
     size_t capacity = 0;
+    
+    AlignedBuffer() = default;
+    AlignedBuffer(const AlignedBuffer&) = delete;
+    AlignedBuffer& operator=(const AlignedBuffer&) = delete;
     
     void ensure(size_t n) {
         if (n > capacity) {
@@ -81,89 +93,194 @@ inline void build_masks(__m256i* mask0, __m256i* mask1, int nr) {
 }
 
 // ============================================================================
-// Packing Functions
+// Column-major kernel (16x6) - from original sgemm.c
+// This is the highly optimized kernel for column-major layout
 // ============================================================================
 
-// Pack A: row-major optimized
-inline void pack_a_row_major(const float* A, float* packed, int mc, int kc, int64_t lda) {
-    for (int i = 0; i < mc; i += MR) {
-        int mr = std::min(MR, mc - i);
-        for (int p = 0; p < kc; ++p) {
-            for (int ii = 0; ii < mr; ++ii) {
-                packed[ii] = A[(i + ii) * lda + p];
-            }
-            for (int ii = mr; ii < MR; ++ii) {
-                packed[ii] = 0.0f;
-            }
-            packed += MR;
-        }
+// FMA loops for different nr values (column-major)
+inline void fma_loop_col_1(float* A, float* B, __m256* c00, __m256* c01, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);
+        *c00 = _mm256_fmadd_ps(a0, b, *c00);
+        *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        A += 16; B += 6;
     }
 }
 
-// Pack A: generic stride
-inline void pack_a_generic(const float* A, float* packed, int mc, int kc, int64_t rs, int64_t cs) {
-    for (int i = 0; i < mc; i += MR) {
-        int mr = std::min(MR, mc - i);
-        for (int p = 0; p < kc; ++p) {
-            for (int ii = 0; ii < mr; ++ii) {
-                packed[ii] = A[(i + ii) * rs + p * cs];
-            }
-            for (int ii = mr; ii < MR; ++ii) {
-                packed[ii] = 0.0f;
-            }
-            packed += MR;
-        }
+inline void fma_loop_col_2(float* A, float* B, __m256* c00, __m256* c01, __m256* c10, __m256* c11, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);
+        *c00 = _mm256_fmadd_ps(a0, b, *c00);
+        *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        b = _mm256_broadcast_ss(B + 1);
+        *c10 = _mm256_fmadd_ps(a0, b, *c10);
+        *c11 = _mm256_fmadd_ps(a1, b, *c11);
+        A += 16; B += 6;
     }
 }
 
-// Pack B: row-major optimized
-inline void pack_b_row_major(const float* B, float* packed, int kc, int nc, int64_t ldb) {
-    for (int j = 0; j < nc; j += NR) {
-        int nr = std::min(NR, nc - j);
-        for (int p = 0; p < kc; ++p) {
-            for (int jj = 0; jj < nr; ++jj) {
-                packed[jj] = B[p * ldb + j + jj];
-            }
-            for (int jj = nr; jj < NR; ++jj) {
-                packed[jj] = 0.0f;
-            }
-            packed += NR;
-        }
+inline void fma_loop_col_3(float* A, float* B, __m256* c00, __m256* c01, __m256* c10, __m256* c11,
+                           __m256* c20, __m256* c21, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);     *c00 = _mm256_fmadd_ps(a0, b, *c00); *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        b = _mm256_broadcast_ss(B + 1); *c10 = _mm256_fmadd_ps(a0, b, *c10); *c11 = _mm256_fmadd_ps(a1, b, *c11);
+        b = _mm256_broadcast_ss(B + 2); *c20 = _mm256_fmadd_ps(a0, b, *c20); *c21 = _mm256_fmadd_ps(a1, b, *c21);
+        A += 16; B += 6;
     }
 }
 
-// Pack B: generic stride
-inline void pack_b_generic(const float* B, float* packed, int kc, int nc, int64_t rs, int64_t cs) {
-    for (int j = 0; j < nc; j += NR) {
-        int nr = std::min(NR, nc - j);
-        for (int p = 0; p < kc; ++p) {
-            for (int jj = 0; jj < nr; ++jj) {
-                packed[jj] = B[p * rs + (j + jj) * cs];
-            }
-            for (int jj = nr; jj < NR; ++jj) {
-                packed[jj] = 0.0f;
-            }
-            packed += NR;
-        }
+inline void fma_loop_col_4(float* A, float* B, __m256* c00, __m256* c01, __m256* c10, __m256* c11,
+                           __m256* c20, __m256* c21, __m256* c30, __m256* c31, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);     *c00 = _mm256_fmadd_ps(a0, b, *c00); *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        b = _mm256_broadcast_ss(B + 1); *c10 = _mm256_fmadd_ps(a0, b, *c10); *c11 = _mm256_fmadd_ps(a1, b, *c11);
+        b = _mm256_broadcast_ss(B + 2); *c20 = _mm256_fmadd_ps(a0, b, *c20); *c21 = _mm256_fmadd_ps(a1, b, *c21);
+        b = _mm256_broadcast_ss(B + 3); *c30 = _mm256_fmadd_ps(a0, b, *c30); *c31 = _mm256_fmadd_ps(a1, b, *c31);
+        A += 16; B += 6;
+    }
+}
+
+inline void fma_loop_col_5(float* A, float* B, __m256* c00, __m256* c01, __m256* c10, __m256* c11,
+                           __m256* c20, __m256* c21, __m256* c30, __m256* c31,
+                           __m256* c40, __m256* c41, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);     *c00 = _mm256_fmadd_ps(a0, b, *c00); *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        b = _mm256_broadcast_ss(B + 1); *c10 = _mm256_fmadd_ps(a0, b, *c10); *c11 = _mm256_fmadd_ps(a1, b, *c11);
+        b = _mm256_broadcast_ss(B + 2); *c20 = _mm256_fmadd_ps(a0, b, *c20); *c21 = _mm256_fmadd_ps(a1, b, *c21);
+        b = _mm256_broadcast_ss(B + 3); *c30 = _mm256_fmadd_ps(a0, b, *c30); *c31 = _mm256_fmadd_ps(a1, b, *c31);
+        b = _mm256_broadcast_ss(B + 4); *c40 = _mm256_fmadd_ps(a0, b, *c40); *c41 = _mm256_fmadd_ps(a1, b, *c41);
+        A += 16; B += 6;
+    }
+}
+
+inline void fma_loop_col_6(float* A, float* B, __m256* c00, __m256* c01, __m256* c10, __m256* c11,
+                           __m256* c20, __m256* c21, __m256* c30, __m256* c31,
+                           __m256* c40, __m256* c41, __m256* c50, __m256* c51, int kc) {
+    __m256 a0, a1, b;
+    for (int p = 0; p < kc; ++p) {
+        a0 = _mm256_loadu_ps(A);
+        a1 = _mm256_loadu_ps(A + 8);
+        b = _mm256_broadcast_ss(B);     *c00 = _mm256_fmadd_ps(a0, b, *c00); *c01 = _mm256_fmadd_ps(a1, b, *c01);
+        b = _mm256_broadcast_ss(B + 1); *c10 = _mm256_fmadd_ps(a0, b, *c10); *c11 = _mm256_fmadd_ps(a1, b, *c11);
+        b = _mm256_broadcast_ss(B + 2); *c20 = _mm256_fmadd_ps(a0, b, *c20); *c21 = _mm256_fmadd_ps(a1, b, *c21);
+        b = _mm256_broadcast_ss(B + 3); *c30 = _mm256_fmadd_ps(a0, b, *c30); *c31 = _mm256_fmadd_ps(a1, b, *c31);
+        b = _mm256_broadcast_ss(B + 4); *c40 = _mm256_fmadd_ps(a0, b, *c40); *c41 = _mm256_fmadd_ps(a1, b, *c41);
+        b = _mm256_broadcast_ss(B + 5); *c50 = _mm256_fmadd_ps(a0, b, *c50); *c51 = _mm256_fmadd_ps(a1, b, *c51);
+        A += 16; B += 6;
+    }
+}
+
+// Column-major 16x6 kernel with zero init
+inline void kernel_16x6_col_zero(float* A, float* B, float* C, int mr, int nr, int kc, int ldc) {
+    __m256 c00={}, c01={}, c10={}, c11={}, c20={}, c21={};
+    __m256 c30={}, c31={}, c40={}, c41={}, c50={}, c51={};
+    __m256i mask0, mask1;
+    
+    switch (nr) {
+        case 1: fma_loop_col_1(A, B, &c00, &c01, kc); break;
+        case 2: fma_loop_col_2(A, B, &c00, &c01, &c10, &c11, kc); break;
+        case 3: fma_loop_col_3(A, B, &c00, &c01, &c10, &c11, &c20, &c21, kc); break;
+        case 4: fma_loop_col_4(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, kc); break;
+        case 5: fma_loop_col_5(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, &c40, &c41, kc); break;
+        case 6: fma_loop_col_6(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, &c40, &c41, &c50, &c51, kc); break;
+    }
+    
+    // Store results (column-major: C has ldc rows per column)
+    if (mr == 16) {
+        if (nr >= 1) { _mm256_storeu_ps(C, c00); _mm256_storeu_ps(C+8, c01); }
+        if (nr >= 2) { _mm256_storeu_ps(C+ldc, c10); _mm256_storeu_ps(C+ldc+8, c11); }
+        if (nr >= 3) { _mm256_storeu_ps(C+2*ldc, c20); _mm256_storeu_ps(C+2*ldc+8, c21); }
+        if (nr >= 4) { _mm256_storeu_ps(C+3*ldc, c30); _mm256_storeu_ps(C+3*ldc+8, c31); }
+        if (nr >= 5) { _mm256_storeu_ps(C+4*ldc, c40); _mm256_storeu_ps(C+4*ldc+8, c41); }
+        if (nr >= 6) { _mm256_storeu_ps(C+5*ldc, c50); _mm256_storeu_ps(C+5*ldc+8, c51); }
+    } else {
+        build_masks(&mask0, &mask1, mr);
+        if (nr >= 1) { _mm256_maskstore_ps(C, mask0, c00); _mm256_maskstore_ps(C+8, mask1, c01); }
+        if (nr >= 2) { _mm256_maskstore_ps(C+ldc, mask0, c10); _mm256_maskstore_ps(C+ldc+8, mask1, c11); }
+        if (nr >= 3) { _mm256_maskstore_ps(C+2*ldc, mask0, c20); _mm256_maskstore_ps(C+2*ldc+8, mask1, c21); }
+        if (nr >= 4) { _mm256_maskstore_ps(C+3*ldc, mask0, c30); _mm256_maskstore_ps(C+3*ldc+8, mask1, c31); }
+        if (nr >= 5) { _mm256_maskstore_ps(C+4*ldc, mask0, c40); _mm256_maskstore_ps(C+4*ldc+8, mask1, c41); }
+        if (nr >= 6) { _mm256_maskstore_ps(C+5*ldc, mask0, c50); _mm256_maskstore_ps(C+5*ldc+8, mask1, c51); }
+    }
+}
+
+// Column-major 16x6 kernel with load accum
+inline void kernel_16x6_col_load(float* A, float* B, float* C, int mr, int nr, int kc, int ldc) {
+    __m256 c00={}, c01={}, c10={}, c11={}, c20={}, c21={};
+    __m256 c30={}, c31={}, c40={}, c41={}, c50={}, c51={};
+    __m256i mask0, mask1;
+    
+    // Load existing C values
+    if (mr == 16) {
+        if (nr >= 1) { c00 = _mm256_loadu_ps(C); c01 = _mm256_loadu_ps(C+8); }
+        if (nr >= 2) { c10 = _mm256_loadu_ps(C+ldc); c11 = _mm256_loadu_ps(C+ldc+8); }
+        if (nr >= 3) { c20 = _mm256_loadu_ps(C+2*ldc); c21 = _mm256_loadu_ps(C+2*ldc+8); }
+        if (nr >= 4) { c30 = _mm256_loadu_ps(C+3*ldc); c31 = _mm256_loadu_ps(C+3*ldc+8); }
+        if (nr >= 5) { c40 = _mm256_loadu_ps(C+4*ldc); c41 = _mm256_loadu_ps(C+4*ldc+8); }
+        if (nr >= 6) { c50 = _mm256_loadu_ps(C+5*ldc); c51 = _mm256_loadu_ps(C+5*ldc+8); }
+    } else {
+        build_masks(&mask0, &mask1, mr);
+        if (nr >= 1) { c00 = _mm256_maskload_ps(C, mask0); c01 = _mm256_maskload_ps(C+8, mask1); }
+        if (nr >= 2) { c10 = _mm256_maskload_ps(C+ldc, mask0); c11 = _mm256_maskload_ps(C+ldc+8, mask1); }
+        if (nr >= 3) { c20 = _mm256_maskload_ps(C+2*ldc, mask0); c21 = _mm256_maskload_ps(C+2*ldc+8, mask1); }
+        if (nr >= 4) { c30 = _mm256_maskload_ps(C+3*ldc, mask0); c31 = _mm256_maskload_ps(C+3*ldc+8, mask1); }
+        if (nr >= 5) { c40 = _mm256_maskload_ps(C+4*ldc, mask0); c41 = _mm256_maskload_ps(C+4*ldc+8, mask1); }
+        if (nr >= 6) { c50 = _mm256_maskload_ps(C+5*ldc, mask0); c51 = _mm256_maskload_ps(C+5*ldc+8, mask1); }
+    }
+    
+    switch (nr) {
+        case 1: fma_loop_col_1(A, B, &c00, &c01, kc); break;
+        case 2: fma_loop_col_2(A, B, &c00, &c01, &c10, &c11, kc); break;
+        case 3: fma_loop_col_3(A, B, &c00, &c01, &c10, &c11, &c20, &c21, kc); break;
+        case 4: fma_loop_col_4(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, kc); break;
+        case 5: fma_loop_col_5(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, &c40, &c41, kc); break;
+        case 6: fma_loop_col_6(A, B, &c00, &c01, &c10, &c11, &c20, &c21, &c30, &c31, &c40, &c41, &c50, &c51, kc); break;
+    }
+    
+    // Store results
+    if (mr == 16) {
+        if (nr >= 1) { _mm256_storeu_ps(C, c00); _mm256_storeu_ps(C+8, c01); }
+        if (nr >= 2) { _mm256_storeu_ps(C+ldc, c10); _mm256_storeu_ps(C+ldc+8, c11); }
+        if (nr >= 3) { _mm256_storeu_ps(C+2*ldc, c20); _mm256_storeu_ps(C+2*ldc+8, c21); }
+        if (nr >= 4) { _mm256_storeu_ps(C+3*ldc, c30); _mm256_storeu_ps(C+3*ldc+8, c31); }
+        if (nr >= 5) { _mm256_storeu_ps(C+4*ldc, c40); _mm256_storeu_ps(C+4*ldc+8, c41); }
+        if (nr >= 6) { _mm256_storeu_ps(C+5*ldc, c50); _mm256_storeu_ps(C+5*ldc+8, c51); }
+    } else {
+        if (nr >= 1) { _mm256_maskstore_ps(C, mask0, c00); _mm256_maskstore_ps(C+8, mask1, c01); }
+        if (nr >= 2) { _mm256_maskstore_ps(C+ldc, mask0, c10); _mm256_maskstore_ps(C+ldc+8, mask1, c11); }
+        if (nr >= 3) { _mm256_maskstore_ps(C+2*ldc, mask0, c20); _mm256_maskstore_ps(C+2*ldc+8, mask1, c21); }
+        if (nr >= 4) { _mm256_maskstore_ps(C+3*ldc, mask0, c30); _mm256_maskstore_ps(C+3*ldc+8, mask1, c31); }
+        if (nr >= 5) { _mm256_maskstore_ps(C+4*ldc, mask0, c40); _mm256_maskstore_ps(C+4*ldc+8, mask1, c41); }
+        if (nr >= 6) { _mm256_maskstore_ps(C+5*ldc, mask0, c50); _mm256_maskstore_ps(C+5*ldc+8, mask1, c51); }
     }
 }
 
 // ============================================================================
-// FMA Loop Functions (optimized for different nr values)
+// Row-major kernel (6x16) - transpose of column-major
 // ============================================================================
 
-inline void fma_loop_6cols(
-    const float* __restrict__ A,
-    const float* __restrict__ B,
-    __m256& c00, __m256& c01, __m256& c10, __m256& c11,
-    __m256& c20, __m256& c21, __m256& c30, __m256& c31,
-    __m256& c40, __m256& c41, __m256& c50, __m256& c51,
-    int kc
-) {
+inline void fma_loop_row_6x16(const float* A, const float* B,
+                              __m256& c00, __m256& c01, __m256& c10, __m256& c11,
+                              __m256& c20, __m256& c21, __m256& c30, __m256& c31,
+                              __m256& c40, __m256& c41, __m256& c50, __m256& c51, int kc) {
     for (int p = 0; p < kc; ++p) {
         __m256 b0 = _mm256_loadu_ps(B);
         __m256 b1 = _mm256_loadu_ps(B + 8);
-        
         __m256 a;
         a = _mm256_broadcast_ss(&A[0]); c00 = _mm256_fmadd_ps(a, b0, c00); c01 = _mm256_fmadd_ps(a, b1, c01);
         a = _mm256_broadcast_ss(&A[1]); c10 = _mm256_fmadd_ps(a, b0, c10); c11 = _mm256_fmadd_ps(a, b1, c11);
@@ -171,149 +288,268 @@ inline void fma_loop_6cols(
         a = _mm256_broadcast_ss(&A[3]); c30 = _mm256_fmadd_ps(a, b0, c30); c31 = _mm256_fmadd_ps(a, b1, c31);
         a = _mm256_broadcast_ss(&A[4]); c40 = _mm256_fmadd_ps(a, b0, c40); c41 = _mm256_fmadd_ps(a, b1, c41);
         a = _mm256_broadcast_ss(&A[5]); c50 = _mm256_fmadd_ps(a, b0, c50); c51 = _mm256_fmadd_ps(a, b1, c51);
-        
-        A += MR; B += NR;
+        A += 6; B += 16;
     }
 }
 
-// ============================================================================
-// Store Functions
-// ============================================================================
-
-inline void store_row(float* row, __m256 acc0, __m256 acc1, __m256 av, __m256 bv, bool first, float beta) {
-    if (first && beta == 0.0f) {
-        _mm256_storeu_ps(row, _mm256_mul_ps(acc0, av));
-        _mm256_storeu_ps(row + 8, _mm256_mul_ps(acc1, av));
-    } else if (first) {
-        _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_mul_ps(_mm256_loadu_ps(row), bv)));
-        _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_mul_ps(_mm256_loadu_ps(row + 8), bv)));
-    } else {
-        _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_loadu_ps(row)));
-        _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_loadu_ps(row + 8)));
-    }
-}
-
-inline void maskstore_row(float* row, __m256 acc0, __m256 acc1, __m256 av, __m256 bv, 
-                          __m256i mask0, __m256i mask1, bool first, float beta) {
-    if (first && beta == 0.0f) {
-        _mm256_maskstore_ps(row, mask0, _mm256_mul_ps(acc0, av));
-        _mm256_maskstore_ps(row + 8, mask1, _mm256_mul_ps(acc1, av));
-    } else if (first) {
-        __m256 old0 = _mm256_maskload_ps(row, mask0);
-        __m256 old1 = _mm256_maskload_ps(row + 8, mask1);
-        _mm256_maskstore_ps(row, mask0, _mm256_fmadd_ps(acc0, av, _mm256_mul_ps(old0, bv)));
-        _mm256_maskstore_ps(row + 8, mask1, _mm256_fmadd_ps(acc1, av, _mm256_mul_ps(old1, bv)));
-    } else {
-        __m256 old0 = _mm256_maskload_ps(row, mask0);
-        __m256 old1 = _mm256_maskload_ps(row + 8, mask1);
-        _mm256_maskstore_ps(row, mask0, _mm256_fmadd_ps(acc0, av, old0));
-        _mm256_maskstore_ps(row + 8, mask1, _mm256_fmadd_ps(acc1, av, old1));
-    }
-}
-
-// ============================================================================
-// Micro-kernels
-// ============================================================================
-
-// Full 6x16 micro-kernel for row-contiguous C
-inline void kernel_6x16(
-    const float* __restrict__ A,
-    const float* __restrict__ B,
-    float* __restrict__ C,
-    int kc, int64_t ldc,
-    float alpha, float beta, bool first
-) {
-    __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
-    __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
-    __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
-    __m256 c30 = _mm256_setzero_ps(), c31 = _mm256_setzero_ps();
-    __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
-    __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
-    
-    fma_loop_6cols(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
-    
-    __m256 av = _mm256_broadcast_ss(&alpha);
-    __m256 bv = _mm256_broadcast_ss(&beta);
-    
-    store_row(C + 0 * ldc, c00, c01, av, bv, first, beta);
-    store_row(C + 1 * ldc, c10, c11, av, bv, first, beta);
-    store_row(C + 2 * ldc, c20, c21, av, bv, first, beta);
-    store_row(C + 3 * ldc, c30, c31, av, bv, first, beta);
-    store_row(C + 4 * ldc, c40, c41, av, bv, first, beta);
-    store_row(C + 5 * ldc, c50, c51, av, bv, first, beta);
-}
-
-// Kernel with masked store for nr < NR boundary
-inline void kernel_6xN_masked(
-    const float* __restrict__ A,
-    const float* __restrict__ B,
-    float* __restrict__ C,
-    int mr, int nr, int kc, int64_t ldc,
-    float alpha, float beta, bool first
-) {
-    __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
-    __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
-    __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
-    __m256 c30 = _mm256_setzero_ps(), c31 = _mm256_setzero_ps();
-    __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
-    __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
-    
-    fma_loop_6cols(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
-    
-    __m256 av = _mm256_broadcast_ss(&alpha);
-    __m256 bv = _mm256_broadcast_ss(&beta);
+inline void kernel_6x16_row_zero(float* A, float* B, float* C, int mr, int nr, int kc, int ldc) {
+    __m256 c00={}, c01={}, c10={}, c11={}, c20={}, c21={};
+    __m256 c30={}, c31={}, c40={}, c41={}, c50={}, c51={};
     __m256i mask0, mask1;
-    build_masks(&mask0, &mask1, nr);
     
-    __m256 accs[6][2] = {{c00, c01}, {c10, c11}, {c20, c21}, {c30, c31}, {c40, c41}, {c50, c51}};
-    for (int i = 0; i < mr; ++i) {
-        maskstore_row(C + i * ldc, accs[i][0], accs[i][1], av, bv, mask0, mask1, first, beta);
+    fma_loop_row_6x16(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
+    
+    // Store results (row-major: C has ldc columns per row)
+    if (nr == 16) {
+        if (mr >= 1) { _mm256_storeu_ps(C, c00); _mm256_storeu_ps(C+8, c01); }
+        if (mr >= 2) { _mm256_storeu_ps(C+ldc, c10); _mm256_storeu_ps(C+ldc+8, c11); }
+        if (mr >= 3) { _mm256_storeu_ps(C+2*ldc, c20); _mm256_storeu_ps(C+2*ldc+8, c21); }
+        if (mr >= 4) { _mm256_storeu_ps(C+3*ldc, c30); _mm256_storeu_ps(C+3*ldc+8, c31); }
+        if (mr >= 5) { _mm256_storeu_ps(C+4*ldc, c40); _mm256_storeu_ps(C+4*ldc+8, c41); }
+        if (mr >= 6) { _mm256_storeu_ps(C+5*ldc, c50); _mm256_storeu_ps(C+5*ldc+8, c51); }
+    } else {
+        build_masks(&mask0, &mask1, nr);
+        if (mr >= 1) { _mm256_maskstore_ps(C, mask0, c00); _mm256_maskstore_ps(C+8, mask1, c01); }
+        if (mr >= 2) { _mm256_maskstore_ps(C+ldc, mask0, c10); _mm256_maskstore_ps(C+ldc+8, mask1, c11); }
+        if (mr >= 3) { _mm256_maskstore_ps(C+2*ldc, mask0, c20); _mm256_maskstore_ps(C+2*ldc+8, mask1, c21); }
+        if (mr >= 4) { _mm256_maskstore_ps(C+3*ldc, mask0, c30); _mm256_maskstore_ps(C+3*ldc+8, mask1, c31); }
+        if (mr >= 5) { _mm256_maskstore_ps(C+4*ldc, mask0, c40); _mm256_maskstore_ps(C+4*ldc+8, mask1, c41); }
+        if (mr >= 6) { _mm256_maskstore_ps(C+5*ldc, mask0, c50); _mm256_maskstore_ps(C+5*ldc+8, mask1, c51); }
     }
 }
 
-// Edge case micro-kernel for boundary handling (generic stride)
-inline void kernel_edge(
-    const float* A, const float* B, float* C,
-    int mr, int nr, int kc,
-    int64_t rsc, int64_t csc,
-    float alpha, float beta, bool first
-) {
-    float acc[MR][NR] = {};
+inline void kernel_6x16_row_load(float* A, float* B, float* C, int mr, int nr, int kc, int ldc) {
+    __m256 c00={}, c01={}, c10={}, c11={}, c20={}, c21={};
+    __m256 c30={}, c31={}, c40={}, c41={}, c50={}, c51={};
+    __m256i mask0, mask1;
     
-    for (int p = 0; p < kc; ++p) {
-        for (int i = 0; i < mr; ++i) {
-            float a = A[i];
-            for (int j = 0; j < nr; ++j) {
-                acc[i][j] += a * B[j];
+    // Load existing C values
+    if (nr == 16) {
+        if (mr >= 1) { c00 = _mm256_loadu_ps(C); c01 = _mm256_loadu_ps(C+8); }
+        if (mr >= 2) { c10 = _mm256_loadu_ps(C+ldc); c11 = _mm256_loadu_ps(C+ldc+8); }
+        if (mr >= 3) { c20 = _mm256_loadu_ps(C+2*ldc); c21 = _mm256_loadu_ps(C+2*ldc+8); }
+        if (mr >= 4) { c30 = _mm256_loadu_ps(C+3*ldc); c31 = _mm256_loadu_ps(C+3*ldc+8); }
+        if (mr >= 5) { c40 = _mm256_loadu_ps(C+4*ldc); c41 = _mm256_loadu_ps(C+4*ldc+8); }
+        if (mr >= 6) { c50 = _mm256_loadu_ps(C+5*ldc); c51 = _mm256_loadu_ps(C+5*ldc+8); }
+    } else {
+        build_masks(&mask0, &mask1, nr);
+        if (mr >= 1) { c00 = _mm256_maskload_ps(C, mask0); c01 = _mm256_maskload_ps(C+8, mask1); }
+        if (mr >= 2) { c10 = _mm256_maskload_ps(C+ldc, mask0); c11 = _mm256_maskload_ps(C+ldc+8, mask1); }
+        if (mr >= 3) { c20 = _mm256_maskload_ps(C+2*ldc, mask0); c21 = _mm256_maskload_ps(C+2*ldc+8, mask1); }
+        if (mr >= 4) { c30 = _mm256_maskload_ps(C+3*ldc, mask0); c31 = _mm256_maskload_ps(C+3*ldc+8, mask1); }
+        if (mr >= 5) { c40 = _mm256_maskload_ps(C+4*ldc, mask0); c41 = _mm256_maskload_ps(C+4*ldc+8, mask1); }
+        if (mr >= 6) { c50 = _mm256_maskload_ps(C+5*ldc, mask0); c51 = _mm256_maskload_ps(C+5*ldc+8, mask1); }
+    }
+    
+    fma_loop_row_6x16(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
+    
+    // Store results
+    if (nr == 16) {
+        if (mr >= 1) { _mm256_storeu_ps(C, c00); _mm256_storeu_ps(C+8, c01); }
+        if (mr >= 2) { _mm256_storeu_ps(C+ldc, c10); _mm256_storeu_ps(C+ldc+8, c11); }
+        if (mr >= 3) { _mm256_storeu_ps(C+2*ldc, c20); _mm256_storeu_ps(C+2*ldc+8, c21); }
+        if (mr >= 4) { _mm256_storeu_ps(C+3*ldc, c30); _mm256_storeu_ps(C+3*ldc+8, c31); }
+        if (mr >= 5) { _mm256_storeu_ps(C+4*ldc, c40); _mm256_storeu_ps(C+4*ldc+8, c41); }
+        if (mr >= 6) { _mm256_storeu_ps(C+5*ldc, c50); _mm256_storeu_ps(C+5*ldc+8, c51); }
+    } else {
+        if (mr >= 1) { _mm256_maskstore_ps(C, mask0, c00); _mm256_maskstore_ps(C+8, mask1, c01); }
+        if (mr >= 2) { _mm256_maskstore_ps(C+ldc, mask0, c10); _mm256_maskstore_ps(C+ldc+8, mask1, c11); }
+        if (mr >= 3) { _mm256_maskstore_ps(C+2*ldc, mask0, c20); _mm256_maskstore_ps(C+2*ldc+8, mask1, c21); }
+        if (mr >= 4) { _mm256_maskstore_ps(C+3*ldc, mask0, c30); _mm256_maskstore_ps(C+3*ldc+8, mask1, c31); }
+        if (mr >= 5) { _mm256_maskstore_ps(C+4*ldc, mask0, c40); _mm256_maskstore_ps(C+4*ldc+8, mask1, c41); }
+        if (mr >= 6) { _mm256_maskstore_ps(C+5*ldc, mask0, c50); _mm256_maskstore_ps(C+5*ldc+8, mask1, c51); }
+    }
+}
+
+// ============================================================================
+// Packing Functions
+// ============================================================================
+
+// Pack A for column-major kernel (16xkc panels)
+inline void pack_a_col(const float* A, float* packed, int mc, int kc, int lda) {
+    for (int i = 0; i < mc; i += MR_COL) {
+        int mr = std::min(MR_COL, mc - i);
+        for (int p = 0; p < kc; ++p) {
+            for (int ii = 0; ii < mr; ++ii) {
+                packed[ii] = A[p * lda + i + ii];
+            }
+            for (int ii = mr; ii < MR_COL; ++ii) {
+                packed[ii] = 0.0f;
+            }
+            packed += MR_COL;
+        }
+    }
+}
+
+// Pack B for column-major kernel (kcx6 panels)
+inline void pack_b_col(const float* B, float* packed, int kc, int nc, int ldb) {
+    for (int j = 0; j < nc; j += NR_COL) {
+        int nr = std::min(NR_COL, nc - j);
+        for (int p = 0; p < kc; ++p) {
+            for (int jj = 0; jj < nr; ++jj) {
+                packed[jj] = B[(j + jj) * ldb + p];
+            }
+            for (int jj = nr; jj < NR_COL; ++jj) {
+                packed[jj] = 0.0f;
+            }
+            packed += NR_COL;
+        }
+    }
+}
+
+// Pack A for row-major kernel (6xkc panels)
+inline void pack_a_row(const float* A, float* packed, int mc, int kc, int lda) {
+    for (int i = 0; i < mc; i += MR_ROW) {
+        int mr = std::min(MR_ROW, mc - i);
+        for (int p = 0; p < kc; ++p) {
+            for (int ii = 0; ii < mr; ++ii) {
+                packed[ii] = A[(i + ii) * lda + p];
+            }
+            for (int ii = mr; ii < MR_ROW; ++ii) {
+                packed[ii] = 0.0f;
+            }
+            packed += MR_ROW;
+        }
+    }
+}
+
+// Pack B for row-major kernel (kcx16 panels)
+inline void pack_b_row(const float* B, float* packed, int kc, int nc, int ldb) {
+    for (int j = 0; j < nc; j += NR_ROW) {
+        int nr = std::min(NR_ROW, nc - j);
+        for (int p = 0; p < kc; ++p) {
+            for (int jj = 0; jj < nr; ++jj) {
+                packed[jj] = B[p * ldb + j + jj];
+            }
+            for (int jj = nr; jj < NR_ROW; ++jj) {
+                packed[jj] = 0.0f;
+            }
+            packed += NR_ROW;
+        }
+    }
+}
+
+// ============================================================================
+// Column-major GEMM (uses 16x6 kernel)
+// C[m x n] = A[m x k] @ B[k x n], all column-major
+// ============================================================================
+
+inline void sgemm_colmajor(float* A, float* B, float* C, int m, int n, int k) {
+    static thread_local AlignedBuffer buf_a, buf_b;
+    // Allocate buffers with proper padding for alignment
+    // For col-major: A panels are MR_COL x kc, B panels are kc x NR_COL
+    size_t a_buf_size = (static_cast<size_t>(MC + MR_COL - 1) / MR_COL) * MR_COL * KC;
+    size_t b_buf_size = (static_cast<size_t>(NC + NR_COL - 1) / NR_COL) * NR_COL * KC;
+    buf_a.ensure(a_buf_size);
+    buf_b.ensure(b_buf_size);
+    
+    for (int j = 0; j < n; j += NC) {
+        int nc = std::min(NC, n - j);
+        
+        for (int p = 0; p < k; p += KC) {
+            int kc = std::min(KC, k - p);
+            bool first = (p == 0);
+            
+            pack_b_col(B + j * k + p, buf_b.data, kc, nc, k);
+            
+            for (int i = 0; i < m; i += MC) {
+                int mc = std::min(MC, m - i);
+                
+                pack_a_col(A + p * m + i, buf_a.data, mc, kc, m);
+                
+                for (int jr = 0; jr < nc; jr += NR_COL) {
+                    int nr = std::min(NR_COL, nc - jr);
+                    for (int ir = 0; ir < mc; ir += MR_COL) {
+                        int mr = std::min(MR_COL, mc - ir);
+                        
+                        float* C_ij = C + (j + jr) * m + (i + ir);
+                        // Packed A: each panel is MR_COL x kc
+                        // Packed B: each panel is kc x NR_COL
+                        float* packed_a = buf_a.data + (ir / MR_COL) * MR_COL * kc;
+                        float* packed_b = buf_b.data + (jr / NR_COL) * NR_COL * kc;
+                        
+                        if (first) {
+                            kernel_16x6_col_zero(packed_a, packed_b, C_ij, mr, nr, kc, m);
+                        } else {
+                            kernel_16x6_col_load(packed_a, packed_b, C_ij, mr, nr, kc, m);
+                        }
+                    }
+                }
             }
         }
-        A += MR; B += NR;
     }
+}
+
+// ============================================================================
+// Row-major GEMM (uses 6x16 kernel)
+// C[m x n] = A[m x k] @ B[k x n], all row-major
+// ============================================================================
+
+inline void sgemm_rowmajor(float* A, float* B, float* C, int m, int n, int k) {
+    static thread_local AlignedBuffer buf_a, buf_b;
+    // Allocate buffers with proper padding for alignment
+    // For row-major: A panels are MR_ROW x kc, B panels are kc x NR_ROW
+    size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
+    size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
+    buf_a.ensure(a_buf_size);
+    buf_b.ensure(b_buf_size);
     
-    for (int i = 0; i < mr; ++i) {
-        for (int j = 0; j < nr; ++j) {
-            float* c = C + i * rsc + j * csc;
-            *c = first ? (alpha * acc[i][j] + beta * *c) : (*c + alpha * acc[i][j]);
+    for (int j = 0; j < n; j += NC) {
+        int nc = std::min(NC, n - j);
+        
+        for (int p = 0; p < k; p += KC) {
+            int kc = std::min(KC, k - p);
+            bool first = (p == 0);
+            
+            pack_b_row(B + p * n + j, buf_b.data, kc, nc, n);
+            
+            for (int i = 0; i < m; i += MC) {
+                int mc = std::min(MC, m - i);
+                
+                pack_a_row(A + i * k + p, buf_a.data, mc, kc, k);
+                
+                for (int ir = 0; ir < mc; ir += MR_ROW) {
+                    int mr = std::min(MR_ROW, mc - ir);
+                    for (int jr = 0; jr < nc; jr += NR_ROW) {
+                        int nr = std::min(NR_ROW, nc - jr);
+                        
+                        float* C_ij = C + (i + ir) * n + (j + jr);
+                        // Packed A: each panel is MR_ROW x kc, stored as kc x MR_ROW
+                        // Packed B: each panel is kc x NR_ROW
+                        float* packed_a = buf_a.data + (ir / MR_ROW) * MR_ROW * kc;
+                        float* packed_b = buf_b.data + (jr / NR_ROW) * NR_ROW * kc;
+                        
+                        if (first) {
+                            kernel_6x16_row_zero(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                        } else {
+                            kernel_6x16_row_load(packed_a, packed_b, C_ij, mr, nr, kc, n);
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
 // ============================================================================
-// Main GEMM Function
+// Generic GEMM with stride support
+// Automatically detects layout and chooses optimal kernel
 // ============================================================================
 
 /**
  * @brief BLAS-style single precision matrix multiplication
+ * C = alpha * A @ B + beta * C
+ * 
  * @param A Input matrix A pointer
- * @param B Input matrix B pointer
+ * @param B Input matrix B pointer  
  * @param C Output matrix C pointer (modified in place)
  * @param m Number of rows of A and C
  * @param n Number of columns of B and C
  * @param k Number of columns of A and rows of B
  * @param alpha Scalar multiplier for A*B
  * @param beta Scalar multiplier for existing C values
- * @param rsa Row stride of A
- * @param csa Column stride of A
+ * @param rsa Row stride of A (distance between consecutive rows)
+ * @param csa Column stride of A (distance between consecutive columns)
  * @param rsb Row stride of B
  * @param csb Column stride of B
  * @param rsc Row stride of C
@@ -329,6 +565,7 @@ inline void sgemm(
 ) {
     if (m == 0 || n == 0) return;
     
+    // Handle special cases
     if (k == 0 || alpha == 0.0f) {
         if (beta == 0.0f) {
             for (int i = 0; i < m; ++i)
@@ -342,61 +579,105 @@ inline void sgemm(
         return;
     }
     
-    // Detect row-major layout
-    bool a_row = (csa == 1);
-    bool b_row = (csb == 1);
-    bool c_row = (csc == 1);
+    // Detect layout: row-major has csx=1, column-major has rsx=1
+    bool a_rowmajor = (csa == 1 && rsa >= k);
+    bool a_colmajor = (rsa == 1 && csa >= m);
+    bool b_rowmajor = (csb == 1 && rsb >= n);
+    bool b_colmajor = (rsb == 1 && csb >= k);
+    bool c_rowmajor = (csc == 1 && rsc >= n);
+    bool c_colmajor = (rsc == 1 && csc >= m);
     
-    // Thread-local buffers for packing
+    // Best case: all matrices have same layout, use optimized path
+    if (a_colmajor && b_colmajor && c_colmajor && alpha == 1.0f && beta == 0.0f) {
+        sgemm_colmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+        return;
+    }
+    
+    if (a_rowmajor && b_rowmajor && c_rowmajor && alpha == 1.0f && beta == 0.0f) {
+        sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+        return;
+    }
+    
+    // Generic fallback with stride support
     static thread_local AlignedBuffer buf_a, buf_b;
-    buf_a.ensure(MC * KC);
-    buf_b.ensure(KC * NC);
+    size_t a_buf_size = (static_cast<size_t>(MC + MR_ROW - 1) / MR_ROW) * MR_ROW * KC;
+    size_t b_buf_size = (static_cast<size_t>(NC + NR_ROW - 1) / NR_ROW) * NR_ROW * KC;
+    buf_a.ensure(a_buf_size);
+    buf_b.ensure(b_buf_size);
     
-    for (int j = 0; j < n; j += NC) {
-        int nc = std::min(NC, n - j);
+    // Use row-major kernel for generic case
+    for (int jj = 0; jj < n; jj += NC) {
+        int nc = std::min(NC, n - jj);
         
-        for (int p = 0; p < k; p += KC) {
-            int kc = std::min(KC, k - p);
-            bool first = (p == 0);
+        for (int pp = 0; pp < k; pp += KC) {
+            int kc = std::min(KC, k - pp);
+            bool first = (pp == 0);
             
-            // Pack B
-            if (b_row)
-                pack_b_row_major(B + p * rsb + j, buf_b.data, kc, nc, rsb);
-            else
-                pack_b_generic(B + p * rsb + j * csb, buf_b.data, kc, nc, rsb, csb);
+            // Pack B with generic strides
+            float* bp = buf_b.data;
+            for (int j = 0; j < nc; j += NR_ROW) {
+                int nr = std::min(NR_ROW, nc - j);
+                for (int p = 0; p < kc; ++p) {
+                    for (int jjj = 0; jjj < nr; ++jjj) {
+                        bp[jjj] = B[(pp + p) * rsb + (jj + j + jjj) * csb];
+                    }
+                    for (int jjj = nr; jjj < NR_ROW; ++jjj) {
+                        bp[jjj] = 0.0f;
+                    }
+                    bp += NR_ROW;
+                }
+            }
             
-            for (int i = 0; i < m; i += MC) {
-                int mc = std::min(MC, m - i);
+            for (int ii = 0; ii < m; ii += MC) {
+                int mc = std::min(MC, m - ii);
                 
-                // Pack A
-                if (a_row)
-                    pack_a_row_major(A + i * rsa + p, buf_a.data, mc, kc, rsa);
-                else
-                    pack_a_generic(A + i * rsa + p * csa, buf_a.data, mc, kc, rsa, csa);
+                // Pack A with generic strides
+                float* ap = buf_a.data;
+                for (int i = 0; i < mc; i += MR_ROW) {
+                    int mr = std::min(MR_ROW, mc - i);
+                    for (int p = 0; p < kc; ++p) {
+                        for (int iii = 0; iii < mr; ++iii) {
+                            ap[iii] = A[(ii + i + iii) * rsa + (pp + p) * csa];
+                        }
+                        for (int iii = mr; iii < MR_ROW; ++iii) {
+                            ap[iii] = 0.0f;
+                        }
+                        ap += MR_ROW;
+                    }
+                }
                 
-                // Compute micro-kernel tiles
-                for (int ir = 0; ir < mc; ir += MR) {
-                    int mr = std::min(MR, mc - ir);
-                    for (int jr = 0; jr < nc; jr += NR) {
-                        int nr = std::min(NR, nc - jr);
+                // Compute
+                for (int ir = 0; ir < mc; ir += MR_ROW) {
+                    int mr = std::min(MR_ROW, mc - ir);
+                    for (int jr = 0; jr < nc; jr += NR_ROW) {
+                        int nr = std::min(NR_ROW, nc - jr);
                         
-                        float* C_ij = C + (i + ir) * rsc + (j + jr) * csc;
+                        // Compute micro-kernel result
+                        float acc[MR_ROW][NR_ROW] = {};
+                        const float* ap2 = buf_a.data + ir * kc;
+                        const float* bp2 = buf_b.data + jr * kc;
                         
-                        if (mr == MR && nr == NR && c_row) {
-                            kernel_6x16(
-                                buf_a.data + ir * kc,
-                                buf_b.data + jr * kc,
-                                C_ij, kc, rsc, alpha, beta, first);
-                        } else if (c_row && nr < NR) {
-                            kernel_6xN_masked(
-                                buf_a.data + ir * kc,
-                                buf_b.data + jr * kc,
-                                C_ij, mr, nr, kc, rsc, alpha, beta, first);
-                        } else {
-                            kernel_edge(
-                                buf_a.data + ir * kc,
-                                buf_b.data + jr * kc,
-                                C_ij, mr, nr, kc, rsc, csc, alpha, beta, first);
+                        for (int p = 0; p < kc; ++p) {
+                            for (int i = 0; i < mr; ++i) {
+                                float a_val = ap2[i];
+                                for (int j = 0; j < nr; ++j) {
+                                    acc[i][j] += a_val * bp2[j];
+                                }
+                            }
+                            ap2 += MR_ROW;
+                            bp2 += NR_ROW;
+                        }
+                        
+                        // Store with alpha/beta scaling
+                        for (int i = 0; i < mr; ++i) {
+                            for (int j = 0; j < nr; ++j) {
+                                float* c_ptr = C + (ii + ir + i) * rsc + (jj + jr + j) * csc;
+                                if (first) {
+                                    *c_ptr = alpha * acc[i][j] + beta * (*c_ptr);
+                                } else {
+                                    *c_ptr += alpha * acc[i][j];
+                                }
+                            }
                         }
                     }
                 }
@@ -405,7 +686,10 @@ inline void sgemm(
     }
 }
 
-inline void sgemm(const float* A, const float* B, float* C, int m, int n, int k, float alpha = 1.0f, float beta = 0.0f) {
+// Convenience overloads
+inline void sgemm(const float* A, const float* B, float* C, int m, int n, int k, 
+                  float alpha = 1.0f, float beta = 0.0f) {
+    // Default: row-major layout
     sgemm(A, B, C, m, n, k, alpha, beta, k, 1, n, 1, n, 1);
 }
 
@@ -415,7 +699,13 @@ inline void matmul(const float* A, const float* B, float* C, int m, int n, int k
 }
 
 inline void matmul(const float* A, const float* B, float* C, int m, int n, int k) {
-    sgemm(A, B, C, m, n, k, 1.0f, 0.0f);
+    // Row-major: rsa=k, csa=1, rsb=n, csb=1, rsc=n, csc=1
+    sgemm_rowmajor(const_cast<float*>(A), const_cast<float*>(B), C, m, n, k);
+}
+
+// Column-major convenience function (matches original sgemm.c interface)
+inline void matmul_colmajor(float* A, float* B, float* C, int m, int n, int k) {
+    sgemm_colmajor(A, B, C, m, n, k);
 }
 
 } // namespace yt::kernel::gemm
