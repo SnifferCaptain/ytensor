@@ -15,9 +15,7 @@
 #include <algorithm>
 #include <memory>
 
-namespace yt::kernel {
-
-namespace detail {
+namespace yt::kernel::gemm {
 
 // ============================================================================
 // Configuration
@@ -63,7 +61,6 @@ struct AlignedBuffer {
                 data = new_data;
                 capacity = n;
             }
-            // If allocation fails, keep existing buffer (or nullptr)
         }
     }
     
@@ -71,6 +68,17 @@ struct AlignedBuffer {
         if (data) aligned_free_64(data); 
     }
 };
+
+// Mask table for boundary handling
+alignas(64) static const int8_t mask_table[32] = {
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+inline void build_masks(__m256i* mask0, __m256i* mask1, int nr) {
+    *mask0 = _mm256_cvtepi8_epi32(_mm_loadu_si64(&mask_table[16 - nr]));
+    *mask1 = _mm256_cvtepi8_epi32(_mm_loadu_si64(&mask_table[16 - nr + 8]));
+}
 
 // ============================================================================
 // Packing Functions
@@ -141,6 +149,69 @@ inline void pack_b_generic(const float* B, float* packed, int kc, int nc, int64_
 }
 
 // ============================================================================
+// FMA Loop Functions (optimized for different nr values)
+// ============================================================================
+
+inline void fma_loop_6cols(
+    const float* __restrict__ A,
+    const float* __restrict__ B,
+    __m256& c00, __m256& c01, __m256& c10, __m256& c11,
+    __m256& c20, __m256& c21, __m256& c30, __m256& c31,
+    __m256& c40, __m256& c41, __m256& c50, __m256& c51,
+    int kc
+) {
+    for (int p = 0; p < kc; ++p) {
+        __m256 b0 = _mm256_loadu_ps(B);
+        __m256 b1 = _mm256_loadu_ps(B + 8);
+        
+        __m256 a;
+        a = _mm256_broadcast_ss(&A[0]); c00 = _mm256_fmadd_ps(a, b0, c00); c01 = _mm256_fmadd_ps(a, b1, c01);
+        a = _mm256_broadcast_ss(&A[1]); c10 = _mm256_fmadd_ps(a, b0, c10); c11 = _mm256_fmadd_ps(a, b1, c11);
+        a = _mm256_broadcast_ss(&A[2]); c20 = _mm256_fmadd_ps(a, b0, c20); c21 = _mm256_fmadd_ps(a, b1, c21);
+        a = _mm256_broadcast_ss(&A[3]); c30 = _mm256_fmadd_ps(a, b0, c30); c31 = _mm256_fmadd_ps(a, b1, c31);
+        a = _mm256_broadcast_ss(&A[4]); c40 = _mm256_fmadd_ps(a, b0, c40); c41 = _mm256_fmadd_ps(a, b1, c41);
+        a = _mm256_broadcast_ss(&A[5]); c50 = _mm256_fmadd_ps(a, b0, c50); c51 = _mm256_fmadd_ps(a, b1, c51);
+        
+        A += MR; B += NR;
+    }
+}
+
+// ============================================================================
+// Store Functions
+// ============================================================================
+
+inline void store_row(float* row, __m256 acc0, __m256 acc1, __m256 av, __m256 bv, bool first, float beta) {
+    if (first && beta == 0.0f) {
+        _mm256_storeu_ps(row, _mm256_mul_ps(acc0, av));
+        _mm256_storeu_ps(row + 8, _mm256_mul_ps(acc1, av));
+    } else if (first) {
+        _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_mul_ps(_mm256_loadu_ps(row), bv)));
+        _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_mul_ps(_mm256_loadu_ps(row + 8), bv)));
+    } else {
+        _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_loadu_ps(row)));
+        _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_loadu_ps(row + 8)));
+    }
+}
+
+inline void maskstore_row(float* row, __m256 acc0, __m256 acc1, __m256 av, __m256 bv, 
+                          __m256i mask0, __m256i mask1, bool first, float beta) {
+    if (first && beta == 0.0f) {
+        _mm256_maskstore_ps(row, mask0, _mm256_mul_ps(acc0, av));
+        _mm256_maskstore_ps(row + 8, mask1, _mm256_mul_ps(acc1, av));
+    } else if (first) {
+        __m256 old0 = _mm256_maskload_ps(row, mask0);
+        __m256 old1 = _mm256_maskload_ps(row + 8, mask1);
+        _mm256_maskstore_ps(row, mask0, _mm256_fmadd_ps(acc0, av, _mm256_mul_ps(old0, bv)));
+        _mm256_maskstore_ps(row + 8, mask1, _mm256_fmadd_ps(acc1, av, _mm256_mul_ps(old1, bv)));
+    } else {
+        __m256 old0 = _mm256_maskload_ps(row, mask0);
+        __m256 old1 = _mm256_maskload_ps(row + 8, mask1);
+        _mm256_maskstore_ps(row, mask0, _mm256_fmadd_ps(acc0, av, old0));
+        _mm256_maskstore_ps(row + 8, mask1, _mm256_fmadd_ps(acc1, av, old1));
+    }
+}
+
+// ============================================================================
 // Micro-kernels
 // ============================================================================
 
@@ -159,48 +230,48 @@ inline void kernel_6x16(
     __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
     __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
     
-    for (int p = 0; p < kc; ++p) {
-        __m256 b0 = _mm256_loadu_ps(B);
-        __m256 b1 = _mm256_loadu_ps(B + 8);
-        
-        __m256 a;
-        a = _mm256_broadcast_ss(&A[0]); c00 = _mm256_fmadd_ps(a, b0, c00); c01 = _mm256_fmadd_ps(a, b1, c01);
-        a = _mm256_broadcast_ss(&A[1]); c10 = _mm256_fmadd_ps(a, b0, c10); c11 = _mm256_fmadd_ps(a, b1, c11);
-        a = _mm256_broadcast_ss(&A[2]); c20 = _mm256_fmadd_ps(a, b0, c20); c21 = _mm256_fmadd_ps(a, b1, c21);
-        a = _mm256_broadcast_ss(&A[3]); c30 = _mm256_fmadd_ps(a, b0, c30); c31 = _mm256_fmadd_ps(a, b1, c31);
-        a = _mm256_broadcast_ss(&A[4]); c40 = _mm256_fmadd_ps(a, b0, c40); c41 = _mm256_fmadd_ps(a, b1, c41);
-        a = _mm256_broadcast_ss(&A[5]); c50 = _mm256_fmadd_ps(a, b0, c50); c51 = _mm256_fmadd_ps(a, b1, c51);
-        
-        A += MR; B += NR;
-    }
+    fma_loop_6cols(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
     
     __m256 av = _mm256_broadcast_ss(&alpha);
     __m256 bv = _mm256_broadcast_ss(&beta);
     
-    // Store results to C with alpha/beta scaling
-    // Using a lambda for cleaner code while maintaining performance
-    auto store_row = [&](float* row, __m256 acc0, __m256 acc1) {
-        if (first && beta == 0.0f) {
-            _mm256_storeu_ps(row, _mm256_mul_ps(acc0, av));
-            _mm256_storeu_ps(row + 8, _mm256_mul_ps(acc1, av));
-        } else if (first) {
-            _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_mul_ps(_mm256_loadu_ps(row), bv)));
-            _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_mul_ps(_mm256_loadu_ps(row + 8), bv)));
-        } else {
-            _mm256_storeu_ps(row, _mm256_fmadd_ps(acc0, av, _mm256_loadu_ps(row)));
-            _mm256_storeu_ps(row + 8, _mm256_fmadd_ps(acc1, av, _mm256_loadu_ps(row + 8)));
-        }
-    };
-    
-    store_row(C + 0 * ldc, c00, c01);
-    store_row(C + 1 * ldc, c10, c11);
-    store_row(C + 2 * ldc, c20, c21);
-    store_row(C + 3 * ldc, c30, c31);
-    store_row(C + 4 * ldc, c40, c41);
-    store_row(C + 5 * ldc, c50, c51);
+    store_row(C + 0 * ldc, c00, c01, av, bv, first, beta);
+    store_row(C + 1 * ldc, c10, c11, av, bv, first, beta);
+    store_row(C + 2 * ldc, c20, c21, av, bv, first, beta);
+    store_row(C + 3 * ldc, c30, c31, av, bv, first, beta);
+    store_row(C + 4 * ldc, c40, c41, av, bv, first, beta);
+    store_row(C + 5 * ldc, c50, c51, av, bv, first, beta);
 }
 
-// Edge case micro-kernel for boundary handling
+// Kernel with masked store for nr < NR boundary
+inline void kernel_6xN_masked(
+    const float* __restrict__ A,
+    const float* __restrict__ B,
+    float* __restrict__ C,
+    int mr, int nr, int kc, int64_t ldc,
+    float alpha, float beta, bool first
+) {
+    __m256 c00 = _mm256_setzero_ps(), c01 = _mm256_setzero_ps();
+    __m256 c10 = _mm256_setzero_ps(), c11 = _mm256_setzero_ps();
+    __m256 c20 = _mm256_setzero_ps(), c21 = _mm256_setzero_ps();
+    __m256 c30 = _mm256_setzero_ps(), c31 = _mm256_setzero_ps();
+    __m256 c40 = _mm256_setzero_ps(), c41 = _mm256_setzero_ps();
+    __m256 c50 = _mm256_setzero_ps(), c51 = _mm256_setzero_ps();
+    
+    fma_loop_6cols(A, B, c00, c01, c10, c11, c20, c21, c30, c31, c40, c41, c50, c51, kc);
+    
+    __m256 av = _mm256_broadcast_ss(&alpha);
+    __m256 bv = _mm256_broadcast_ss(&beta);
+    __m256i mask0, mask1;
+    build_masks(&mask0, &mask1, nr);
+    
+    __m256 accs[6][2] = {{c00, c01}, {c10, c11}, {c20, c21}, {c30, c31}, {c40, c41}, {c50, c51}};
+    for (int i = 0; i < mr; ++i) {
+        maskstore_row(C + i * ldc, accs[i][0], accs[i][1], av, bv, mask0, mask1, first, beta);
+    }
+}
+
+// Edge case micro-kernel for boundary handling (generic stride)
 inline void kernel_edge(
     const float* A, const float* B, float* C,
     int mr, int nr, int kc,
@@ -226,8 +297,6 @@ inline void kernel_edge(
         }
     }
 }
-
-} // namespace detail
 
 // ============================================================================
 // Main GEMM Function
@@ -258,8 +327,6 @@ inline void sgemm(
     int64_t rsb, int64_t csb,
     int64_t rsc, int64_t csc
 ) {
-    using namespace detail;
-    
     if (m == 0 || n == 0) return;
     
     if (k == 0 || alpha == 0.0f) {
@@ -280,7 +347,7 @@ inline void sgemm(
     bool b_row = (csb == 1);
     bool c_row = (csc == 1);
     
-    // Thread-local buffers for packing (avoid repeated allocation)
+    // Thread-local buffers for packing
     static thread_local AlignedBuffer buf_a, buf_b;
     buf_a.ensure(MC * KC);
     buf_b.ensure(KC * NC);
@@ -320,6 +387,11 @@ inline void sgemm(
                                 buf_a.data + ir * kc,
                                 buf_b.data + jr * kc,
                                 C_ij, kc, rsc, alpha, beta, first);
+                        } else if (c_row && nr < NR) {
+                            kernel_6xN_masked(
+                                buf_a.data + ir * kc,
+                                buf_b.data + jr * kc,
+                                C_ij, mr, nr, kc, rsc, alpha, beta, first);
                         } else {
                             kernel_edge(
                                 buf_a.data + ir * kc,
@@ -346,4 +418,4 @@ inline void matmul(const float* A, const float* B, float* C, int m, int n, int k
     sgemm(A, B, C, m, n, k, 1.0f, 0.0f);
 }
 
-} // namespace yt::kernel
+} // namespace yt::kernel::gemm
