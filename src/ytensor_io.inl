@@ -696,7 +696,7 @@ inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& na
 
 // 模板方法实现：保存 YTensor<T, dim>
 template<typename T, int dim>
-bool YTensorIO::save(const YTensor<T, dim>& tensor, const std::string& name) {
+bool YTensorIO::save(const yt::YTensor<T, dim>& tensor, const std::string& name) {
     // YTensor 继承自 YTensorBase，直接调用基类版本
     return save(static_cast<const yt::YTensorBase&>(tensor), name);
 }
@@ -763,14 +763,14 @@ inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
 
 // 模板方法实现：加载 YTensor<T, dim>
 template<typename T, int dim>
-bool YTensorIO::load(YTensor<T, dim>& tensor, const std::string& name) {
+bool YTensorIO::load(yt::YTensor<T, dim>& tensor, const std::string& name) {
     // 先加载为 YTensorBase
     yt::YTensorBase base;
     if (!load(base, name)) {
         return false;
     }
     // 转换为 YTensor<T, dim>
-    tensor = YTensor<T, dim>(base);
+    tensor = yt::YTensor<T, dim>(base);
     return true;
 }
 
@@ -797,7 +797,7 @@ inline bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor,
 
 // 便利函数模板实现
 template<typename T, int dim>
-bool saveTensor(const std::string& fileName, const YTensor<T, dim>& tensor, const std::string& name) {
+bool saveTensor(const std::string& fileName, const yt::YTensor<T, dim>& tensor, const std::string& name) {
     YTensorIO io;
     if (!io.open(fileName, yt::io::Write)) {
         return false;
@@ -810,7 +810,7 @@ bool saveTensor(const std::string& fileName, const YTensor<T, dim>& tensor, cons
 }
 
 template<typename T, int dim>
-bool loadTensor(const std::string& fileName, YTensor<T, dim>& tensor, const std::string& name) {
+bool loadTensor(const std::string& fileName, yt::YTensor<T, dim>& tensor, const std::string& name) {
     YTensorIO io;
     if (!io.open(fileName, yt::io::Read)) {
         return false;

@@ -91,7 +91,35 @@ namespace yt::infos{
             #define YT_USE_EIGEN 0
         #endif
     #endif
+
+    /// @brief 控制是否启用AVX2+FMA优化的宏，默认根据编译器支持自动检测
+    #ifndef YT_USE_AVX2
+        #if defined(__AVX2__) && defined(__FMA__)
+            #define YT_USE_AVX2 1
+        #else
+            #define YT_USE_AVX2 0
+        #endif
+    #endif
     
+    /// @brief 矩阵乘法后端枚举
+    enum class MatmulBackend {
+        Naive = 0,  // naive实现，无依赖
+        Eigen = 1,  // Eigen库实现
+        AVX2 = 2    // 自定义AVX2+FMA实现
+    };
+
+    /// @brief 默认矩阵乘法后端，根据编译环境自动选择
+    /// 优先级：AVX2 > Eigen > Naive
+    static constexpr MatmulBackend defaultMatmulBackend = 
+    #if YT_USE_AVX2
+        MatmulBackend::AVX2
+    #elif YT_USE_EIGEN
+        MatmulBackend::Eigen
+    #else
+        MatmulBackend::Naive
+    #endif
+    ;
+
     /// @brief 控制是否启用YTensorBase模板显式实例化（预创建常用类型模板）
     /// 优点：减少编译时间，可能提升运行时性能（减少模板实例化开销）
     /// 设为0则不预创建，所有模板按需实例化
@@ -105,4 +133,8 @@ namespace yt::infos{
 #if YT_USE_EIGEN
 #include <Eigen/Core>
 #endif // YT_USE_EIGEN
+
+#if YT_USE_AVX2
+#include <immintrin.h>
+#endif // YT_USE_AVX2
     

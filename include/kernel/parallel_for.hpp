@@ -10,8 +10,13 @@ namespace yt::kernel{
 /// @param flop 每次迭代的浮点运算量估计。当问题规模大于minParOps时，开启多核并行执行。以单次浮点运算为单位1。
 template<typename Func>
 void parallelFor(int from, int to, Func&& func, double flop = 1.){
+    // 忽略“变换失败”的警告
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpass-failed"
+#endif
     if((to - from) * flop >= yt::infos::minParOps) {
-        #pragma omp parallel for simd proc_bind(close)
+        #pragma omp parallel for proc_bind(close)
         for (int i = from; i < to; i++) {
             func(i);
         }
@@ -21,6 +26,9 @@ void parallelFor(int from, int to, Func&& func, double flop = 1.){
             func(i);
         }
     }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 }
 
 }// namespace yt::kernel

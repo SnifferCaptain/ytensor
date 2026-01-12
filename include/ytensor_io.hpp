@@ -16,10 +16,6 @@
 #include "ytensor_infos.hpp"
 #include "ytensor_base.hpp"
 
-// 前向声明 YTensor
-template<typename T, int dim>
-class YTensor;
-
 namespace yt::io {
 
 /// @brief 文件头标识
@@ -87,7 +83,7 @@ struct TensorInfo {
     std::vector<char> compressedData;   // 为空表示数据在磁盘，使用dataOffset读取；不为空表示数据在内存中，且原dataOffset失效。
 };
 
-/// @brief YTensor/YTensorBase 专用的 IO 类
+/// @brief yt::YTensor/YTensorBase 专用的 IO 类
 class YTensorIO {
 public:
     YTensorIO() = default;
@@ -124,7 +120,7 @@ public:
     /// @param name 张量名称
     /// @return 如果保存成功，返回true；否则返回false。
     template<typename T, int dim>
-    bool save(const YTensor<T, dim>& tensor, const std::string& name);
+    bool save(const yt::YTensor<T, dim>& tensor, const std::string& name);
 
     /// @brief 加载张量数据
     /// @param tensor 需要加载的张量，会进行创建操作，原有的数据、引用均会失效。
@@ -139,7 +135,7 @@ public:
     /// @param name 张量名称，需要与文件中的张量名称一致，缺省表示读取第一个张量。
     /// @return 如果加载成功，返回true；否则返回false。
     template<typename T, int dim>
-    bool load(YTensor<T, dim>& tensor, const std::string& name = "");
+    bool load(yt::YTensor<T, dim>& tensor, const std::string& name = "");
 
     /// @brief 检查文件格式是否正确
     /// @return 如果文件格式正确，返回true；否则返回false。
@@ -187,7 +183,7 @@ bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& tensor, 
 /// @return 如果加载成功，返回true；否则返回false。
 bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor, const std::string& name = "");
 
-/// @brief 便利函数用于快速保存 YTensor (模板版本)
+/// @brief 便利函数用于快速保存 yt::YTensor (模板版本)
 /// @tparam T 张量元素类型
 /// @tparam dim 张量维度
 /// @param fileName 文件名
@@ -195,9 +191,9 @@ bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor, const 
 /// @param name 张量名称
 /// @return 如果保存成功，返回true；否则返回false。
 template<typename T, int dim>
-bool saveTensor(const std::string& fileName, const YTensor<T, dim>& tensor, const std::string& name = "");
+bool saveTensor(const std::string& fileName, const yt::YTensor<T, dim>& tensor, const std::string& name = "");
 
-/// @brief 便利函数用于快速加载 YTensor (模板版本)
+/// @brief 便利函数用于快速加载 yt::YTensor (模板版本)
 /// @tparam T 张量元素类型
 /// @tparam dim 张量维度
 /// @param fileName 文件名
@@ -205,8 +201,7 @@ bool saveTensor(const std::string& fileName, const YTensor<T, dim>& tensor, cons
 /// @param name 张量名称，需要与文件中的张量名称一致，缺省表示读取第一个张量。
 /// @return 如果加载成功，返回true；否则返回false。
 template<typename T, int dim>
-bool loadTensor(const std::string& fileName, YTensor<T, dim>& tensor, const std::string& name = "");
+bool loadTensor(const std::string& fileName, yt::YTensor<T, dim>& tensor, const std::string& name = "");
 
 }; // namespace yt::io
 
-#include "../src/ytensor_io.inl"

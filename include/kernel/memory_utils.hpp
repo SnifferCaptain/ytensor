@@ -30,7 +30,6 @@ inline std::shared_ptr<char[]> makeSharedPlacementArray(size_t count) {
     char* rawMemory = new char[count * sizeof(T)];
     return std::shared_ptr<char[]>(rawMemory, [count](char* ptr) {
         T* arr = reinterpret_cast<T*>(ptr);
-        #pragma omp simd
         for (size_t i = 0; i < count; ++i) {
             arr[i].~T();
         }

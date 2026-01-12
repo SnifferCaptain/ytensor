@@ -20,186 +20,7 @@
 
 namespace yt{
 
-template<typename T, typename Func>
-YTensorBase& YTensorBase::binaryOpBroadcastInplace(const YTensorBase& other, Func&& func, 
-    const std::string& opName, double flop) {
-    auto thisShape = this->shape();
-    auto otherShape = other.shape();
-    int thisDim = ndim();
-    int otherDim = other.ndim();
-    
-    // other维度不能大于this
-    if (otherDim > thisDim) {
-        throwShapeNotMatch(opName, otherShape);
-    }
-    
-    // 填充other的shape和stride到this的维度
-    std::vector<int> paddedOtherShape(thisDim, 1);
-    std::vector<int> paddedOtherStride(thisDim, 0);
-    int otherOffset = thisDim - otherDim;
-    for (int i = 0; i < otherDim; ++i) {
-        paddedOtherShape[otherOffset + i] = otherShape[i];
-        paddedOtherStride[otherOffset + i] = other._stride[i];
-    }
-    
-    // 检查形状兼容性并调整stride
-    bool equalShape = true;
-    for (int i = 0; i < thisDim; ++i) {
-        if (thisShape[i] != paddedOtherShape[i]) {
-            if (paddedOtherShape[i] == 1) {
-                paddedOtherStride[i] = 0;  // 广播维度stride设为0
-            } else {
-                throwShapeNotMatch(opName, otherShape);
-            }
-            equalShape = false;
-        }
-    }
-    
-    size_t totalSize = this->size();
-    T* thisData = this->data<T>();
-    const T* otherData = other.data<T>();
-    
-    // 快速路径：形状相同且连续
-    if (equalShape && this->isContiguous() && other.isContiguous()) {
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
-            T thisVal = static_cast<T>(thisData[i]);
-            T otherVal = static_cast<T>(otherData[i]);
-            // 检查func是否有返回值（返回非void类型）
-            if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
-                // void返回类型：func直接修改thisVal
-                func(thisVal, otherVal);
-                thisData[i] = thisVal;
-            } else {
-                // 非void返回类型：使用返回值
-                thisData[i] = func(thisVal, otherVal);
-            }
-        }, flop);
-        return *this;
-    }
-    
-    // 通用路径：需要计算索引
-    auto logicStride = this->stride();
-    yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
-        int thisIdx = 0, otherIdx = 0;
-        int remaining = index;
-        for (int i = 0; i < thisDim; ++i) {
-            int coord = remaining / logicStride[i];
-            remaining = remaining % logicStride[i];
-            thisIdx += coord * _stride[i];
-            otherIdx += coord * paddedOtherStride[i];
-        }
-        
-        T thisVal = static_cast<T>(*(reinterpret_cast<const T*>(_data.get() + (_offset + thisIdx) * _element_size)));
-        T otherVal = static_cast<T>(*(reinterpret_cast<const T*>(other._data.get() + (other._offset + otherIdx) * other._element_size)));
-        
-        T* destPtr = reinterpret_cast<T*>(_data.get() + (_offset + thisIdx) * _element_size);
-        // 检查func是否有返回值（返回非void类型）
-        if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
-            // void返回类型：func直接修改thisVal
-            func(thisVal, otherVal);
-            *destPtr = thisVal;
-        } else {
-            // 非void返回类型：使用返回值
-            *destPtr = func(thisVal, otherVal);
-        }
-    }, flop);
-    
-    return *this;
-}
-
-template<typename T, typename Func>
-YTensorBase YTensorBase::binaryOpBroadcast(const YTensorBase& other, Func&& func, 
-    [[maybe_unused]] const std::string& opName, YTensorBase* result, double flop) const {
-    // opName保留用于将来的错误消息扩展（如broadcastShape错误时）
-    // 计算输出形状
-    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});
-    
-    // 准备结果张量
-    YTensorBase op;
-    if (result != nullptr) {
-        if (result->shape() != opShape) {
-            *result = YTensorBase(opShape, yt::types::getTypeName<T>());
-        }
-        op = *result;
-    } else {
-        op = YTensorBase(opShape, yt::types::getTypeName<T>());
-    }
-    
-    // 将this广播到结果张量
-    // 这里简化实现：先复制this的数据到op（带广播），然后调用inplace版本
-    int opDim = static_cast<int>(opShape.size());
-    int thisDim = ndim();
-    int otherDim = other.ndim();
-    
-    // 计算this和other相对于op的stride
-    std::vector<int> thisStride(opDim, 0);
-    std::vector<int> otherStride(opDim, 0);
-    
-    int thisLack = opDim - thisDim;
-    int otheLack = opDim - otherDim;
-    
-    for (int i = 0; i < thisDim; ++i) {
-        if (_shape[i] != 1) {
-            thisStride[thisLack + i] = _stride[i];
-        }
-    }
-    for (int i = 0; i < otherDim; ++i) {
-        if (other._shape[i] != 1) {
-            otherStride[otheLack + i] = other._stride[i];
-        }
-    }
-    
-    size_t totalSize = op.size();
-    auto opLogicStride = op.stride();
-    T* opData = op.data<T>();
-
-    // 快速路径：this和other形状相同且都连续
-    if(this->isContiguous() && other.isContiguous() && this->shapeMatch(other.shape())){
-        const T* thisData = this->data<T>();
-        const T* otherData = other.data<T>();
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
-            T thisVal = static_cast<T>(thisData[i]);
-            T otherVal = static_cast<T>(otherData[i]);
-            // 检查func是否有返回值（返回非void类型）
-            if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
-                // void返回类型：func直接修改thisVal
-                func(thisVal, otherVal);
-                opData[i] = thisVal;
-            } else {
-                // 非void返回类型：使用返回值
-                opData[i] = func(thisVal, otherVal);
-            }
-        }, flop);
-        return op;
-    }
-    
-    // 通用路径：需要计算索引
-    yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
-        int thisIdx = 0, otherIdx = 0;
-        int remaining = index;
-        for (int i = 0; i < opDim; ++i) {
-            int coord = remaining / opLogicStride[i];
-            remaining = remaining % opLogicStride[i];
-            thisIdx += coord * thisStride[i];
-            otherIdx += coord * otherStride[i];
-        }
-        
-        T thisVal = static_cast<T>(*(reinterpret_cast<const T*>(_data.get() + (_offset + thisIdx) * _element_size)));
-        T otherVal = static_cast<T>(*(reinterpret_cast<const T*>(other._data.get() + (other._offset + otherIdx) * other._element_size)));
-        
-        // 检查func是否有返回值（返回非void类型）
-        if constexpr (std::is_void_v<std::invoke_result_t<Func, T&, const T&>>) {
-            // void返回类型：func直接修改thisVal
-            func(thisVal, otherVal);
-            opData[index] = thisVal;
-        } else {
-            // 非void返回类型：使用返回值
-            opData[index] = func(thisVal, otherVal);
-        }
-    }, flop);
-    
-    return op;
-}
+// ======================== 类型分发宏 ========================
 
 #define YT_DISPATCH_BY_DTYPE(dtype, BLOCK)                                                 \
     if (dtype == "float32") { using DType = float; BLOCK }                                 \
@@ -215,9 +36,14 @@ YTensorBase YTensorBase::binaryOpBroadcast(const YTensorBase& other, Func&& func
     else if (dtype == "bfloat16") { using DType = yt::bfloat16; BLOCK }                    \
     else { throwOperatorNotSupport(dtype, "dispatch"); }
 
+// ======================== broadcastInplace 实现 ========================
+
 template<typename Func, typename... Args>
 YTensorBase& YTensorBase::broadcastInplace(Func&& func, Args&&... tensors) {
     using namespace yt::traits;
+    
+    // 从func的第一个参数推断DType（去掉引用和const）
+    using DType = std::remove_cvref_t<first_arg_of_t<Func>>;
     
     // 收集所有张量的shape（包括this）
     std::vector<std::vector<int>> shapes;
@@ -269,185 +95,94 @@ YTensorBase& YTensorBase::broadcastInplace(Func&& func, Args&&... tensors) {
     };
     (checkContiguousAndShape(tensors), ...);
     
-    // 根据dtype分发类型
-    auto _dtype = this->dtype();
-    YT_DISPATCH_BY_DTYPE(_dtype, {
-        if (allContiguous && allEqualShape) {
-            // 快速路径：所有张量连续且shape相同
-            DType* thisDataPtr = this->data<DType>();
-            
-            // 收集所有张量的数据指针
-            std::vector<const DType*> dataPtrs;
-            auto collectPtrs = [&](auto&& arg) {
-                if constexpr (is_ytensor_v<decltype(arg)>) {
-                    if constexpr (is_ytensor_template_v<decltype(arg)>) {
-                        dataPtrs.push_back(reinterpret_cast<const DType*>(arg.data()));
-                    } else {
-                        dataPtrs.push_back(arg.template data<DType>());
-                    }
+    // 不再使用YT_DISPATCH_BY_DTYPE，因为DType已经从func的参数类型推断出来了
+    if (allContiguous && allEqualShape) {
+        // 快速路径：所有张量连续且shape相同
+        DType* thisDataPtr = this->data<DType>();
+        
+        // 收集所有张量的数据指针
+        std::vector<const DType*> dataPtrs;
+        [[maybe_unused]] auto collectPtrs = [&](auto&& arg) {
+            if constexpr (is_ytensor_v<decltype(arg)>) {
+                if constexpr (is_ytensor_template_v<decltype(arg)>) {
+                    dataPtrs.push_back(reinterpret_cast<const DType*>(arg.data()));
+                } else {
+                    dataPtrs.push_back(arg.template data<DType>());
                 }
-            };
-            (collectPtrs(tensors), ...);
+            }
+        };
+        (collectPtrs(tensors), ...);
+        
+        // 创建fastpath的getValue lambda
+        [[maybe_unused]] auto getValueFast = [&](auto&& arg, int index, int& tensorIdx) -> decltype(auto) {
+            if constexpr (is_ytensor_v<decltype(arg)>) {
+                ++tensorIdx;
+                return dataPtrs[tensorIdx - 1][index];
+            } else {
+                return static_cast<DType>(std::forward<decltype(arg)>(arg));
+            }
+        };
+        
+        yt::kernel::parallelFor(0, totalSize, [&](int index) {
+            [[maybe_unused]] int tensorIdx = 0;
+            func(thisDataPtr[index], getValueFast(tensors, index, tensorIdx)...);
+        });
+    } else {
+        // 慢速路径：需要计算广播索引
+        DType* thisDataPtr = this->data<DType>();
+        auto logicStride = this->stride();
+        auto thisStride = this->stride_();
+        
+        // 编译时计算张量参数中有多少个是张量类型
+        constexpr size_t numTensors = ((is_ytensor_v<std::decay_t<Args>> ? 1 : 0) + ... + 0);
+        
+        // 收集每个张量的广播stride和数据指针（使用std::array）
+        std::array<std::vector<int>, numTensors> broadcastStrides;
+        std::array<const DType*, numTensors> dataPtrs;
+        
+        [[maybe_unused]] size_t tensorIdx = 0;
+        [[maybe_unused]] auto collectBroadcastInfo = [&](auto&& arg) {
+            if constexpr (is_ytensor_v<decltype(arg)>) {
+                broadcastStrides[tensorIdx] = yt::kernel::getBroadcastStride(arg.shape(), arg.stride_(), broadcastShape);
+                if constexpr (is_ytensor_template_v<decltype(arg)>) {
+                    dataPtrs[tensorIdx] = reinterpret_cast<const DType*>(arg.data());
+                } else {
+                    dataPtrs[tensorIdx] = arg.template data<DType>();
+                }
+                ++tensorIdx;
+            }
+        };
+        (collectBroadcastInfo(tensors), ...);
+        
+        // 预分配strides指针数组用于computeBroadcastIndices
+        std::array<const int*, numTensors + 1> stridesArray;
+        stridesArray[0] = thisStride.data();
+        for (size_t i = 0; i < numTensors; ++i) {
+            stridesArray[i + 1] = broadcastStrides[i].data();
+        }
+        
+        yt::kernel::parallelFor(0, totalSize, [&](int index) {
+            // 使用编译期模板版本计算索引，返回std::array，无堆分配
+            auto indices = yt::kernel::computeBroadcastIndices<numTensors + 1>(
+                index, logicStride, broadcastShape, stridesArray, thisDim);
+            int thisIdx = indices[0];
             
-            // 创建fastpath的getValue lambda
-            auto getValueFast = [&](auto&& arg, int index, int& tensorIdx) -> decltype(auto) {
+            // 获取值并调用func
+            [[maybe_unused]] size_t tIdx = 0;
+            [[maybe_unused]] auto getValue = [&](auto&& arg) -> decltype(auto) {
                 if constexpr (is_ytensor_v<decltype(arg)>) {
-                    ++tensorIdx;
-                    return dataPtrs[tensorIdx - 1][index];
+                    size_t idx = tIdx++;
+                    return dataPtrs[idx][indices[idx + 1]];
                 } else {
                     return static_cast<DType>(std::forward<decltype(arg)>(arg));
                 }
             };
             
-            yt::kernel::parallelFor(0, totalSize, [&](int index) {
-                int tensorIdx = 0;
-                func(thisDataPtr[index], getValueFast(tensors, index, tensorIdx)...);
-            });
-        } else {
-            // 慢速路径：需要计算广播索引
-            DType* thisDataPtr = this->data<DType>();
-            auto logicStride = this->stride();
-            auto thisStride = this->stride_();
-            
-            // 收集每个张量的广播stride和数据指针
-            std::vector<std::vector<int>> broadcastStrides;
-            std::vector<const DType*> dataPtrs;
-            
-            auto collectBroadcastInfo = [&](auto&& arg) {
-                if constexpr (is_ytensor_v<decltype(arg)>) {
-                    broadcastStrides.push_back(yt::kernel::getBroadcastStride(arg.shape(), arg.stride_(), broadcastShape));
-                    if constexpr (is_ytensor_template_v<decltype(arg)>) {
-                        dataPtrs.push_back(reinterpret_cast<const DType*>(arg.data()));
-                    } else {
-                        dataPtrs.push_back(arg.template data<DType>());
-                    }
-                }
-            };
-            (collectBroadcastInfo(tensors), ...);
-            
-            size_t numTensors = dataPtrs.size();
-            
-            yt::kernel::parallelFor(0, totalSize, [&](int index) {
-                // 运行时计算索引
-                int thisIdx = 0;
-                std::vector<int> otherIndices(numTensors, 0);
-                yt::kernel::computeBroadcastIndicesRuntime(index, logicStride, thisShapeVec, thisStride, 
-                    broadcastStrides, thisIdx, otherIndices, thisDim);
-                
-                // 获取值并调用func
-                size_t tensorIdx = 0;
-                auto getValue = [&](auto&& arg) -> decltype(auto) {
-                    if constexpr (is_ytensor_v<decltype(arg)>) {
-                        size_t idx = tensorIdx++;
-                        return dataPtrs[idx][otherIndices[idx]];
-                    } else {
-                        return static_cast<DType>(std::forward<decltype(arg)>(arg));
-                    }
-                };
-                
-                func(thisDataPtr[thisIdx + _offset], getValue(tensors)...);
-            });
-        }
-    });
+            func(thisDataPtr[thisIdx + _offset], getValue(tensors)...);
+        });
+    }
     
     return *this;
-}
-
-// ======================== binaryOpTransformInplace ========================
-
-template<typename T, typename Func>
-YTensorBase& YTensorBase::binaryOpTransformInplace(const T& scalar, Func&& func, double flop) {
-    size_t totalSize = this->size();
-    
-    if (this->isContiguous()) {
-        T* dataPtr = this->data<T>();
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
-            T val = dataPtr[i];
-            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
-                func(val, scalar);
-                dataPtr[i] = val;
-            } else {
-                dataPtr[i] = func(val, scalar);
-            }
-        }, flop);
-    } else {
-        auto logicStride = this->stride();
-        int dim = ndim();
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
-            int physIdx = 0;
-            int remaining = index;
-            for (int i = 0; i < dim; ++i) {
-                int coord = remaining / logicStride[i];
-                remaining = remaining % logicStride[i];
-                physIdx += coord * _stride[i];
-            }
-            
-            T* ptr = reinterpret_cast<T*>(_data.get() + (_offset + physIdx) * _element_size);
-            T val = *ptr;
-            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
-                func(val, scalar);
-                *ptr = val;
-            } else {
-                *ptr = func(val, scalar);
-            }
-        }, flop);
-    }
-    return *this;
-}
-
-// ======================== binaryOpTransform ========================
-
-template<typename T, typename Func>
-YTensorBase YTensorBase::binaryOpTransform(const T& scalar, Func&& func, 
-    YTensorBase* result, double flop) const {
-    
-    YTensorBase op;
-    if (result != nullptr) {
-        if (result->shape() != _shape) {
-            *result = YTensorBase(_shape, yt::types::getTypeName<T>());
-        }
-        op = *result;
-    } else {
-        op = YTensorBase(_shape, yt::types::getTypeName<T>());
-    }
-    
-    size_t totalSize = this->size();
-    T* opData = op.data<T>();
-    
-    if (this->isContiguous()) {
-        const T* thisData = this->data<T>();
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int i) {
-            T val = thisData[i];
-            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
-                func(val, scalar);
-                opData[i] = val;
-            } else {
-                opData[i] = func(val, scalar);
-            }
-        }, flop);
-    } else {
-        auto logicStride = this->stride();
-        int dim = ndim();
-        yt::kernel::parallelFor(0, static_cast<int>(totalSize), [&](int index) {
-            int physIdx = 0;
-            int remaining = index;
-            for (int i = 0; i < dim; ++i) {
-                int coord = remaining / logicStride[i];
-                remaining = remaining % logicStride[i];
-                physIdx += coord * _stride[i];
-            }
-            
-            const T* srcPtr = reinterpret_cast<const T*>(_data.get() + (_offset + physIdx) * _element_size);
-            T val = *srcPtr;
-            if constexpr (std::is_invocable_v<Func, T&, const T&>) {
-                func(val, scalar);
-                opData[index] = val;
-            } else {
-                opData[index] = func(val, scalar);
-            }
-        }, flop);
-    }
-    return op;
 }
 
 // ======================== 类型分发宏 ========================
@@ -570,31 +305,42 @@ YTensorBase YTensorBase::binaryOpTransform(const T& scalar, Func&& func,
     else { throwOperatorNotSupport(dtype, "int_op"); }
 
 // 统一运算符宏 - 同时生成 Tensor op Tensor 和 Tensor op Scalar 的4个版本
+// 使用新的 broadcastInplace API
 #define YT_IMPL_BINARY_OP(OP, OP_NAME, DISPATCH_MACRO)                                     \
-/* Tensor op Tensor */                                                                     \
+/* Tensor op Tensor - 非原地版本 */                                                         \
 inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
-    YTensorBase result;                                                                    \
+    /* 计算广播后的输出形状 */                                                               \
+    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
+    /* 创建输出张量 */                                                                       \
+    YTensorBase result(opShape, _dtype);                                                   \
+    /* 先将this复制到result */                                                               \
+    result.copy_(*this);                                                                   \
+    /* 然后使用broadcastInplace进行原地操作 */                                               \
     DISPATCH_MACRO(_dtype, {                                                               \
-        result = binaryOpBroadcast<DType>(other,                                           \
-            [](DType& a, const DType& b) { a = a OP b; }, OP_NAME);                        \
+        result.broadcastInplace([](DType& a, const DType& b) { a = a OP b; }, other);      \
     });                                                                                    \
     return result;                                                                         \
 }                                                                                          \
+/* Tensor op Tensor - 原地版本 */                                                            \
 inline YTensorBase& YTensorBase::operator OP##=(const YTensorBase& other) {                \
     DISPATCH_MACRO(_dtype, {                                                               \
-        binaryOpBroadcastInplace<DType>(other,                                             \
-            [](DType& a, const DType& b) { a = a OP b; }, OP_NAME "=");                    \
+        this->broadcastInplace([](DType& a, const DType& b) { a = a OP b; }, other);       \
     });                                                                                    \
     return *this;                                                                          \
 }                                                                                          \
-/* Tensor op Scalar */                                                                     \
+/* Tensor op Scalar - 非原地版本 */                                                          \
 template<typename T>                                                                       \
 YTensorBase YTensorBase::operator OP(const T& scalar) const {                              \
-    return binaryOpTransform<T>(scalar, [](T& a, const T& b) { a = a OP b; });             \
+    YTensorBase result(_shape, yt::types::getTypeName<T>());                               \
+    result.copy_(*this);                                                                   \
+    result.broadcastInplace([](T& a, const T& b) { a = a OP b; }, scalar);                 \
+    return result;                                                                         \
 }                                                                                          \
+/* Tensor op Scalar - 原地版本 */                                                            \
 template<typename T>                                                                       \
 YTensorBase& YTensorBase::operator OP##=(const T& scalar) {                                \
-    return binaryOpTransformInplace<T>(scalar, [](T& a, const T& b) { a = a OP b; });      \
+    this->broadcastInplace([](T& a, const T& b) { a = a OP b; }, scalar);                  \
+    return *this;                                                                          \
 }
 
 // 实例化所有运算符 - 数值类型

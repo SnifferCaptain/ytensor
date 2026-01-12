@@ -45,6 +45,7 @@ namespace yt::types {
         else if constexpr (std::is_same_v<T, uint32_t>) return "uint32";
         else if constexpr (std::is_same_v<T, uint64_t>) return "uint64";
         else if constexpr (std::is_same_v<T, bool>) return "bool";
+        else if constexpr (std::is_same_v<T, std::string>) return "string";
         // non std
         else if constexpr (std::is_same_v<T, yt::bfloat16>) return "bfloat16";
         else if constexpr (std::is_same_v<T, yt::float16>) return "float16";
@@ -53,8 +54,8 @@ namespace yt::types {
         else if constexpr (std::is_same_v<T, yt::float8_e8m0>) return "float8_e8m0";
         else if constexpr (std::is_same_v<T, yt::float8_ue8m0>) return "float8_ue8m0";
         else {
-            throw std::runtime_error(std::string("Type ") + typeid(T).name() + " is not registered.");
-            return "unregistered";
+            // 未注册，使用默认名称
+            return typeid(T).name();
         }
     }
 
@@ -266,6 +267,10 @@ namespace yt::types {
         } else if (dtype == "bool") {
             const uint8_t* p = reinterpret_cast<const uint8_t*>(data);
             oss << ((*p) ? "true" : "false");
+            return oss.str();
+        } else if (dtype == "string") {
+            const std::string* p = reinterpret_cast<const std::string*>(data);
+            oss << *p;
             return oss.str();
         } else if (dtype == "bfloat16") {
             const yt::bfloat16* p = reinterpret_cast<const yt::bfloat16*>(data);

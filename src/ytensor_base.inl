@@ -425,69 +425,6 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     return *this;
 }
 
-inline std::ostream &operator<<(std::ostream &out, const YTensorBase &tensor){
-    out << "[YTensorBase]:<" << tensor.dtype() << ">" << std::endl;
-    out << "[itemSize]: " << tensor.size() << std::endl;
-    out << "[byteSize]: " << tensor.size() * tensor.elementSize() << std::endl;
-    out << "[shape]: [";
-    for (int i = 0; i < tensor.ndim(); ++i){
-        out << tensor.shape(i) << (i + 1 == tensor.ndim() ? "" : ", ");
-    }
-    out << "]" << std::endl;
-    out << "[data]:" << std::endl;
-
-    // Print data using runtime dtype and a centralized formatting helper
-    std::vector<int> dims = tensor.shape();
-    if (dims.size() == 0) {
-        // scalar case
-        if (!tensor._data) {
-            out << "[data]: null" << std::endl;
-        } else {
-            size_t phys = 0; // scalar
-            size_t addressIndex = static_cast<size_t>(tensor._offset) + phys;
-            const void* valPtr = static_cast<const void*>(tensor._data.get() + addressIndex * tensor.elementSize());
-            out << yt::types::formatValue(valPtr, tensor.dtype());
-        }
-    } else {
-        std::function<void(std::vector<int>&, int, int)> printRecursive;
-        printRecursive = [&](std::vector<int>& indices, int currentDim, int indent) {
-            for (int i = 0; i < indent; ++i) out << "  ";
-            if (currentDim == static_cast<int>(dims.size()) - 1) {
-                out << "[";
-                for (int i = 0; i < dims[currentDim]; ++i) {
-                    indices[currentDim] = i;
-                    try {
-                        size_t phys = tensor.toIndex_(indices);
-                        size_t addressIndex = static_cast<size_t>(tensor._offset) + phys;
-                        const void* valPtr = static_cast<const void*>(tensor._data.get() + addressIndex * tensor.elementSize());
-                        out << yt::types::formatValue(valPtr, tensor.dtype());
-                    } catch (...) {
-                        out << "...";
-                    }
-                    if (i < dims[currentDim] - 1) out << " ";
-                }
-                out << "]";
-                if (dims.size() < 1) out << std::endl;
-            } else {
-                out << "[" << std::endl;
-                for (int i = 0; i < dims[currentDim]; ++i) {
-                    indices[currentDim] = i;
-                    printRecursive(indices, currentDim + 1, indent + 1);
-                    if (i < dims[currentDim] - 1) out << std::endl;
-                }
-                out << std::endl;
-                for (int i = 0; i < indent; ++i) out << "  ";
-                out << "]";
-            }
-        };
-        std::vector<int> indices(static_cast<int>(dims.size()), 0);
-        printRecursive(indices, 0, 0);
-    }
-
-    out << std::endl;
-    return out;
-}
-
 inline std::string YTensorBase::dtype() const { return _dtype; }
 inline size_t YTensorBase::elementSize() const { return _element_size; }
 
@@ -1266,6 +1203,73 @@ inline std::vector<YTensorBase> YTensorBase::split(int n, int axis) const {
     int chunkSize = axisSize / n;
     std::vector<int> splitSizes(n, chunkSize);
     return split(splitSizes, axis);
+}
+
+inline std::ostream &operator<<(std::ostream &out, const YTensorBase &tensor){
+    return tensor._cout(out);
+}
+
+inline std::ostream& YTensorBase::_cout(std::ostream& out) const {
+    out << "[YTensorBase]:<" << this->dtype() << ">" << std::endl;
+    out << "[itemSize]: " << this->size() << std::endl;
+    out << "[byteSize]: " << this->size() * this->elementSize() << std::endl;
+    out << "[shape]: [";
+    for (int i = 0; i < this->ndim(); ++i){
+        out << this->shape(i) << (i + 1 == this->ndim() ? "" : ", ");
+    }
+    out << "]" << std::endl;
+    out << "[data]:" << std::endl;
+
+    // Print data using runtime dtype and a centralized formatting helper
+    std::vector<int> dims = this->shape();
+    if (dims.size() == 0) {
+        // scalar case
+        if (!this->_data) {
+            out << "[data]: null" << std::endl;
+        } else {
+            size_t phys = 0; // scalar
+            size_t addressIndex = static_cast<size_t>(this->_offset) + phys;
+            const void* valPtr = static_cast<const void*>(this->_data.get() + addressIndex * this->elementSize());
+            out << yt::types::formatValue(valPtr, this->dtype());
+        }
+    } else {
+        std::function<void(std::vector<int>&, int, int)> printRecursive;
+        printRecursive = [&](std::vector<int>& indices, int currentDim, int indent) {
+            for (int i = 0; i < indent; ++i) out << "  ";
+            if (currentDim == static_cast<int>(dims.size()) - 1) {
+                out << "[";
+                for (int i = 0; i < dims[currentDim]; ++i) {
+                    indices[currentDim] = i;
+                    try {
+                        size_t phys = this->toIndex_(indices);
+                        size_t addressIndex = static_cast<size_t>(this->_offset) + phys;
+                        const void* valPtr = static_cast<const void*>(this->_data.get() + addressIndex * this->elementSize());
+                        out << yt::types::formatValue(valPtr, this->dtype());
+                    } catch (...) {
+                        out << "...";
+                    }
+                    if (i < dims[currentDim] - 1) out << " ";
+                }
+                out << "]";
+                if (dims.size() < 1) out << std::endl;
+            } else {
+                out << "[" << std::endl;
+                for (int i = 0; i < dims[currentDim]; ++i) {
+                    indices[currentDim] = i;
+                    printRecursive(indices, currentDim + 1, indent + 1);
+                    if (i < dims[currentDim] - 1) out << std::endl;
+                }
+                out << std::endl;
+                for (int i = 0; i < indent; ++i) out << "  ";
+                out << "]";
+            }
+        };
+        std::vector<int> indices(static_cast<int>(dims.size()), 0);
+        printRecursive(indices, 0, 0);
+    }
+
+    out << std::endl;
+    return out;
 }
 
 }//namespace yt

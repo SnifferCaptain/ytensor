@@ -253,9 +253,7 @@ static std::vector<std::string> simple_pre_tokenize(const std::string& text) {
     if (text.empty()) return tokens;
     
     size_t i = 0;
-    while (i < text.size()) {
-        size_t start = i;
-        
+    while (i < text.size()) {        
         // Handle contractions first
         if (i + 1 < text.size() && text[i] == '\'') {
             // Check for common contractions
@@ -472,7 +470,7 @@ std::string MiniTokenizer::decode(const std::vector<int64_t>& ids) const {
     std::string out; out.reserve(inter.size());
     size_t idx=0; while (idx < inter.size()) {
         size_t start = idx;
-        uint32_t cp = utf8_next(inter, idx);
+        utf8_next(inter, idx);
         std::string u = inter.substr(start, idx-start);
         auto it = unicode_to_byte_.find(u);
         if (it != unicode_to_byte_.end()) out.push_back(static_cast<char>(it->second));

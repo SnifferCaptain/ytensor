@@ -1,28 +1,26 @@
-
-template <typename T,int dim>
-class YTensor;
+#include "../include/ytensor_concepts.hpp"
 
 template <typename T, int dim0, int dim1>
-YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> yt::function::matmul(const YTensor<T, dim0>& a, const YTensor<T, dim1>& b) {
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> yt::function::matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b) {
     return a.matmul(b);
 }
 
 template <typename T, int dim>
-YTensor<T, dim> yt::function::relu(const YTensor<T, dim>& x, int order) {
+yt::YTensor<T, dim> yt::function::relu(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in YTensorFunction::relu()");
-    YTensor<T, dim> op;
+    yt::YTensor<T, dim> op;
     if(order == 0){
-        op = x.binaryOpTransform(0, [](const T& a, const T&) {
+        op = yt::kernel::broadcast([](const T& a) {
             return std::max(a, static_cast<T>(0));
-        });
+        }, x);
     }
     else if(order == 1){
-        op = x.binaryOpTransform(0, [](const T& a, const T&) {
+        op = yt::kernel::broadcast([](const T& a) {
             return static_cast<T>(a > 0);
-        });
+        }, x);
     }
     else if(order > 1){
-        // op = YTensor<T, dim>::zeros(x.shape());
+        // op = yt::YTensor<T, dim>::zeros(x.shape());
         throwNotSupport("yt::function::relu", "order > 1");
     }
     else{
@@ -31,32 +29,32 @@ YTensor<T, dim> yt::function::relu(const YTensor<T, dim>& x, int order) {
         for (int i = 2; i < -order + 2; i++){
             fact *= i;
         }
-        op = x.binaryOpTransform(0, [&pow, &fact](const T& a, const T&) {
+        op = yt::kernel::broadcast([&pow, &fact](const T& a) {
             if(a > 0){
                 return std::pow(a, pow) / static_cast<T>(fact);
             }
             else{
                 return static_cast<T>(0);
             }
-        });
+        }, x);
     }
 }
 
 template <typename T, int dim>
-YTensor<T, dim>& yt::function::relu_(YTensor<T, dim>& x, int order) {
+yt::YTensor<T, dim>& yt::function::relu_(yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in YTensorFunction::relu()");
     if(order == 0){
-        x.binaryOpTransformInplace(0, [](T& a, const T&) {
+        x.broadcastInplace([](T& a) {
             a = std::max(a, static_cast<T>(0));
         });
     }
     else if(order == 1){
-        x.binaryOpTransformInplace(0, [](T& a, const T&) {
+        x.broadcastInplace([](T& a) {
             a = static_cast<T>(a > 0);
         });
     }
     else if(order > 1){
-        x.binaryOpTransformInplace(0, [](T& a, const T&) {
+        x.broadcastInplace([](T& a) {
             a = static_cast<T>(0); // 这里可以根据需要修改
         });
     }
@@ -66,7 +64,7 @@ YTensor<T, dim>& yt::function::relu_(YTensor<T, dim>& x, int order) {
         for (int i = 2; i < -order + 2; i++){
             fact *= i;
         }
-        x.binaryOpTransformInplace(0, [&pow, &fact](T& a, const T&) {
+        x.broadcastInplace([&pow, &fact](T& a) {
             if(a > 0){
                 a = std::pow(a, pow) / static_cast<T>(fact);
             }
@@ -79,30 +77,30 @@ YTensor<T, dim>& yt::function::relu_(YTensor<T, dim>& x, int order) {
 }
 
 template <typename T, int dim>
-YTensor<T, dim> yt::function::exp(const YTensor<T, dim>& x, int) {
+yt::YTensor<T, dim> yt::function::exp(const yt::YTensor<T, dim>& x, int) {
     return x.unaryOpTransform(0, [](const T& a, const T&){
         return std::exp(a);
     });
 }
 
 template <typename T, int dim>
-YTensor<T, dim> yt::function::sigmoid(const YTensor<T, dim>& x, int order) {
+yt::YTensor<T, dim> yt::function::sigmoid(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in YTensorFunction::sigmoid()");
     if(order == 0){
-        return x.binaryOpTransform(static_cast<T>(0), [](const T& a, const T&) {
+        return yt::kernel::broadcast([](const T& a) {
             return static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-        });
+        }, x);
     }
     else if(order == 1){
-        return x.binaryOpTransform(static_cast<T>(0), [](const T& a, const T&) {
+        return yt::kernel::broadcast([](const T& a) {
             T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
             return sig * (static_cast<T>(1) - sig);
-        });
+        }, x);
     }
     else if(order == -1){
-        return x.binaryOpTransform(static_cast<T>(0), [](const T& a, const T&) {
+        return yt::kernel::broadcast([](const T& a) {
             return std::log(static_cast<T>(1) + std::exp(a));
-        });
+        }, x);
     }
     else{
         throwNotSupport("yt::function::sigmoid", "order != 0, 1, -1");
@@ -110,12 +108,12 @@ YTensor<T, dim> yt::function::sigmoid(const YTensor<T, dim>& x, int order) {
 }
 
 template<typename T, int dim>
-YTensor<T, dim> yt::function::softmax(const YTensor<T, dim>& x, int axis) {
+yt::YTensor<T, dim> yt::function::softmax(const yt::YTensor<T, dim>& x, int axis) {
     // 标准化 axis 索引
     axis = (axis % dim + dim) % dim;
     
     auto shape = x.shape();
-    YTensor<T, dim> output(shape);
+    yt::YTensor<T, dim> output(shape);
     
     // 快速路径：连续张量 - 使用优化实现（Flash Attention 风格）
     if (x.isContiguous() && output.isContiguous()) {
@@ -230,7 +228,7 @@ YTensor<T, dim> yt::function::softmax(const YTensor<T, dim>& x, int axis) {
 }
 
 template<typename T, int dim>
-YTensor<T, dim>& yt::function::softmax_(YTensor<T, dim>& x, int axis) {
+yt::YTensor<T, dim>& yt::function::softmax_(yt::YTensor<T, dim>& x, int axis) {
     // 标准化 axis 索引
     axis = (axis % dim + dim) % dim;
     
@@ -347,12 +345,12 @@ YTensor<T, dim>& yt::function::softmax_(YTensor<T, dim>& x, int axis) {
 }
 
 template<typename T, int dim>
-YTensor<T, dim> yt::function::scaledDotProductAttention(
-    YTensor<T, dim>& query,// [..., n0, c0]
-    YTensor<T, dim>& key,// [..., n1, c0]
-    YTensor<T, dim>& value,// [..., n1, c1]
+yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
+    yt::YTensor<T, dim>& query,// [..., n0, c0]
+    yt::YTensor<T, dim>& key,// [..., n1, c0]
+    yt::YTensor<T, dim>& value,// [..., n1, c1]
     T scale,
-    YTensor<T, 2>* mask,
+    yt::YTensor<T, 2>* mask,
     sdpaBackend backend
 ) {
     if(static_cast<T>(0.0) == scale){
@@ -391,9 +389,9 @@ YTensor<T, dim> yt::function::scaledDotProductAttention(
         // return op;
 
         auto score = yt::function::matmul(query, key.transpose());// [..., n0, n1]
-        score.binaryOpTransformInplace(scale, [](T& a, const T& b) {
+        score.broadcastInplace([](T& a, const T& b) {
             a *= b; // scale
-        });
+        }, scale);
         if(mask != nullptr){
             if(mask->shape(0) != score.shape(-2) || mask->shape(1) != score.shape(-1)){
                 throw std::invalid_argument("Mask shape must match the last two dimensions of the score tensor.");
@@ -406,7 +404,7 @@ YTensor<T, dim> yt::function::scaledDotProductAttention(
     }
     else{
         throwNotSupport("yt::function::scaledDotProductAttention", "other backends");
-        return YTensor<T, dim>();
+        return yt::YTensor<T, dim>();
     }
 }
 

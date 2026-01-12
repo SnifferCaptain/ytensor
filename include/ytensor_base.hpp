@@ -382,11 +382,11 @@ protected:
     std::vector<int> _stride;       // 步长 (以元素为单位)
     size_t _element_size = 0;       // 元素大小（字节）
     std::string _dtype;             // 用于序列化/反序列化友好名称
+
+    /// @brief cout接口
+    virtual std::ostream& _cout(std::ostream &os) const;
 };
 
 } // namespace yt
 
-#include "../src/ytensor_base.inl"
-#include "../src/ytensor_base_math.inl"
-#include "ytensor_io.hpp"
 

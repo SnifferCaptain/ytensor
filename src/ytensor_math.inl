@@ -10,311 +10,22 @@
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
 
-template <typename T, int dim> 
-template<int dim1, typename Func>
-YTensor<T, std::max(dim, dim1)> YTensor<T, dim>::binaryOpBroadcast(const YTensor<T, dim1> &other, Func&& func,
-    std::string opName, YTensor<T, std::max(dim, dim1)>* result, double flop) const {
-    // 1、填充this与other到相同的维度
-    auto thisShape = this->shape();
-    auto otherShape = other.shape();
-    auto thisStride = this->stride_();
-    auto otherStride = other.stride_();
-    constexpr int opdim = std::max(dim, dim1);
-    int thisLack = opdim - dim;
-    int otherLack = opdim - dim1;
-    bool equalShape = true;
-    if(thisLack > 0){
-        thisShape.insert(thisShape.begin(), thisLack, 1);
-        thisStride.insert(thisStride.begin(), thisLack, 0);
-        equalShape = false;
-    }
-    if(otherLack > 0){
-        otherShape.insert(otherShape.begin(), otherLack, 1);
-        otherStride.insert(otherStride.begin(), otherLack, 0);
-        equalShape = false;
-    }
-    // 2、检查维度是否匹配
-    std::vector<int> opShape(opdim);
-    for (int i = 0; i < opdim; ++i) {
-        if(thisShape[i] != otherShape[i]) {
-            if (thisShape[i] == 1) {
-                opShape[i] = otherShape[i];
-                thisStride[i] = 0;
-            } else if (otherShape[i] == 1) {
-                opShape[i] = thisShape[i];
-                otherStride[i] = 0;
-            } else {
-                throwShapeNotMatch(opName, otherShape);
-            }
-            equalShape = false;
-        } else {
-            opShape[i] = thisShape[i];
-        }
-    }
-    YTensor<T, opdim> op;
-    if(result != nullptr) {
-        if(!result->shapeMatch(opShape)){
-            result->reserve(opShape);
-        }
-        op.shallowCopyFrom(*result);
-    } else {
-        op.reserve(opShape);
-    }
-    
-    if constexpr (std::is_invocable_v<Func, const T&, const T&, T&>) {
-        if(equalShape && this->isContiguous() && other.isContiguous()) {
-            // fast path
-            int max = op.size();
-            const T* thisPtr = this->data_() + this->_offset;
-            const T* otherPtr = other.data_() + other._offset;
-            yt::kernel::parallelFor(0, max, [&](int index) {
-                func(thisPtr[index], otherPtr[index], op.atData(index));
-            }, flop);
-            return op;
-        }
-        // 3、定义并行计算的哈希函数
-        auto logicStride = op.stride();
-        auto kernel = [&thisStride, &otherStride, this, &other, &op, func, &logicStride](int index) {
-            int thisIndex = 0, otherIndex = 0;
-            #pragma omp simd reduction(+:thisIndex, otherIndex)
-            for (int i = 0; i < op.shapeSize(); ++i) {
-                int posi = (index / logicStride[i]) % op._shape[i];
-                thisIndex += posi * thisStride[i];
-                otherIndex += posi * otherStride[i];
-            }
-            return func(this->atData_(thisIndex), other.atData_(otherIndex), op.atData_(index));
-        };
-    
-        // 4、并行计算
-        int max = op.size();
-        yt::kernel::parallelFor(0, max, kernel, flop);
-    }
-    else{
-        if(equalShape && this->isContiguous() && other.isContiguous()) {
-            // fast path
-            int max = op.size();
-            T* opPtr = op.data_();
-            const T* thisPtr = this->data_() + this->_offset;
-            const T* otherPtr = other.data_() + other._offset;
-            yt::kernel::parallelFor(0, max, [&](int index) {
-                opPtr[index] = func(thisPtr[index], otherPtr[index]);
-            }, flop);
-            return op;
-        }
-        // 3、定义并行计算的哈希函数
-        auto logicStride = op.stride();
-        auto kernel = [&thisStride, &otherStride, this, &other, &op, func, &logicStride](int index) {
-            int thisIndex = 0, otherIndex = 0;
-            #pragma omp simd reduction(+:thisIndex, otherIndex)
-            for (int i = 0; i < op.shapeSize(); ++i) {
-                int posi = (index / logicStride[i]) % op._shape[i];
-                thisIndex += posi * thisStride[i];
-                otherIndex += posi * otherStride[i];
-            }
-            return func(this->atData_(thisIndex), other.atData_(otherIndex));
-        };
-    
-        // 4、并行计算
-        int max = op.size();
-        yt::kernel::parallelFor(0, max, [&](int index) {
-            op.atData_(index) = kernel(index);
-        }, flop);
-    }
-    return op;
-}
-
-template <typename T, int dim>
-template <int dim1, typename Func>
-YTensor<T, dim> &YTensor<T, dim>::binaryOpBroadcastInplace(const YTensor<T, dim1> &other, Func &&func, std::string opName, double flop){
-    // 1、填充this与other到相同的维度
-    auto thisShape = this->shape();
-    auto otherShape = other.shape();
-    auto otherStride = other.stride_();
-    constexpr int thisLack = std::max(dim, dim1) - dim;
-    constexpr int otherLack = std::max(dim, dim1) - dim1;
-    bool equalShape = true;
-    if(thisLack > 0){
-        throwShapeNotMatch(opName, thisShape);
-        equalShape = false;
-    }
-    if(otherLack > 0){
-        otherShape.insert(otherShape.begin(), otherLack, 1);
-        otherStride.insert(otherStride.begin(), otherLack, 0);
-        equalShape = false;
-    }
-
-    // 2、检查维度是否匹配
-    for (int i = 0; i < dim; ++i) {
-        if(thisShape[i] != otherShape[i]) {
-            if (otherShape[i] == 1) {
-                otherStride[i] = 0;
-            } else {
-                throwShapeNotMatch(opName, otherShape);
-            }
-            equalShape = false;
-        }
-    }
-
-    if(equalShape && this->isContiguous() && other.isContiguous()) {
-        // fast path
-        int max = this->size();
-        T* thisPtr = this->data_() + this->_offset;
-        const T* otherPtr = other.data_() + other._offset;
-        yt::kernel::parallelFor(0, max, [&](int index) {
-            func(thisPtr[index], otherPtr[index]);
-        }, flop);
-        return *this;
-    }
-
-    // 3、定义并行计算的哈希函数
-    auto logicStride = this->stride();
-    auto kernel = [&otherStride, &logicStride, this, &other, func](int index) -> void {
-        int thisIndex = 0, otherIndex = 0;
-        #pragma omp simd reduction(+:thisIndex, otherIndex)
-        for (int i = 0; i < dim; i++) {
-            int posi = (index / logicStride[i]) % _shape[i];
-            thisIndex += posi * _stride[i];
-            otherIndex += posi * otherStride[i];
-        }
-        func(this->atData_(thisIndex), other.atData_(otherIndex));
-        return;
-    };
-
-    // 3、并行计算
-    int max = this->size();
-    yt::kernel::parallelFor(0, max, kernel, flop);
-    return *this;
-}
-
 template <typename T, int dim>
 template <typename Func, typename... Args>
-YTensor<T, dim>& YTensor<T, dim>::broadcastInplace(Func&& func, Args&&... tensors) {
+yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&... tensors) {
     return yt::kernel::broadcastInplace(*this, std::forward<Func>(func), std::forward<Args>(tensors)...);
-}
-
-template<typename T, int dim> template<typename Func>
-YTensor<T, dim> YTensor<T, dim>::binaryOpTransform(const T& other, Func&& func,  YTensor<T, dim>* result, double flop) const{
-    YTensor<T, dim> op;
-    if(result != nullptr){
-        if(!result->shapeMatch(this->shape())){
-            result->reserve(this->shape());
-        }
-        op = *result;
-    } else {
-        op.reserve(this->shape());
-    }
-
-    // 连续性优化检测
-    auto mcView = this->mostContinuousView();
-
-    int thisSize = this->size();
-    if constexpr (std::is_invocable_v<Func, const T&, const T&, T&>){
-        if (mcView.isContiguous()) {
-            // fast path
-            int max = mcView.size();
-            T* thisPtr = mcView.data_() + mcView._offset;
-            T* opPtr = op.data_() + op._offset;
-            yt::kernel::parallelFor(0, max, [&](int index) {
-                func(thisPtr[index], other, opPtr[index]);
-            }, flop);
-            return op;
-        }
-        // 创建核函数
-        auto logicStride = this->stride();
-        auto kernel = [this, &other, func, &op, &logicStride](int index){
-            int thisIndex = 0;
-            #pragma omp simd reduction(+:thisIndex)
-            for (int i = 0; i < dim; i++) {
-                int posi = (index / logicStride[i]) % _shape[i];
-                thisIndex += posi * _stride[i];
-            }
-            return func(this->atData_(thisIndex), other, op.atData_(index));
-        };
-    
-        // 并行计算
-        yt::kernel::parallelFor(0, thisSize, kernel, flop);
-    }else{
-        if(mcView.isContiguous()) {
-            // fast path
-            int max = mcView.size();
-            T* thisPtr = mcView.data_() + mcView._offset;
-            T* opPtr = op.data_() + op._offset;
-            yt::kernel::parallelFor(0, max, [&](int index) {
-                opPtr[index] = func(thisPtr[index], other);
-            }, flop);
-            return op;
-        }
-        // 创建核函数
-        auto logicStride = this->stride();
-        auto kernel = [this, &other, func, &logicStride](int index){
-            int thisIndex = 0;
-            #pragma omp simd reduction(+:thisIndex)
-            for (int i = 0; i < dim; i++) {
-                int posi = (index / logicStride[i]) % _shape[i];
-                thisIndex += posi * _stride[i];
-            }
-            return func(this->atData_(thisIndex), other);
-        };
-
-        // 并行计算
-        yt::kernel::parallelFor(0, thisSize, [&](int i) {
-            op.atData_(i) = kernel(i);
-        }, flop);
-    }
-    return op;
-}
-
-template<typename T, int dim> template<typename Func>
-YTensor<T, dim>& YTensor<T, dim>::binaryOpTransformInplace(const T& other, Func&& func, double flop){
-    auto wrappedFunc = [func](T& a, const T& b) {
-        using ResultType = std::invoke_result_t<Func, T &, const T &>;
-        if constexpr (std::is_void_v<ResultType>) {
-            func(a, b);
-        } else {
-            a = func(a, b);
-        }
-    };
-    // 连续性优化检测
-    YTensor<T, dim> mcView = this->mostContinuousView();
-
-    if(mcView.isContiguous()) {
-        // fast path
-        int max = mcView.size();
-        T* thisPtr = mcView.data_() + mcView._offset;
-        yt::kernel::parallelFor(0, max, [&](int index) {
-            wrappedFunc(thisPtr[index], other);
-        }, flop);
-        return *this;
-    }
-    int thisSize = this->size();
-    // 对于非连续情况，使用遍历法
-    auto logicStride = stride();
-    auto kernel = [this, &other, &logicStride, wrappedFunc](int index) -> void{
-        int thisIndex = 0;
-        #pragma omp simd reduction(+:thisIndex)
-        for (int i = 0; i < dim; i++) {
-            int posi = (index / logicStride[i]) % _shape[i];
-            thisIndex += posi * _stride[i];
-        }
-        wrappedFunc(this->atData_(thisIndex), other);
-        return;
-    };
-    yt::kernel::parallelFor(0, thisSize, kernel, flop);
-    return *this;
 }
 
 // 运算符生成规则
 #define YT_YTENSOR_OPERATOR(OP, ENABLE_IF_T)                                                          \
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
-    YTensor<T, std::max(dim, dim1)>                                                                   \
-        YTensor<T, dim>::operator OP(const YTensor<T, dim1>& other) const {                           \
+    yt::YTensor<T, std::max(dim, dim1)>                                                                   \
+        yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                           \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return binaryOpBroadcast(                                                                 \
-                other, [](const T& a, const T& b) {                                                   \
-                    return a OP b;                                                                    \
-                },                                                                                    \
-                #OP);                                                                                 \
+            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+                return a OP b;                                                                        \
+            },*this, other);                                                                          \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
@@ -322,49 +33,41 @@ YTensor<T, dim>& YTensor<T, dim>::binaryOpTransformInplace(const T& other, Func&
                                                                                                       \
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
-    YTensor<T, std::max(dim, dim1)>& YTensor<T, dim>::operator OP##=(const YTensor<T, dim1>& other) { \
+    yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator OP##=(const yt::YTensor<T, dim1>& other) { \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
-            return binaryOpBroadcastInplace(                                                          \
-                other, [](T& a, const T& b) {                                                         \
-                    return a OP## = b;                                                                \
-                },                                                                                    \
-                "+=");                                                                                \
+            return this->broadcastInplace([](T& a, const T& b) {                                      \
+                return a OP## = b;                                                                    \
+            }, other);                                                                                \
         } else if constexpr (ENABLE_IF_T<T>) {                                                        \
-            return binaryOpBroadcastInplace(                                                          \
-                other, [](T& a, const T& b) {                                                         \
-                    return a = a OP b;                                                                \
-                },                                                                                    \
-                "+=");                                                                                \
+            return this->broadcastInplace([](T& a, const T& b) {                                      \
+                return a = a OP b;                                                                    \
+            }, other);                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), std::string(#OP) + "=");                        \
         }                                                                                             \
     }                                                                                                 \
                                                                                                       \
     template <typename T, int dim>                                                                    \
-    YTensor<T, dim> YTensor<T, dim>::operator OP(const T& other) const {                              \
+    yt::YTensor<T, dim> yt::YTensor<T, dim>::operator OP(const T& other) const {                              \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return binaryOpTransform(                                                                 \
-                other, [](const T& a, const T& b) {                                                   \
-                    return a OP b;                                                                    \
-                },                                                                                    \
-                nullptr);                                                                             \
+            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+                return a OP b;                                                                        \
+            }, *this, other);                                                                         \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
     }                                                                                                 \
                                                                                                       \
     template <typename T, int dim>                                                                    \
-    YTensor<T, dim>& YTensor<T, dim>::operator OP##=(const T& other) {                                \
+    yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator OP##=(const T& other) {                                \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
-            return binaryOpTransformInplace(                                                          \
-                other, [](T& a, const T& b) {                                                         \
-                    return a OP## = b;                                                                \
-                });                                                                                   \
+            return broadcastInplace([](T& a, const T& b) {                                            \
+                return a OP## = b;                                                                    \
+            }, other);                                                                                \
         } else if constexpr (ENABLE_IF_T<T>) {                                                        \
-            return binaryOpTransformInplace(                                                          \
-                other, [](T& a, const T& b) {                                                         \
-                    return a = a OP b;                                                                \
-                });                                                                                   \
+            return broadcastInplace([](T& a, const T& b) {                                            \
+                return a = a OP b;                                                                    \
+            }, other);                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), std::string(#OP) + "=");                        \
         }                                                                                             \
@@ -383,16 +86,16 @@ YT_YTENSOR_OPERATOR(^, yt::concepts::HAVE_XOR)
 #undef YT_YTENSOR_OPERATOR
 
 template <typename T, int dim> template<int dim1>
-YTensor<T, std::max(dim, dim1)> YTensor<T, dim>::operator%(const YTensor<T, dim1>& other) const {
+yt::YTensor<T, std::max(dim, dim1)> yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
     if constexpr (yt::concepts::HAVE_MOD<T>){
-        return binaryOpBroadcast(other, [](const T& a, const T& b) {
+        return yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
-        }, "%");
+        }, *this, other);
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return binaryOpBroadcast(other, [](const T& a, const T& b) {
+        return yt::kernel::broadcast([](const T& a, const T& b) {
             return std::fmod(a, b);
-        }, "%");
+        }, *this, other);
     }
     else {
         std::string typeName = typeid(T).name();
@@ -401,21 +104,21 @@ YTensor<T, std::max(dim, dim1)> YTensor<T, dim>::operator%(const YTensor<T, dim1
 }
 
 template <typename T, int dim> template<int dim1>
-YTensor<T, std::max(dim, dim1)>& YTensor<T, dim>::operator%=(const YTensor<T, dim1>& other){
+yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator%=(const yt::YTensor<T, dim1>& other){
     if constexpr (yt::concepts::HAVE_MOD_INPLACE<T>){
-        return binaryOpBroadcastInplace(other, [](T& a, const T& b) {
-            return a %= b;
-        }, "%=");
+        return broadcastInplace([](T& a, const T& b) {
+            a %= b;
+        }, other);
     }
     else if constexpr (yt::concepts::HAVE_MOD<T>) {
-        return binaryOpBroadcastInplace(other, [](T& a, const T& b) {
-            return a = a % b;
-        }, "%=");
+        return broadcastInplace([](T& a, const T& b) {
+            a = a % b;
+        }, other);
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return binaryOpBroadcastInplace(other, [](T& a, const T& b) {
-            return a = fmod(a, b);
-        }, "%=");
+        return broadcastInplace([](T& a, const T& b) {
+            a = fmod(a, b);
+        }, other);
     }
     else {
         std::string typeName = typeid(T).name();
@@ -424,16 +127,16 @@ YTensor<T, std::max(dim, dim1)>& YTensor<T, dim>::operator%=(const YTensor<T, di
 }
 
 template <typename T, int dim>
-YTensor<T, dim> YTensor<T, dim>::operator%(const T& other) const {
+yt::YTensor<T, dim> yt::YTensor<T, dim>::operator%(const T& other) const {
     if constexpr (yt::concepts::HAVE_MOD<T>){
-        return binaryOpTransform(other, [](const T& a, const T& b) {
+        return yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
-        });
+        }, *this, other);
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return binaryOpTransform(other, [](const T& a, const T& b) {
+        return yt::kernel::broadcast([](const T& a, const T& b) {
             return std::fmod(a, b);
-        });
+        }, *this, other);
     }
     else {
         std::string typeName = typeid(T).name();
@@ -442,21 +145,21 @@ YTensor<T, dim> YTensor<T, dim>::operator%(const T& other) const {
 }
 
 template <typename T, int dim>
-YTensor<T, dim>& YTensor<T, dim>::operator%=(const T& other){
+yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator%=(const T& other){
     if constexpr (yt::concepts::HAVE_MOD_INPLACE<T>){
-        return binaryOpTransformInplace(other, [](T& a, const T& b) {
-            return a %= b;
-        });
+        return broadcastInplace([](T& a, const T& b) {
+            a %= b;
+        }, other);
     }
     else if constexpr (yt::concepts::HAVE_MOD<T>) {
-        return binaryOpTransformInplace(other, [](T& a, const T& b) {
-            return a = a % b;
-        });
+        return broadcastInplace([](T& a, const T& b) {
+            a = a % b;
+        }, other);
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return binaryOpTransformInplace(other, [](T& a, const T& b) {
-            return a = fmod(a, b);
-        });
+        return broadcastInplace([](T& a, const T& b) {
+            a = fmod(a, b);
+        }, other);
     }
     else {
         std::string typeName = typeid(T).name();
@@ -465,10 +168,10 @@ YTensor<T, dim>& YTensor<T, dim>::operator%=(const T& other){
 }
 
 template <typename T, int dim>
-YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
+yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matView() const {
     // 将最后两个维度视作矩阵的视图，维度不足就填充1。
     static_assert(dim >= 1, "matView only support dim >= 1");
-    using MatType = YTensor<T, 2>;
+    using MatType = yt::YTensor<T, 2>;
     
     if constexpr (dim == 1){
         MatType mat;
@@ -476,10 +179,10 @@ YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
         mat._stride = std::vector<int>({0, this->_stride[0]});
         mat._offset = this->_offset;
         mat._element_size = sizeof(T);
-        mat._dtype = safeGetTypeName<T>();
+        mat._dtype = yt::types::getTypeName<T>();
         mat._data = this->_data;
         
-        YTensor<MatType, 1> op;
+        yt::YTensor<MatType, 1> op;
         op._shape = std::vector<int>({1});
         op._stride = std::vector<int>({0});
         op._offset = 0;
@@ -490,7 +193,7 @@ YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
         op._data = yt::kernel::makeSharedPlacement<MatType>(mat);
         return op;
     }else if constexpr (dim == 2){
-        YTensor<MatType, 1> op;
+        yt::YTensor<MatType, 1> op;
         op._shape = std::vector<int>({1});
         op._stride = std::vector<int>({0});
         op._offset = 0;
@@ -503,7 +206,7 @@ YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
         return op;
     }else{
         auto newShape = std::vector<int>(this->_shape.begin(), this->_shape.end() - 2);
-        YTensor<MatType, std::max(1, dim - 2)> op;
+        yt::YTensor<MatType, std::max(1, dim - 2)> op;
         op._shape = newShape;
         op._stride = op.stride();
         op._offset = 0;
@@ -523,7 +226,7 @@ YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
             mat._stride = {this->_stride[dim-2], this->_stride[dim-1]};
             mat._offset = this->offset_(coord);
             mat._element_size = sizeof(T);
-            mat._dtype = safeGetTypeName<T>();
+            mat._dtype = yt::types::getTypeName<T>();
             mat._data = this->_data;
             new (&dataptr[batchIdx]) MatType(mat);
         }
@@ -533,7 +236,9 @@ YTensor<YTensor<T, 2>, std::max(1, dim - 2)> YTensor<T, dim>::matView() const {
 }
 
 template <typename T, int dim> template<int dim1>
-YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul(const YTensor<T, dim1>& other)const{
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul(
+    const yt::YTensor<T, dim1>& other, 
+    yt::infos::MatmulBackend backend) const {
     static_assert(yt::concepts::HAVE_ADD<T> && yt::concepts::HAVE_MUL<T>, "Type must have add and mul in matmul");
     static_assert(dim >= 1 && dim1 >= 1, "matmul only support dim >= 1");
     int lw = this->shape(-1);
@@ -541,20 +246,39 @@ YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul(
     if(lw != rw){
         throwShapeNotMatch("matmul", other.shape());
     }
-    // 如果是数字，就用 eigen
-    if constexpr (std::is_arithmetic_v<T> && YT_USE_EIGEN) {
-        return matmul_eigen_backend(other);
-    }else{
+    
+    // 根据后端选择调用相应实现
+    if constexpr (std::is_arithmetic_v<T>) {
+        switch (backend) {
+#if YT_USE_AVX2
+            case yt::infos::MatmulBackend::AVX2:
+                if constexpr (std::is_same_v<T, float>) {
+                    return matmul_avx2_backend(other);
+                }
+                // 非float类型回退到Eigen或Naive
+                [[fallthrough]];
+#endif
+#if YT_USE_EIGEN
+            case yt::infos::MatmulBackend::Eigen:
+                return matmul_eigen_backend(other);
+#endif
+            case yt::infos::MatmulBackend::Naive:
+            default:
+                return matmul_zero_backend(other);
+        }
+    } else {
+        // 非算术类型只能使用naive实现
+        (void)backend;
         return matmul_zero_backend(other);
     }
 }
 
 template <typename T, int dim>
-YTensor<T, dim> YTensor<T, dim>::sum(int axis) const requires (dim > 1) {
+yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) {
     axis = (axis % dim + dim) % dim;
     auto newShape = this->shape();
     newShape[axis] = 1;
-    YTensor<T, dim> op(newShape);
+    yt::YTensor<T, dim> op(newShape);
     size_t max = op.size();
     if (max * _shape[axis] > yt::infos::minParOps){
         #pragma omp parallel for simd  proc_bind(close)
@@ -587,7 +311,7 @@ YTensor<T, dim> YTensor<T, dim>::sum(int axis) const requires (dim > 1) {
 }
 
 template <typename T, int dim>
-YTensor<T, dim> YTensor<T, dim>::sum(std::vector<int> axis) const requires (dim > 1) {
+yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requires (dim > 1) {
     for (auto& ax : axis) {
         ax = (ax % dim + dim) % dim;
     }
@@ -620,7 +344,7 @@ YTensor<T, dim> YTensor<T, dim>::sum(std::vector<int> axis) const requires (dim 
     }
     // 现在，offsets已经构建完成
 
-    YTensor<T, dim> op(newShape);
+    yt::YTensor<T, dim> op(newShape);
     size_t max = op.size();
     if (max > yt::infos::minParOps){
         #pragma omp parallel for simd  proc_bind(close)
@@ -651,11 +375,11 @@ YTensor<T, dim> YTensor<T, dim>::sum(std::vector<int> axis) const requires (dim 
 }
 
 template <typename T, int dim>
-T YTensor<T, dim>::sum(int) const requires (dim == 1) {
+T yt::YTensor<T, dim>::sum(int) const requires (dim == 1) {
     T sum = 0;
     int max = this->size();
     if (max * 1. > yt::infos::minParOps){
-        #pragma omp parallel for simd reduction(+:sum)  proc_bind(close)
+        #pragma omp parallel for reduction(+:sum) proc_bind(close)
         for (int i = 0; i < max; i++) {
             sum += this->at(i);
         }
@@ -669,12 +393,12 @@ T YTensor<T, dim>::sum(int) const requires (dim == 1) {
 }
 
 template <typename T, int dim>
-YTensor<T, dim> YTensor<T, dim>::mean(int axis) const requires (dim > 1) {
+yt::YTensor<T, dim> yt::YTensor<T, dim>::mean(int axis) const requires (dim > 1) {
     axis = (axis % dim + dim) % dim;
     auto newShape = this->shape();
     int axisLen = newShape[axis];
     newShape[axis] = 1;
-    YTensor<T, dim> op(newShape);
+    yt::YTensor<T, dim> op(newShape);
     int max = static_cast<int>(op.size());
         
     yt::kernel::parallelFor(0, max, [&](int i){
@@ -694,7 +418,7 @@ YTensor<T, dim> YTensor<T, dim>::mean(int axis) const requires (dim > 1) {
 }
 
 template <typename T, int dim>
-YTensor<T, dim> YTensor<T, dim>::mean(std::vector<int> axes) const requires (dim > 1) {
+yt::YTensor<T, dim> yt::YTensor<T, dim>::mean(std::vector<int> axes) const requires (dim > 1) {
     // 规范化轴并计算每个轴的长度
     std::vector<int> normalizedAxes;
     int totalN = 1;
@@ -705,7 +429,7 @@ YTensor<T, dim> YTensor<T, dim>::mean(std::vector<int> axes) const requires (dim
     }
     
     // 依次对每个轴使用mean(int axis)
-    YTensor<T, dim> result = *this;
+    yt::YTensor<T, dim> result = *this;
     for (int ax : normalizedAxes) {
         result = result.mean(ax);
     }
@@ -714,7 +438,7 @@ YTensor<T, dim> YTensor<T, dim>::mean(std::vector<int> axes) const requires (dim
 }
 
 template <typename T, int dim>
-T YTensor<T, dim>::mean(int) const requires (dim == 1) {
+T yt::YTensor<T, dim>::mean(int) const requires (dim == 1) {
     int n = this->size();
     if (n == 0) return static_cast<T>(0);
     
@@ -729,12 +453,12 @@ T YTensor<T, dim>::mean(int) const requires (dim == 1) {
 }
 
 template <typename T, int dim>
-std::pair<YTensor<T, dim>, YTensor<int, dim>> YTensor<T, dim>::max(int axis) const requires (dim > 1) {
+std::pair<yt::YTensor<T, dim>, yt::YTensor<int, dim>> yt::YTensor<T, dim>::max(int axis) const requires (dim > 1) {
     axis = (axis % dim + dim) % dim;
     auto newShape = this->shape();
     newShape[axis] = 1;
-    YTensor<T, dim> op(newShape);
-    YTensor<int, dim> opi(newShape);
+    yt::YTensor<T, dim> op(newShape);
+    yt::YTensor<int, dim> opi(newShape);
     int max = static_cast<int>(op.size());
     int axisSize = _shape[axis];
     
@@ -759,7 +483,7 @@ std::pair<YTensor<T, dim>, YTensor<int, dim>> YTensor<T, dim>::max(int axis) con
 }
 
 template <typename T, int dim>
-std::pair<YTensor<T, dim>, YTensor<int, dim>> YTensor<T, dim>::max(std::vector<int> axis) const requires (dim > 1) {
+std::pair<yt::YTensor<T, dim>, yt::YTensor<int, dim>> yt::YTensor<T, dim>::max(std::vector<int> axis) const requires (dim > 1) {
     for (auto& ax : axis) {
         ax = (ax % dim + dim) % dim;
     }
@@ -792,8 +516,8 @@ std::pair<YTensor<T, dim>, YTensor<int, dim>> YTensor<T, dim>::max(std::vector<i
     }
     // 现在，offsets已经构建完成
 
-    YTensor<T, dim> op(newShape);
-    YTensor<int, dim> opi(newShape);
+    yt::YTensor<T, dim> op(newShape);
+    yt::YTensor<int, dim> opi(newShape);
     int maxSize = static_cast<int>(op.size());
     int offsetsSize = static_cast<int>(offsets.size());
     
@@ -817,7 +541,7 @@ std::pair<YTensor<T, dim>, YTensor<int, dim>> YTensor<T, dim>::max(std::vector<i
 }
 
 template<typename T, int dim>
-std::pair<T, int> YTensor<T, dim>::max(int)const requires (dim == 1) { 
+std::pair<T, int> yt::YTensor<T, dim>::max(int)const requires (dim == 1) { 
     T maxer = this->at(0);
     int maxerIndex = 0;
     int max = this->size();
@@ -832,7 +556,7 @@ std::pair<T, int> YTensor<T, dim>::max(int)const requires (dim == 1) {
 }
 
 template <typename T, int dim> template<int dim1>
-YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_zero_backend(const YTensor<T, dim1>& other) const{
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_zero_backend(const yt::YTensor<T, dim1>& other) const{
     auto thisMatView = this->matView();
     auto otherMatView = other.matView();
     int ah = this->shape(-2);
@@ -847,10 +571,10 @@ YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_
         opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
         opShape.push_back(ah); opShape.push_back(bw);
     }
-    YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
     auto opMatView = op.matView();
-    auto mulop = thisMatView.binaryOpBroadcast(otherMatView, [&ah, &aw, &bw](const YTensor<T, 2>& a, const YTensor<T, 2>& b, YTensor<T, 2>& o) {
-        #pragma omp parallel for simd collapse(2) proc_bind(close)
+    opMatView.broadcastInplace([&ah, &aw, &bw](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        #pragma omp parallel for collapse(2) proc_bind(close)
         for (int y=0; y<ah; ++y) {
             for (int x=0; x<bw; ++x) {
                 T sum = 0;
@@ -862,7 +586,7 @@ YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_
             }
         }
         return;
-    }, "matmul_zero_backend", &opMatView, yt::infos::flopMatmul(ah, aw, bw));
+    },thisMatView, otherMatView);
     return op;
 }
 
@@ -870,9 +594,9 @@ YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_
 
 #if YT_USE_EIGEN
 template <typename T, int dim>
-YTensor<typename YTensor<T, dim>::EigenMatrixMap, std::max(1, dim - 2)> YTensor<T, dim>::matViewEigen() const requires (dim > 2) {
+yt::YTensor<typename yt::YTensor<T, dim>::EigenMatrixMap, std::max(1, dim - 2)> yt::YTensor<T, dim>::matViewEigen() const requires (dim > 2) {
     auto newShape = std::vector<int>(this->_shape.begin(), this->_shape.end() - 2);
-    YTensor<EigenMatrixMap, std::max(1, dim - 2)> op;
+    yt::YTensor<EigenMatrixMap, std::max(1, dim - 2)> op;
     op._shape = newShape;
     op._stride = op.stride();
     op._offset = 0;
@@ -896,7 +620,7 @@ YTensor<typename YTensor<T, dim>::EigenMatrixMap, std::max(1, dim - 2)> YTensor<
 }
 
 template <typename T, int dim> typename
-YTensor<T, dim>::EigenMatrixMap YTensor<T, dim>::matViewEigen() const requires (dim <= 2) {
+yt::YTensor<T, dim>::EigenMatrixMap yt::YTensor<T, dim>::matViewEigen() const requires (dim <= 2) {
     // 将最后两个维度视作矩阵的视图，维度不足就填充1。
     static_assert(dim >= 1, "matView only support dim >= 1");
     if constexpr (dim == 1){
@@ -913,12 +637,11 @@ YTensor<T, dim>::EigenMatrixMap YTensor<T, dim>::matViewEigen() const requires (
 }
 
 template <typename T, int dim> template<int dim1>
-YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_eigen_backend(const YTensor<T, dim1>& other) const{    
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_eigen_backend(const yt::YTensor<T, dim1>& other) const{    
     auto thisMatView = this->matView();
     auto otherMatView = other.matView();
     int ah = this->shape(-2);
-    int aw = this->shape(-1);
-    // int bh = other.shape(-2);
+    // int aw = this->shape(-1);
     int bw = other.shape(-1);
     std::vector<int> opShape;
     if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
@@ -928,15 +651,63 @@ YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> YTensor<T, dim>::matmul_
         opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
         opShape.push_back(ah); opShape.push_back(bw);
     }
-    YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
     auto opMatView = op.matView();
-    auto mulop = thisMatView.binaryOpBroadcast(otherMatView, [](const YTensor<T, 2>& a, const YTensor<T, 2>& b, YTensor<T, 2>& o) {
+    opMatView.broadcastInplace([](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
         auto mapA = a.matViewEigen();
         auto mapB = b.matViewEigen();
         auto mapO = o.matViewEigen();
         mapO.noalias() = mapA * mapB;
         return;
-    }, "matmul_eigen_backend", &opMatView, yt::infos::flopMatmul(ah, aw, bw));
+    }, thisMatView, otherMatView);
     return op;
 }
 #endif //YT_USE_EIGEN
+
+/////////////// AVX2 GEMM 后端 ///////////////
+#if YT_USE_AVX2
+#include "../include/kernel/gemm.hpp"
+
+template <typename T, int dim> template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_avx2_backend(const yt::YTensor<T, dim1>& other) const requires std::is_same_v<T, float> {    
+    auto thisMatView = this->matView();
+    auto otherMatView = other.matView();
+    int ah = this->shape(-2);
+    // int aw = this->shape(-1);
+    int bw = other.shape(-1);
+    std::vector<int> opShape;
+    if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
+        // 如果是二维矩阵，直接返回
+        opShape = {ah, bw};
+    } else {
+        opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        opShape.push_back(ah); opShape.push_back(bw);
+    }
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    auto opMatView = op.matView();
+
+    opMatView.broadcastInplace([](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        // 获取维度信息
+        int m = a.shape(0);
+        int k = a.shape(1);
+        int n = b.shape(1);
+        
+        // 获取步幅信息
+        auto aStride = a.stride_();
+        auto bStride = b.stride_();
+        auto oStride = o.stride_();
+        
+        // 调用 GEMM 内核，使用带步幅的 matmul 接口
+        // matmul 接口: A, B, C, m, n, k, rsa, csa, rsb, csb, rsc, csc
+        // 注意：使用 data() 而非 data_()，以正确考虑张量的 _offset
+        yt::kernel::gemm::matmul(
+            a.data(), b.data(), o.data(),
+            m, n, k,
+            static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
+            static_cast<int64_t>(bStride[0]), static_cast<int64_t>(bStride[1]),
+            static_cast<int64_t>(oStride[0]), static_cast<int64_t>(oStride[1])
+        );
+    }, thisMatView, otherMatView);
+    return op;
+}
+#endif // YT_USE_AVX2

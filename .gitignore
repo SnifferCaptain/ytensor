@@ -1,8 +1,13 @@
-.cache
-.vscode
-.clangd
-build
 legacy
 main.cpp
 CMakeLists.txt
 _codeql*
+!src
+!include
+!single-header
+!example
+.cache
+.vscode
+.clangd
+__pycache__
+build
