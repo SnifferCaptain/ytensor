@@ -1,0 +1,483 @@
+# 广播操作
+
+本文档介绍 YTensor 的广播（Broadcasting）功能。
+
+---
+
+## 概述
+
+广播是一种强大的机制，允许不同形状的张量进行元素级操作，而无需显式地复制数据。YTensor 提供了灵活的广播接口，支持：
+
+- **自动广播**：运算符（`+`, `-`, `*` 等）自动处理广播
+- **原地广播**：`broadcastInplace()` 方法原地修改当前张量
+- **自定义函数广播**：`yt::kernel::broadcast()` 函数应用自定义操作
+
+---
+
+## broadcastInplace()
+
+原地广播操作，将自定义函数应用到当前张量和其他张量/标量上。
+
+### 函数签名
+
+```cpp
+template <typename Func, typename... Args>
+YTensor<T, dim>& broadcastInplace(Func&& func, Args&&... tensors);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `func` | `Func&&` | 操作函数，签名为 `void func(T&, const T&, ...)` 或 `T func(T&, const T&, ...)` |
+| `tensors` | `Args&&...` | 可变数量的输入张量或标量 |
+
+### 函数签名要求
+
+`func` 的第一个参数必须是 `T&`（当前张量元素的引用），后续参数对应 `tensors`：
+
+```cpp
+// 二元操作
+void func(T& a, const T& b);         // a 是当前张量，b 是 tensors[0]
+
+// 三元操作
+void func(T& a, const T& b, const T& c);  // a 是当前张量，b 是 tensors[0]，c 是 tensors[1]
+
+// N元操作
+void func(T& a, const T& arg1, const T& arg2, ..., const T& argN);
+```
+
+### 核心功能描述
+
+原地对当前张量应用自定义函数，支持自动广播。
+*   将 `tensors` 中的张量广播到当前张量的形状。
+*   `func` 会被逐元素调用。
+*   **要求**：当前张量的形状必须能够容纳广播后的结果（即等于广播后的形状）。
+
+### 返回值
+
+返回 `YTensor<T, dim>&`，即当前张量的引用（支持链式调用）。
+
+### 使用示例
+
+#### 二元原地操作
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 5);
+    auto b = YTensor<float, 1>::ones(5);
+    
+    // 原地加法：a[i][j] += b[j]
+    a.broadcastInplace([](float& x, const float& y) {
+        x += y;
+    }, b);
+    
+    // 等价于：a += b;
+    
+    return 0;
+}
+```
+
+#### 三元原地操作
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);
+auto b = YTensor<float, 2>::ones(3, 5);
+auto c = YTensor<float, 1>::ones(5);
+
+// a[i][j] = a[i][j] * b[i][j] + c[j]
+a.broadcastInplace([](float& x, const float& y, const float& z) {
+    x = x * y + z;
+}, b, c);
+```
+
+#### 标量参数
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);
+
+// a[i][j] = a[i][j] * 2.0f + 1.0f
+a.broadcastInplace([](float& x, const float& scale, const float& bias) {
+    x = x * scale + bias;
+}, 2.0f, 1.0f);
+```
+
+#### 复杂操作
+
+```cpp
+auto a = YTensor<float, 2>::zeros(3, 5);
+auto weights = YTensor<float, 2>::randn(3, 5);
+auto bias = YTensor<float, 1>::ones(5);
+
+// Fused multiply-add: a = weights * input + bias
+float input = 0.5f;
+a.broadcastInplace([input](float& out, const float& w, const float& b) {
+    out = w * input + b;
+}, weights, bias);
+```
+
+---
+
+## yt::kernel::broadcast()
+
+非原地广播操作，创建新张量存储结果。
+
+### 函数签名
+
+```cpp
+template <typename Func, typename... Args>
+auto broadcast(Func&& func, Args&&... tensors);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `func` | `Func&&` | 操作函数，签名为 `R func(const T&, const T&, ...)` |
+| `tensors` | `Args&&...` | 可变数量的输入张量或标量 |
+
+### 函数签名要求
+
+`func` 的所有参数都是 `const T&`（只读），返回值类型 `R` 决定结果张量的元素类型：
+
+```cpp
+// 二元操作
+float func(const float& a, const float& b) {
+    return a + b;
+}
+
+// 三元操作
+double func(const float& a, const float& b, const float& c) {
+    return static_cast<double>(a) * b + c;  // 返回类型是 double
+}
+```
+
+### 核心功能描述
+
+对输入张量应用自定义函数，返回一个新的张量。
+*   自动广播所有输入张量到公共形状。
+*   创建新的结果张量，不修改输入张量。
+*   结果类型由 `func` 的返回类型推断。
+
+### 返回值
+
+返回 `YTensor<R, dim>`，其中：
+- `R` 是 `func` 的返回类型
+- `dim` 是输入张量中的最大维度
+
+### 使用示例
+
+#### 基本用法
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 5);
+    auto b = YTensor<float, 1>::ones(5);
+    
+    // 非原地加法
+    auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+        return x + y;
+    }, a, b);
+    
+    // c 是新张量，a 和 b 不变
+    
+    return 0;
+}
+```
+
+#### 类型转换
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>::ones(3, 3);
+
+// 返回 YTensor<double, 2>
+auto c = yt::kernel::broadcast([](const float& x, const float& y) -> double {
+    return static_cast<double>(x) * y;
+}, a, b);
+```
+
+#### 多输入操作
+
+```cpp
+auto a = YTensor<float, 2>(3, 5);
+auto b = YTensor<float, 2>(3, 5);
+auto c = YTensor<float, 1>(5);
+
+// 三输入操作
+auto result = yt::kernel::broadcast(
+    [](const float& x, const float& y, const float& z) {
+        return x * y + z;
+    }, a, b, c);
+```
+
+---
+
+## 广播规则
+
+广播遵循 NumPy 的规则，从**最右侧维度**开始逐一比较：
+
+### 兼容条件
+
+两个维度兼容，当且仅当：
+1. 维度大小相等，或
+2. 其中一个维度大小为 1，或
+3. 其中一个张量缺少该维度（视为 1）
+
+### 示例
+
+```cpp
+// ✅ 兼容
+(3, 5) + (5,)       → (3, 5)
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)
+(2, 3, 4) + (3, 4)  → (2, 3, 4)
+(1, 5) + (3, 5)     → (3, 5)
+
+// ❌ 不兼容
+(3, 5) + (3, 4)     → 错误：维度5和4不兼容
+(3, 5) + (4,)       → 错误：维度5和4不兼容
+```
+
+---
+
+## 性能优化
+
+### 连续内存优化
+
+当所有张量都是连续存储且形状相同时，broadcast 使用快速路径：
+
+```cpp
+auto a = YTensor<float, 2>::ones(1000, 1000);  // 连续
+auto b = YTensor<float, 2>::ones(1000, 1000);  // 连续
+
+// 快速路径：直接指针访问
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+### 非连续内存
+
+对于非连续张量（如切片或转置），broadcast 使用步长计算：
+
+```cpp
+auto a = YTensor<float, 2>::ones(1000, 1000);
+auto b = a.transpose(0, 1);  // 非连续
+
+// 慢速路径：使用步长索引
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+### 并行化
+
+broadcast 使用 `yt::kernel::parallelFor` 自动并行化：
+
+```cpp
+// 大张量自动并行
+auto a = YTensor<float, 2>::randn(10000, 10000);
+auto b = YTensor<float, 2>::randn(10000, 10000);
+
+// 多线程执行
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x * y + 0.5f;
+}, a, b);
+```
+
+---
+
+## broadcastInplace 的限制
+
+### 形状要求
+
+`broadcastInplace` 要求**目标张量的形状必须等于广播后的形状**：
+
+```cpp
+auto a = YTensor<float, 2>(3, 5);  // 形状 (3, 5)
+auto b = YTensor<float, 1>(5);     // 形状 (5,)
+
+// ✅ 正确：广播后形状是 (3, 5)，与 a 相同
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ❌ 错误：b 的形状是 (5,)，广播后是 (3, 5)
+// b.broadcastInplace([](float& x, const float& y) {
+//     x += y;
+// }, a);  // 运行时错误！
+```
+
+### 错误示例
+
+```cpp
+auto a = YTensor<float, 2>(3, 1);  // 形状 (3, 1)
+auto b = YTensor<float, 2>(3, 5);  // 形状 (3, 5)
+
+// ❌ 运行时错误：a 的形状 (3, 1) != 广播后形状 (3, 5)
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// 错误信息：
+// "broadcastInplace: target tensor shape must match broadcast shape"
+```
+
+---
+
+## 实现细节
+
+### 最大子元素比率
+
+```cpp
+static constexpr double MAX_SUBELEMENT_RATIO = 2.5;
+```
+
+当广播操作的"有效元素数"与"实际访问元素数"的比率超过 2.5 时，broadcast 会切换遍历策略：
+
+- **比率 < 2.5**: 使用布尔掩码遍历底层存储（更快）
+- **比率 ≥ 2.5**: 使用步长遍历法（更节省内存）
+
+### 编译时优化
+
+broadcast 在编译时计算张量数量，使用模板递归展开内层循环：
+
+```cpp
+template<size_t N, size_t I = 0>
+struct IndexAccumulator {
+    // 编译期展开N次累加
+    template<typename StridesArray, typename IndicesArray>
+    static inline void accumulate(/*...*/) {
+        indices[I] += posi * strides[I][dimIdx];
+        if constexpr (I + 1 < N) {
+            IndexAccumulator<N, I + 1>::accumulate(/*...*/);
+        }
+    }
+};
+```
+
+---
+
+## 注意事项
+
+:::warning
+**内存共享风险**
+
+`broadcastInplace` 修改的是原张量，所有共享内存的视图都会受影响：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a;  // b 和 a 共享内存
+
+a.broadcastInplace([](float& x, const float& y) {
+    x *= y;
+}, 2.0f);
+
+// a 和 b 都变化了！
+std::cout << b.at(0, 0);  // 输出 2.0
+```
+:::
+
+:::warning
+**函数签名错误**
+
+函数签名必须严格匹配：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+
+// ❌ 错误：第一个参数必须是 T&（引用）
+a.broadcastInplace([](float x, const float& y) {  // 缺少 &
+    x += y;
+}, 1.0f);
+// 编译错误或无效果！
+
+// ✅ 正确
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, 1.0f);
+```
+:::
+
+:::info
+**类型推断**
+
+`broadcast` 从 `func` 的返回类型推断结果张量的元素类型：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>::ones(3, 3);
+
+// 返回 YTensor<int, 2>
+auto c = yt::kernel::broadcast([](const float& x, const float& y) -> int {
+    return static_cast<int>(x + y);
+}, a, b);
+```
+:::
+
+---
+
+## 使用建议
+
+### 1. 优先使用运算符
+
+对于简单操作，使用运算符更简洁：
+
+```cpp
+// ❌ 繁琐
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ✅ 简洁
+a += b;
+```
+
+### 2. 复杂操作使用 broadcast
+
+对于复杂的融合操作，使用 `broadcastInplace` 更高效：
+
+```cpp
+// ❌ 低效：多次遍历
+a = a * weights + bias;
+a = a.relu();
+
+// ✅ 高效：单次遍历
+a.broadcastInplace([](float& x, const float& w, const float& b) {
+    x = x * w + b;
+    if (x < 0) x = 0;  // relu
+}, weights, bias);
+```
+
+### 3. 避免不必要的原地操作
+
+如果需要保留原始数据，使用非原地版本：
+
+```cpp
+// ❌ 错误：a 被修改了
+auto result = a;
+result.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ✅ 正确：a 不变
+auto result = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+---
+
+## 相关内容
+
+- [算术运算](./arithmetic.mdx) - 使用运算符的广播
+- [广播指南](../../guides/broadcast_guide.mdx) - 广播规则详解
+- [性能优化](../../guides/performance_tips.mdx) - 广播性能优化技巧

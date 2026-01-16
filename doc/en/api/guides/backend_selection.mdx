@@ -1,0 +1,117 @@
+# Backend Selection
+
+This guide helps you choose the most suitable computation backend.
+
+## Available Backends
+
+YTensor's matrix multiplication supports several backends:
+
+| Backend | Enum Value | Dependency | Use Case |
+| --- | --- | --- | --- |
+| Naive | `MatmulBackend::Naive` | None | Compatibility priority, debugging |
+| Eigen | `MatmulBackend::Eigen` | Eigen3 | General high-performance computing |
+| AVX2 | `MatmulBackend::AVX2` | AVX2 + FMA CPU | Extreme performance, **layout insensitive** |
+
+---
+
+## Automatic Selection
+
+The default backend is automatically selected based on compile-time macros, following this priority: **AVX2 > Eigen > Naive**.
+
+```cpp
+// Definition in ytensor_infos.hpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+---
+
+## Compilation Configuration
+
+### Enabling Eigen
+
+```cmake
+# CMakeLists.txt
+find_package(Eigen3 REQUIRED)
+target_link_libraries(your_target Eigen3::Eigen)
+```
+
+Eigen will be automatically detected:
+```cpp
+#if __has_include(<Eigen/Core>)
+    #define YT_USE_EIGEN 1
+#endif
+```
+
+### Enabling AVX2
+
+```cmake
+# CMakeLists.txt
+target_compile_options(your_target PRIVATE -mavx2 -mfma)
+```
+
+Alternatively, define it manually:
+```cpp
+#define YT_USE_AVX2 1
+#include "ytensor.hpp"
+```
+
+---
+
+## Performance Comparison
+
+Based on typical matrix multiplication (1000×1000):
+
+| Backend | Relative Performance | Description |
+| --- | --- | --- |
+| Naive | ~20 GFlops | Baseline, triple-loop implementation |
+| Eigen | ~75 GFlops | Highly optimized, influenced by layout |
+| AVX2 | ~95 GFlops | Hand-written SIMD, **layout insensitive** |
+
+> Test environment: R7-7735H, matrix size mnk=512, single-core.
+
+**Note**: Actual performance depends on matrix size, CPU model, compilation optimizations, and other factors.
+
+---
+
+## Selection Recommendations
+
+| Scenario | Recommended Backend | Reason |
+| --- | --- | --- |
+| Development & Debugging | Naive | No dependencies, easy to debug |
+| General Production | Eigen | Stable, efficient, widely supported |
+| Extreme Performance | AVX2 | Highest performance (requires CPU support) |
+| Cross-platform | Eigen | Excellent cross-platform compatibility |
+
+---
+
+## Checking the Current Backend
+
+```cpp
+#include "ytensor_infos.hpp"
+
+void check_backend() {
+    #if YT_USE_AVX2
+        std::cout << "Using AVX2 backend" << std::endl;
+    #elif YT_USE_EIGEN
+        std::cout << "Using Eigen backend" << std::endl;
+    #else
+        std::cout << "Using Naive backend" << std::endl;
+    #endif
+}
+```
+
+---
+
+## Related Content
+
+- [Backend System](../infos/backend.mdx) - Detailed explanation of the MatmulBackend enum
+- [Performance Optimization](./performance_tips.mdx) - Other optimization techniques
+- [Matrix Multiplication](../YTensorBase/math/matmul.mdx) - matmul API

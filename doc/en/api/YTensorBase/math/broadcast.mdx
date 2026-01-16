@@ -1,0 +1,180 @@
+# Broadcasting Operations
+
+This document describes the broadcasting mechanism of the `YTensorBase` class, specifically the `broadcastInplace` method.
+
+## Overview
+
+`broadcastInplace` is the core broadcasting function template for `YTensorBase`, supporting N-ary tensor/scalar operations.
+
+---
+
+## Constants
+
+```cpp
+static constexpr double MAX_SUBELEMENT_RATIO = 2.5;
+```
+
+When the sub-element ratio exceeds this threshold, the system uses a stride-based traversal method instead of boolean mask traversal for efficiency.
+
+---
+
+## Function Signature
+
+```cpp
+template<typename Func, typename... Args>
+YTensorBase& broadcastInplace(Func&& func, Args&&... tensors);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `func` | `Func&&` | The operation function. Its signature should be `void func(DType&, const DType&, ...)` (return value is ignored). |
+| `tensors` | `Args&&...` | Input tensors (`YTensorBase`) or scalar values. |
+
+### Core Function Description
+
+The core broadcasting function template for `YTensorBase`, supporting N-ary tensor/scalar operations.
+*   Modifies the current tensor `*this` in-place.
+*   Automatically broadcasts input arguments to the shape of `*this`.
+*   `func` is called element-wise.
+
+### Return Value
+
+- **Type**: `YTensorBase&`
+- **Description**: Returns a reference to the current object (`*this`), allowing for method chaining.
+
+### Type Inference
+
+The `DType` is automatically inferred from the type of the first argument of `func` (with references and `const` removed).
+
+---
+
+## Usage Examples
+
+### Basic Usage
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+    YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+    
+    // Custom broadcasting operation: a = a + b * 2
+    a.broadcastInplace([](float& dst, float src) {
+        dst = dst + src * 2.0f;
+    }, b);
+}
+```
+
+### N-ary Operations
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+YTensorBase c = YTensorBase::ones({4}, "float32");
+
+// Ternary operation: a = a + b * c (c will be broadcast)
+a.broadcastInplace([](float& dst, float b_val, float c_val) {
+    dst = dst + b_val * c_val;
+}, b, c);
+```
+
+### Mixing Tensors and Scalars
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+float scale = 2.5f;
+
+// Mixed operation: a = a + b * scale
+a.broadcastInplace([](float& dst, float b_val, float s) {
+    dst = dst + b_val * s;
+}, b, scale);
+```
+
+---
+
+## Internal Implementation
+
+### Fast Path
+
+When all tensors are **contiguous** and have the **same shape**, the system uses an optimized linear traversal:
+
+```cpp
+if (allContiguous && allEqualShape) {
+    // Direct pointer access; no coordinate conversion overhead
+    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+        func(thisDataPtr[index], getValue(tensors, index)...);
+    });
+}
+```
+
+### Slow Path
+
+When tensors are non-contiguous or have different shapes, broadcast indices are calculated:
+
+```cpp
+else {
+    // Compute broadcast strides and indices
+    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+        auto indices = yt::kernel::computeBroadcastIndices(...);
+        func(thisDataPtr[indices[0]], getValue(tensors)...);
+    });
+}
+```
+
+---
+
+## Broadcasting Rules
+
+Broadcasting follows NumPy conventions, comparing dimensions from the rightmost side:
+
+1. Dims match if they are equal or if one of them is 1.
+2. Missing dimensions are treated as having a size of 1.
+3. The shape of `this` must match the resulting shape of the broadcast operation (in-place operations cannot expand `this`).
+
+### Validation Requirements
+
+```cpp
+// Validate that 'this' shape is compatible with the broadcast result shape
+if (broadcastShape.size() != thisDim ||
+    thisShape != broadcastShape) {
+    throw std::runtime_error("broadcastInplace: shape mismatch");
+}
+```
+
+---
+
+## Performance Optimizations
+
+- **OpenMP Parallelization**: Automatically parallelized via `yt::kernel::parallelFor`.
+- **Contiguous Layout Optimization**: Skips coordinate calculations for a direct linear pass when possible.
+- **Compile-time Optimizations**: Uses `std::array` and other compile-time structures to minimize heap allocations.
+
+---
+
+## Notes
+
+:::warning
+**In-place Limitation**
+
+`broadcastInplace` is an in-place operation, meaning the shape of the `this` tensor **will not change**. If the broadcasted shape of the inputs is larger than the shape of `this`, an exception will be thrown.
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+
+// ❌ Error: Shape {3} of 'a' cannot hold the broadcast result {3, 4}
+// a.broadcastInplace([](float& a, float b) { a += b; }, b);
+```
+:::
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Operator overloads (implemented using `broadcastInplace`).
+- [Matrix Multiplication](./matmul.mdx) - Using `matmul`.
+- [Reduction Operations](./reduction.mdx) - Methods like `sum` and `max`.

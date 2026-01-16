@@ -1,0 +1,402 @@
+# Constructors
+
+This document provides a detailed overview of all constructors for the `YTensor<T, dim>` class and how to use them.
+
+## Default Constructor
+
+### Function Signature
+
+```cpp
+YTensor();
+```
+
+### Core Function Description
+
+Creates an empty tensor with all dimension sizes set to 0 and no data memory allocated.
+
+### Return Value
+
+- Returns an empty tensor of shape `[0, 0, ..., 0]` (with `dim` zeros).
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create an empty tensor
+    yt::YTensor<float, 3> empty;
+    
+    // Check its shape and size
+    std::cout << empty.shape()[0] << std::endl;  // Output: 0
+    std::cout << empty.size() << std::endl;      // Output: 0
+    
+    // Space can be allocated later using reserve()
+    empty.reserve(2, 3, 4);
+    std::cout << empty.size() << std::endl;      // Output: 24
+}
+```
+
+### Notes
+
+:::warning
+An empty tensor cannot have its elements accessed directly. You must first use the `reserve()` method to allocate space.
+:::
+
+---
+
+## Shape Constructor (vector version)
+
+### Function Signature
+
+```cpp
+YTensor(const std::vector<int> shape);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | A vector specifying the tensor's shape. Its length must equal `dim`. |
+
+### Core Function Description
+
+Creates a tensor using a `std::vector<int>` to specify its shape. This allocates memory and performs default initialization (elements have undefined values).
+
+### Return Value
+
+- Returns a tensor of the specified shape with default-initialized elements.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a 3x4x5 tensor using a vector
+    std::vector<int> shape = {3, 4, 5};
+    yt::YTensor<float, 3> tensor(shape);
+    
+    std::cout << tensor.size() << std::endl;    // Output: 60
+    std::cout << tensor.shape(0) << std::endl;  // Output: 3
+}
+```
+
+### Exceptions
+
+- If `shape.size() != dim`, a `std::invalid_argument` exception is thrown.
+
+```cpp
+std::vector<int> wrong_shape = {3, 4};  // Only 2 elements
+// yt::YTensor<float, 3> t(wrong_shape);  // Throws an exception!
+```
+
+---
+
+## Shape Constructor (Variadic Version)
+
+### Function Signature
+
+```cpp
+template <typename... Args>
+YTensor(Args... args);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `args` | `Args...` | Variadic arguments, where each argument represents the size of a single dimension. |
+
+### Core Function Description
+
+Creates a tensor by specifying sizes for each dimension as variadic arguments. The number of arguments must equal `dim`. This is the most common way to construct a tensor.
+
+### Compile-time Check
+
+```cpp
+static_assert(sizeof...(args) == dim, "Number of arguments must match the dimension");
+```
+
+The argument count is checked at compile-time; a mismatch results in a compilation error.
+
+### Return Value
+
+- Returns a tensor of the specified shape with default-initialized elements.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a 3x4 2D tensor (most common use case)
+    yt::YTensor<float, 2> matrix(3, 4);
+    
+    // Create a 2x3x4x5 4D tensor
+    yt::YTensor<double, 4> tensor4d(2, 3, 4, 5);
+    
+    // Create a 1D vector
+    yt::YTensor<int, 1> vector(10);
+    
+    std::cout << matrix.size() << std::endl;   // Output: 12
+    std::cout << tensor4d.size() << std::endl; // Output: 120
+    std::cout << vector.size() << std::endl;   // Output: 10
+}
+```
+
+### Compilation Error Example
+
+```cpp
+// Error: Argument count mismatch
+// yt::YTensor<float, 3> t(3, 4);  // Compile error! Requires 3 arguments
+// yt::YTensor<float, 2> m(3, 4, 5);  // Compile error! Requires 2 arguments
+```
+
+---
+
+## Shape Constructor (Initializer List Version)
+
+### Function Signature
+
+```cpp
+YTensor(std::initializer_list<int> list);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `list` | `std::initializer_list<int>` | An initializer list. Its length must equal `dim`. |
+
+### Core Function Description
+
+Creates a tensor using initializer-list syntax, providing a convenience similar to array initialization.
+
+### Return Value
+
+- Returns a tensor of the specified shape with default-initialized elements.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a tensor using an initializer list
+    yt::YTensor<float, 3> tensor = {3, 4, 5};
+    
+    // Braces can also be used directly
+    yt::YTensor<double, 2> matrix{10, 20};
+    
+    std::cout << tensor.size() << std::endl;  // Output: 60
+    std::cout << matrix.size() << std::endl;  // Output: 200
+}
+```
+
+### Exceptions
+
+- If `list.size() != dim`, a `std::invalid_argument` exception is thrown.
+
+---
+
+## Construction from YTensorBase (Explicit Conversion)
+
+### Function Signature
+
+```cpp
+explicit YTensor(const YTensorBase& base);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `base` | `const YTensorBase&` | Source `YTensorBase` object. |
+
+### Core Function Description
+
+Constructs a `YTensor<T, dim>` from a `YTensorBase` object. This is an **explicit constructor** used for downcasting.
+
+### Important Note
+
+:::danger
+**User Responsibility**: It is the user's responsibility to ensure that the type and dimensions of the source `YTensorBase` match the target `YTensor<T, dim>` exactly:
+- The element type must be `T`.
+- The number of dimensions must be `dim`.
+
+Otherwise, behavior is undefined, potentially leading to crashes or data corruption!
+:::
+
+### Return Value
+
+- Returns a `YTensor<T, dim>` object that shares data with the source tensor (shallow copy).
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a YTensorBase
+    yt::YTensorBase base({3, 4}, "float32");
+    
+    // Explicit conversion to YTensor (type and dimensions must match)
+    yt::YTensor<float, 2> tensor(base);
+    
+    std::cout << tensor.size() << std::endl;  // Output: 12
+    
+    // Modifying 'tensor' also affects 'base' (shared memory)
+    tensor.at(0, 0) = 10.0f;
+}
+```
+
+### Exceptions
+
+- If `base.ndim() != dim`, a `std::invalid_argument` exception is thrown.
+- If types do not match, no exception is thrown, but the behavior is undefined.
+
+### Safety Recommendations
+
+```cpp
+// Safe way to convert
+yt::YTensorBase base({3, 4}, "float32");
+
+// 1. Check dimensions
+if (base.ndim() == 2) {
+    // 2. Check type
+    if (base.dtype() == "float32") {
+        yt::YTensor<float, 2> tensor(base);  // Safe
+        // Use tensor...
+    }
+}
+```
+
+---
+
+## Copy Constructor
+
+### Function Signature
+
+```cpp
+YTensor(const YTensor& other);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `other` | `const YTensor&` | Source tensor. |
+
+### Core Function Description
+
+The copy constructor performs a **shallow copy** (shares the underlying data).
+
+### Shallow Copy Behavior
+
+- The new tensor and the source tensor share the same data pointer.
+- Modifying elements in one tensor affects the other.
+- Memory is managed via `std::shared_ptr`, using automatic reference counting.
+
+### Return Value
+
+- Returns a new tensor that shares data with the source tensor.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    a.fill(1.0f);
+    
+    // Shallow copy
+    yt::YTensor<float, 2> b(a);
+    
+    // Modifying 'b' affects 'a'
+    b.at(0, 0) = 10.0f;
+    std::cout << a.at(0, 0) << std::endl;  // Output: 10.0
+    
+    // For a deep copy, use clone()
+    yt::YTensor<float, 2> c = a.clone();
+    c.at(0, 0) = 20.0f;
+    std::cout << a.at(0, 0) << std::endl;  // Output: 10.0 (unaffected)
+}
+```
+
+### Notes
+
+:::info
+**Memory Sharing**
+
+By default, the copy constructor and assignment operator perform shallow copies. If you need an independent duplicate, use the `clone()` method.
+:::
+
+---
+
+## Constructor Comparison
+
+| Construction Method | Example | Allocates Memory | Best Use Case |
+| --- | --- | --- | --- |
+| Default Constructor | `YTensor<float, 2>()` | No | Deferred initialization |
+| Variadic | `YTensor<float, 2>(3, 4)` | Yes | Most common, recommended |
+| vector | `YTensor<float, 2>(shape)` | Yes | Dynamic shapes |
+| Initializer List | `YTensor<float, 2>{3, 4}` | Yes | Concise syntax |
+| From Base | `YTensor<float, 2>(base)` | No (Shared) | Type conversion |
+| Copy | `YTensor<float, 2>(other)` | No (Shared) | Shallow copy |
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 1. Default constructor
+    yt::YTensor<float, 2> empty;
+    std::cout << "Empty size: " << empty.size() << std::endl;  // 0
+    
+    // 2. Variadic constructor (Recommended)
+    yt::YTensor<float, 2> matrix(3, 4);
+    matrix.fill(1.0f);
+    std::cout << "Matrix size: " << matrix.size() << std::endl;  // 12
+    
+    // 3. vector constructor
+    std::vector<int> shape = {2, 3};
+    yt::YTensor<int, 2> tensor(shape);
+    std::cout << "Tensor size: " << tensor.size() << std::endl;  // 6
+    
+    // 4. Initializer list constructor
+    yt::YTensor<double, 3> tensor3d = {2, 3, 4};
+    std::cout << "3D Tensor size: " << tensor3d.size() << std::endl;  // 24
+    
+    // 5. Copy constructor (shallow copy)
+    yt::YTensor<float, 2> shallow_copy(matrix);
+    shallow_copy.at(0, 0) = 100.0f;
+    std::cout << "Original: " << matrix.at(0, 0) << std::endl;  // 100.0 (affected)
+    
+    // 6. Deep copy
+    yt::YTensor<float, 2> deep_copy = matrix.clone();
+    deep_copy.at(0, 0) = 200.0f;
+    std::cout << "Original: " << matrix.at(0, 0) << std::endl;  // 100.0 (unaffected)
+    
+    // 7. Construction from YTensorBase
+    yt::YTensorBase base({2, 2}, "float32");
+    yt::YTensor<float, 2> from_base(base);
+    std::cout << "From base size: " << from_base.size() << std::endl;  // 4
+    
+    return 0;
+}
+```
+
+---
+
+## Related Content
+
+- [Memory Management](./memory.mdx) - Learn about `reserve()`, `clone()`, and other memory operations.
+- [Copy Semantics](./memory.mdx) - A deeper look at shallow vs. deep copies.
+- [Factory Methods](./factories.mdx) - Create tensors using static methods like `zeros()`, `ones()`, etc.
+- [YTensorBase Constructors](../../YTensorBase/construction/constructors.mdx) - Constructors for the base class.

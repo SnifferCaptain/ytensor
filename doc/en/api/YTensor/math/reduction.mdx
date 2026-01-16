@@ -1,0 +1,540 @@
+# Reduction Operations
+
+This document describes the reduction operations in YTensor, including sum, mean, and max.
+
+---
+
+## Overview
+
+Reduction operations aggregate data along specified axes, combining multiple values into one. YTensor supports:
+
+- **sum()** - Computes the sum of elements.
+- **mean()** - Computes the mean of elements.
+- **max()** - Computes the maximum value and its index.
+
+All reduction operations **keep dimensions** by default, meaning the reduced dimension's size becomes 1.
+
+---
+
+## sum()
+
+Computes the sum along specified axes.
+
+### Function Signatures
+
+```cpp
+// Multi-dimensional tensor: single axis sum
+YTensor<T, dim> sum(int axis) const requires(dim > 1);
+
+// Multi-dimensional tensor: multiple axes sum
+YTensor<T, dim> sum(std::vector<int> axes) const requires(dim > 1);
+
+// 1D tensor: sum of all elements
+T sum(int axis = 0) const requires(dim == 1);
+```
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `axis` | `int` | The index of the axis to reduce (supports negative indexing). |
+| `axes` | `std::vector<int>` | A list of indices for multiple axes to reduce. |
+
+### Core Function Description
+
+Performs reduction by summing values along the specified axis/axes.
+*   Supports single-axis or multi-axis reduction.
+*   Supports negative indexing.
+*   **Always maintains dimensions** (Reduction keeps dims): the size of the reduced dimension becomes 1.
+
+### Return Value
+
+- **Multi-dimensional tensor**: Returns a `YTensor<T, dim>` where the size of reduced axes is 1.
+- **1D tensor**: Returns a scalar of type `T`.
+
+### Usage Examples
+
+#### Single Axis Sum
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>({2, 3}, {
+        1, 2, 3,
+        4, 5, 6
+    });
+    
+    // Sum along axis 0 (column-wise sum)
+    auto sum0 = a.sum(0);
+    // Shape: (1, 3)
+    // Values: [5, 7, 9]
+    
+    // Sum along axis 1 (row-wise sum)
+    auto sum1 = a.sum(1);
+    // Shape: (2, 1)
+    // Values: [[6], [15]]
+    
+    // Negative indexing
+    auto sum_last = a.sum(-1);  // Equivalent to sum(1)
+    
+    return 0;
+}
+```
+
+#### Multiple Axes Sum
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});  // Shape: (2, 3, 4)
+
+// Sum along both axis 0 and axis 2
+auto result = a.sum({0, 2});
+// Shape: (1, 3, 1)
+```
+
+#### 1D Tensor Sum
+
+```cpp
+auto a = YTensor<float, 1>({10}, {1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+
+float total = a.sum();  // 55.0 (Scalar)
+// The 'axis' parameter is ignored for 1D tensors; it always sums all elements.
+```
+
+---
+
+## mean()
+
+Computes the mean along specified axes using the **Welford algorithm** for improved numerical stability.
+
+### Function Signatures
+
+```cpp
+// Multi-dimensional tensor: single axis mean
+YTensor<T, dim> mean(int axis) const requires(dim > 1);
+
+// Multi-dimensional tensor: multiple axes mean
+YTensor<T, dim> mean(std::vector<int> axes) const requires(dim > 1);
+
+// 1D tensor: mean of all elements
+T mean(int axis = 0) const requires(dim == 1);
+```
+
+### Core Function Description
+
+computes the arithmetic mean along the specified axis/axes.
+*   Uses **Welford's algorithm** internally for online interaction, significantly improving numerical stability and avoiding precision loss from large sum accumulations.
+*   **Always maintains dimensions**.
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `axis` | `int` | The index of the axis to reduce. |
+| `axes` | `std::vector<int>` | A list of indices for multiple axes to reduce. |
+
+### Return Value
+
+- **Multi-dimensional tensor**: Returns a `YTensor<T, dim>` where the size of reduced axes is 1.
+- **1D tensor**: Returns a scalar of type `T`.
+
+### Usage Examples
+
+```cpp
+auto a = YTensor<float, 2>({2, 3}, {
+    1, 2, 3,
+    4, 5, 6
+});
+
+// Mean along axis 0
+auto mean0 = a.mean(0);
+// Shape: (1, 3)
+// Values: [2.5, 3.5, 4.5]
+
+// Mean along axis 1
+auto mean1 = a.mean(1);
+// Shape: (2, 1)
+// Values: [[2], [5]]
+
+// 1D tensor
+auto b = YTensor<float, 1>({5}, {1, 2, 3, 4, 5});
+float avg = b.mean();  // 3.0
+```
+
+### Welford Algorithm
+
+`mean()` uses the Welford algorithm to compute the mean online, which improves numerical stability:
+
+```cpp
+// Pseudo-code
+T mean = 0;
+for (int j = 0; j < axisLen; j++) {
+    T x = data[j];
+    mean += (x - mean) / (j + 1);  // Welford update
+}
+```
+
+**Advantage**: Prevents precision loss that can occur when summing many large numbers.
+
+---
+
+## max()
+
+Computes the maximum values along specified axes and returns their corresponding indices.
+
+### Function Signatures
+
+```cpp
+// Multi-dimensional tensor: maximum on a single axis
+std::pair<YTensor<T, dim>, YTensor<int, dim>> max(int axis) const requires(dim > 1);
+
+// Multi-dimensional tensor: maximum on multiple axes
+std::pair<YTensor<T, dim>, YTensor<int, dim>> max(std::vector<int> axes) const requires(dim > 1);
+
+// 1D tensor: global maximum
+std::pair<T, int> max(int axis = 0) const requires(dim == 1);
+```
+
+### Core Function Description
+
+Finds the maximum values along the specified axis/axes.
+*   Returns both the maximum values and their indices.
+*   **Always maintains dimensions**.
+*   For multi-axis reduction, the returned indices are flattened.
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `axis` | `int` | The index of the axis to reduce. |
+| `axes` | `std::vector<int>` | A list of indices for multiple axes to reduce. |
+
+### Return Value
+
+- **Multi-dimensional tensor**: Returns a `std::pair<YTensor<T, dim>, YTensor<int, dim>>`:
+  - `first`: Tensor containing the maximum values.
+  - `second`: Tensor containing the indices of those maximum values.
+- **1D tensor**: Returns a `std::pair<T, int>`:
+  - `first`: The maximum value.
+  - `second`: The index of the maximum value.
+
+### Usage Examples
+
+#### Single Axis Maximum
+
+```cpp
+auto a = YTensor<float, 2>({2, 3}, {
+    1, 5, 3,
+    4, 2, 6
+});
+
+// Max along axis 0
+auto [max_vals, max_indices] = a.max(0);
+
+// max_vals shape: (1, 3)
+// max_vals content: [4, 5, 6]
+
+// max_indices shape: (1, 3)
+// max_indices content: [1, 0, 1] (row indices where the max values are located)
+
+// Max along axis 1
+auto [max_vals1, max_indices1] = a.max(1);
+// max_vals1 shape: (2, 1)
+// max_vals1: [[5], [6]]
+// max_indices1: [[1], [2]] (column indices where the max values are located)
+```
+
+#### Multiple Axes Maximum
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});  // Shape: (2, 3, 4)
+
+// Max along both axis 0 and axis 2
+auto [max_vals, max_indices] = a.max({0, 2});
+// max_vals shape: (1, 3, 1)
+// max_indices: contains flattened indices across the reduced space
+```
+
+#### 1D Tensor Maximum
+
+```cpp
+auto a = YTensor<float, 1>({5}, {3.2f, 1.5f, 7.8f, 2.1f, 6.4f});
+
+auto [max_val, max_idx] = a.max();
+// max_val: 7.8
+// max_idx: 2
+```
+
+---
+
+## Keep Dimensions Behavior
+
+:::info
+**Key Feature**
+
+YTensor's reduction operations **always keep dimensions**, behaving similarly to NumPy's `keepdims=True`.
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);  // (2, 3, 4)
+auto b = a.sum(1);  // (2, 1, 4) ← Dimension 1 becomes 1 rather than being removed.
+
+// If you want to remove the dimension, use squeeze().
+auto c = b.squeeze(1);  // (2, 4)
+```
+:::
+
+### Comparison with NumPy
+
+| Operation | NumPy (Default) | NumPy (keepdims=True) | YTensor |
+|------|--------------|----------------------|---------|
+| `(3, 4).sum(1)` | `(3,)` | `(3, 1)` | `(3, 1)` ✅ |
+| `(2, 3, 4).mean(1)` | `(2, 4)` | `(2, 1, 4)` | `(2, 1, 4)` ✅ |
+
+---
+
+## Performance Optimization
+
+### Parallelization
+
+Reduction operations are automatically parallelized using OpenMP:
+
+```cpp
+// Large tensors are handled in parallel
+auto a = YTensor<float, 3>::randn(100, 100, 100);
+auto sum = a.sum(0);  // Executed multi-threaded
+```
+
+**Threshold**: `yt::infos::minParOps`. Parallelism is enabled when the number of elements exceeds this threshold.
+
+### Vectorization
+
+Inner loops are optimized with SIMD instructions:
+
+```cpp
+#pragma omp simd reduction(+:sum)
+for (int j = 0; j < axisLen; j++) {
+    sum += data[j];
+}
+```
+
+### Multiple Axis Optimization
+
+Multi-axis reductions use an "odometer-style" method to pre-calculate offsets, avoiding redundant computations:
+
+```cpp
+// Single axis: O(n * m)
+auto result1 = a.sum(0);
+
+// Multiple axes: Still O(n * m) using pre-calculated offsets
+auto result2 = a.sum({0, 2});
+```
+
+---
+
+## Type Requirements
+
+### sum() and mean()
+
+Requirements: The element type must support addition and division.
+
+```cpp
+// ✅ Arithmetic types
+auto a = YTensor<float, 2>::randn(3, 4);
+auto sum = a.sum(0);
+
+auto b = YTensor<int, 2>(3, 4);
+auto sum2 = b.sum(0);
+
+// ❌ Types without addition support
+// auto c = YTensor<std::string, 2>(3, 4);
+// auto sum3 = c.sum(0);  // Compilation error
+```
+
+### max()
+
+Requirements: The element type must support the comparison operator `>`.
+
+```cpp
+// ✅ Comparable types
+auto a = YTensor<float, 2>::randn(3, 4);
+auto [max_val, max_idx] = a.max(0);
+
+// Custom types must implement operator>
+struct MyType {
+    float value;
+    bool operator>(const MyType& other) const {
+        return value > other.value;
+    }
+};
+```
+
+---
+
+## Usage Summary
+
+### Global Sum
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 20, 30);
+
+// Method 1: Multi-axis sum
+auto total = a.sum({0, 1, 2});
+// total shape: (1, 1, 1)
+float scalar_total = total.at(0, 0, 0);
+
+// Method 2: Sequential sum
+auto tmp1 = a.sum(0);   // (1, 20, 30)
+auto tmp2 = tmp1.sum(1); // (1, 1, 30)
+auto tmp3 = tmp2.sum(2); // (1, 1, 1)
+```
+
+### Normalization
+
+```cpp
+auto a = YTensor<float, 2>::randn(100, 50);
+
+// Column-wise normalization (broadcasting)
+auto mean = a.mean(0);  // (1, 50)
+auto normalized = a - mean;
+```
+
+### Softmax Pre-computation
+
+```cpp
+auto logits = YTensor<float, 2>::randn(32, 10);  // (batch, classes)
+
+// Numerically stable softmax preparation
+auto [max_vals, _] = logits.max(1);  // (32, 1)
+auto shifted = logits - max_vals;     // Prevent overflow
+```
+
+### Statistics
+
+```cpp
+auto data = YTensor<float, 2>::randn(1000, 100);
+
+// Mean and max for each column
+auto col_mean = data.mean(0);               // (1, 100)
+auto [col_max, col_max_idx] = data.max(0);  // (1, 100)
+
+// Sum for each row
+auto row_sum = data.sum(1);                 // (1000, 1)
+```
+
+---
+
+## important Considerations
+
+:::warning
+**Special Behavior for 1D Tensors**
+
+For 1D tensors, the `axis` parameter is **ignored**. It always reduces over all elements:
+
+```cpp
+auto a = YTensor<float, 1>::randn(100);
+
+float sum0 = a.sum(0);     // Sum of all elements
+float sum99 = a.sum(99);   // Sum of all elements (axis ignored)
+float sum_neg = a.sum(-1); // Sum of all elements
+```
+
+This is because the result of reducing a 1D tensor is a scalar, not another tensor.
+:::
+
+:::info
+**Indices Returned by max()**
+
+For single-axis reductions, indices represent the position along that specific axis:
+
+```cpp
+auto a = YTensor<float, 2>({2, 3}, {1, 5, 3, 4, 2, 6});
+auto [_, indices] = a.max(1);
+// indices.at(0, 0) == 1  (Max for row 0 is at column 1)
+// indices.at(1, 0) == 2  (Max for row 1 is at column 2)
+```
+
+For multi-axis reductions, the index returned is a **flattened index** within the reduced space:
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+auto [_, indices] = a.max({0, 2});
+// Values in indices are flattened across the reduced axes
+```
+:::
+
+:::warning
+**Numerical Precision**
+
+Summing many large numbers can lead to precision loss:
+
+```cpp
+auto a = YTensor<float, 1>::ones(10000000);
+float sum = a.sum();  // May not be exactly 10,000,000
+
+// mean() uses Welford algorithm, providing better precision
+float mean = a.mean();  // Much closer to 1.0
+```
+:::
+
+---
+
+## Performance Benchmarks
+
+Benchmark results for 1000×1000 tensors (Intel i7-10700K):
+
+| Operation | Single-thread (ms) | Multi-thread (ms) | Speedup |
+|------|------------|------------|-------|
+| sum(0) | 2.3 | 0.4 | 5.8x |
+| mean(0) | 2.5 | 0.5 | 5.0x |
+| max(0) | 3.1 | 0.6 | 5.2x |
+| sum(\{0, 1\}) | 2.8 | 0.5 | 5.6x |
+
+---
+
+## Best Practices
+
+### 1. Optimize Reduction Sequence
+
+```cpp
+// ❌ Inefficient: Multiple separate reductions
+auto a = YTensor<float, 3>::randn(100, 100, 100);
+auto tmp = a.sum(0);
+tmp = tmp.sum(1);
+auto result = tmp.sum(2);
+
+// ✅ Efficient: One multi-axis reduction
+auto result = a.sum({0, 1, 2});
+```
+
+### 2. Avoid Redundant Squeezing
+
+```cpp
+// ❌ Verbose
+auto a = YTensor<float, 2>::randn(100, 100);
+auto sum = a.sum(0).squeeze(0);  // Manually removing dimension
+
+// ✅ Direct usage
+auto sum = a.sum(0);  // Keeps (1, 100) shape, which is often better for broadcasting
+```
+
+### 3. Leverage Broadcasting
+
+```cpp
+auto a = YTensor<float, 2>::randn(100, 50);
+
+// Column-wise standardization
+auto mean = a.mean(0);  // (1, 50)
+auto std = /* calculate standard deviation */;
+auto normalized = (a - mean) / std; // Automatic broadcasting
+```
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Element-wise math.
+- [Broadcasting Operations](./broadcast.mdx) - The broadcasting mechanism.
+- [Shape Operations](../shape/dimension.mdx) - Using `squeeze()` to remove dimensions.
+- [Performance Optimization](../../guides/performance_tips.mdx) - Detailed tips for reduction performance.

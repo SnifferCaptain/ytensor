@@ -1,0 +1,283 @@
+# YTensorIO 类
+
+本文档介绍 `yt::io` 命名空间中的 `YTensorIO` 类，用于处理张量的文件输入与输出操作。
+
+`YTensorIO` 支持将多个张量以二进制格式存储到同一个文件中，并支持可选的压缩功能。
+
+## 头文件
+
+```cpp
+#include "ytensor_io.hpp"
+```
+
+## 类定义
+
+```cpp
+namespace yt::io {
+    class YTensorIO;
+}
+```
+
+---
+
+## `open()`
+
+打开指定的文件以进行后续读写操作。
+
+### 核心功能描述
+
+打开一个 `.yt` 文件用于读取或写入。支持只读、覆盖写入和追加三种模式。
+如果文件打开失败（如文件不存在且为 Read 模式，或权限不足），函数将返回 `false`。
+
+### 函数签名
+
+```cpp
+bool open(const std::string& fileName, int fileMode = yt::io::Read);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `fileName` | `const std::string&` | - | 目标文件的路径。 |
+| `fileMode` | `int` | `yt::io::Read` | 文件打开模式。可选值见下表。 |
+
+### 文件模式常量
+
+| 常量 | 值 | 说明 |
+| --- | --- | --- |
+| `yt::io::Read` | `1` | **只读模式**。文件必须存在。 |
+| `yt::io::Write` | `2` | **写入模式**。若文件存在则覆盖，不存在则创建。 |
+| `yt::io::Append` | `3` | **追加模式**。若文件存在则在末尾追加，不存在则创建。 |
+
+### 返回值
+
+*   **类型**: `bool`
+*   **说明**: 成功打开文件返回 `true`，否则返回 `false`。
+
+### 使用示例
+
+```cpp
+yt::io::YTensorIO io;
+
+// 以写入模式打开（覆盖原有内容）
+if (io.open("model.yt", yt::io::Write)) {
+    // ... we can write now
+}
+```
+
+### 注意事项
+
+*   同一时间一个 `YTensorIO` 实例只能打开一个文件。若已打开文件，再次调用 `open()` 前应先调用 `close()`。
+
+---
+
+## `close()`
+
+关闭当前打开的文件，并释放相关资源。
+
+### 核心功能描述
+
+关闭文件流。如果文件处于写入模式，`close()` 会确保所有缓冲区数据都被刷新到磁盘。
+在对象析构时也会自动调用此函数，但显式调用可以更好地控制文件句柄的生命周期。
+
+### 函数签名
+
+```cpp
+void close();
+```
+
+---
+
+## `save()`
+
+将张量保存到当前打开的文件中。
+
+### 核心功能描述
+
+该函数将张量的元数据（形状、类型）和数据内容序列化并写入文件。
+如果已设置全局压缩选项（`yt::io::compressMethod`），则会在写入前自动压缩数据。
+
+### 函数签名
+
+```cpp
+// 1. 基类版本（支持运行时多态）
+bool save(const yt::YTensorBase& tensor, const std::string& name);
+
+// 2. 模板版本（支持强类型）
+template<typename T, int dim>
+bool save(const yt::YTensor<T, dim>& tensor, const std::string& name);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `tensor` | `const YTensorBase&` 或 `const YTensor<T, dim>&` | 要保存的张量对象。 |
+| `name` | `const std::string&` | 张量在文件中的名称（键）。必须唯一。 |
+
+### 返回值
+
+*   **类型**: `bool`
+*   **说明**: 成功写入返回 `true`，否则返回 `false`。
+
+### 使用示例
+
+```cpp
+auto t = yt::YTensor<float, 2>::eye(3);
+yt::io::YTensorIO io;
+io.open("data.yt", yt::io::Write);
+
+// 保存张量，命名为 "identity_matrix"
+io.save(t, "identity_matrix");
+
+io.close();
+```
+
+### 注意事项
+
+*   必须在 `yt::io::Write` 或 `yt::io::Append` 模式下调用。
+*   张量名称不能与文件中已有的张量重复（追加模式下需特别注意）。
+
+:::warning
+**非 POD 类型支持限制**
+目前的 IO 系统主要针对 POD (Plain Old Data) 类型（如 `float`, `int`, `double`）设计。虽然支持 `string` 或其他复杂类型，但可能无法跨平台或跨版本兼容。
+建议仅对数值型张量使用 IO 功能。
+:::
+
+---
+
+## `load()`
+
+从当前打开的文件中加载指定名称的张量。
+
+### 核心功能描述
+
+根据名称查找文件中的张量，读取其元数据和数据内容。
+*   如果使用**基类版本** (`YTensorBase`)，函数会自动根据文件中的元数据设置正确的类型和形状。
+*   如果使用**模板版本** (`YTensor<T, dim>`)，函数会校验文件中的张量类型和维度是否与模板参数匹配。如果不匹配（例如尝试将 `float` 数据加载到 `int` 张量，或维度不符），将返回 `false` 或抛出异常。
+
+### 函数签名
+
+```cpp
+// 1. 基类版本
+bool load(yt::YTensorBase& tensor, const std::string& name = "");
+
+// 2. 模板版本
+template<typename T, int dim>
+bool load(yt::YTensor<T, dim>& tensor, const std::string& name = "");
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `tensor` | `YTensorBase&` 或 `YTensor<T, dim>&` | **输出参数**。加载成功后，该对象将被重构以包含文件中的数据。 |
+| `name` | `const std::string&` | `""` | 要读取的张量名称。若为空字符串，则默认读取文件中的**第一个**张量。 |
+
+### 返回值
+
+*   **类型**: `bool`
+*   **说明**: 成功加载返回 `true`，否则返回 `false`。
+
+### 使用示例
+
+```cpp
+yt::io::YTensorIO io;
+io.open("data.yt", yt::io::Read);
+
+// 1. 加载到基类（自动类型）
+yt::YTensorBase baseTensor;
+io.load(baseTensor, "identity_matrix");
+// baseTensor.dtype() -> "float32"
+
+// 2. 加载到强类型张量（需确保类型匹配）
+yt::YTensor<float, 2> tensor;
+io.load(tensor, "identity_matrix");
+```
+
+---
+
+## `getTensorNames()`
+
+获取文件中所有已存储张量的名称列表。
+
+### 函数签名
+
+```cpp
+std::vector<std::string> getTensorNames() const;
+```
+
+### 返回值
+
+*   **类型**: `std::vector<std::string>`
+*   **说明**: 包含所有张量名称的字符串列表。
+
+### 使用示例
+
+```cpp
+auto names = io.getTensorNames();
+for (const auto& name : names) {
+    std::cout << "Found tensor: " << name << std::endl;
+}
+```
+
+---
+
+## `getTensorInfo()`
+
+获取指定张量的详细元信息。
+
+### 函数签名
+
+```cpp
+TensorInfo getTensorInfo(const std::string& name = "") const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `name` | `const std::string&` | `""` | 目标张量名称。若为空，则获取第一个张量的信息。 |
+
+### 返回值
+
+*   **类型**: `TensorInfo`
+*   **说明**: 返回包含张量类型、形状、偏移量等信息的结构体。如果张量不存在，将抛出异常。
+
+### 相关结构
+
+关于 `TensorInfo` 结构体的详细定义，请参阅 [TensorInfo 文档](./tensor_info.mdx)。
+
+---
+
+## `validateFile()`
+
+验证当前文件的格式是否合法。
+
+### 函数签名
+
+```cpp
+bool validateFile();
+```
+
+### 返回值
+
+*   **类型**: `bool`
+*   **说明**: 如果文件头标识（Magic Number）和版本号正确，且索引完整，返回 `true`。
+
+---
+
+## 便捷函数
+
+为了简化单张量的读写，`yt::io` 命名空间还提供了一组全局便捷函数：
+
+```cpp
+// 保存单张量
+yt::io::saveTensor("file.yt", tensor, "name");
+
+// 加载单张量
+yt::io::loadTensor("file.yt", tensor, "name");
+```
+
+这些函数内部会自动创建 `YTensorIO` 实例并处理打开/关闭操作。

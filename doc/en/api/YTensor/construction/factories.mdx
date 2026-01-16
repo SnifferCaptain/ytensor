@@ -1,0 +1,470 @@
+# Factory Methods
+
+This document describes the static factory methods of the `YTensor<T, dim>` class, which are used to create tensors with specific initial values.
+
+## Overview
+
+Factory methods are static member functions that provide a convenient way to create tensors:
+
+| Method | Description | Initial Value |
+| --- | --- | --- |
+| `zeros()` | Creates a tensor filled with zeros | All elements are 0 |
+| `ones()` | Creates a tensor filled with ones | All elements are 1 |
+| `randn` | Creates a normally distributed tensor | N(0, 1) normal distribution |
+| `randu` | Creates a uniformly distributed tensor | U(0, 1) uniform distribution |
+| `seed()` | Sets the random seed | Global setting |
+
+---
+
+## zeros()
+
+### Function Signature
+
+```cpp
+// vector version
+static YTensor<T, dim> zeros(const std::vector<int>& shape);
+
+// variadic version
+template<typename... Args> 
+static YTensor<T, sizeof...(Args)> zeros(Args... args);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | A vector specifying the tensor's shape. |
+| `args` | `Args...` | Variadic arguments, where each argument represents a dimension's size. |
+
+### Core Function Description
+
+Creates a tensor where all elements are initialized to 0.
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>` or `YTensor<T, sizeof...(Args)>`
+- **Description**: Returns a tensor of the specified shape filled with zeros.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Option 1: Variadic version (recommended)
+    auto a = yt::YTensor<float, 2>::zeros(3, 4);
+    std::cout << a.at(1, 2) << std::endl;  // Output: 0
+    
+    // Option 2: vector version
+    std::vector<int> shape = {3, 4};
+    auto b = yt::YTensor<double, 2>::zeros(shape);
+    
+    // Creating a 3D zero tensor
+    auto c = yt::YTensor<int, 3>::zeros(2, 3, 4);
+    std::cout << c.size() << std::endl;  // Output: 24
+}
+```
+
+### Exceptions
+
+- For the vector version: If the number of elements in `shape` does not match `dim`, a `std::invalid_argument` exception is thrown.
+- For the variadic version: The number of arguments is checked at compile-time.
+
+### Notes
+
+:::info
+**Performance Note**
+
+`zeros()` uses the `fill()` method to initialize elements, which may incur some overhead for very large tensors. If you only need to allocate memory and do not care about the initial values, using a constructor directly is faster.
+:::
+
+---
+
+## ones()
+
+### Function Signature
+
+```cpp
+// vector version
+static YTensor<T, dim> ones(const std::vector<int>& shape);
+
+// variadic version
+template<typename... Args> 
+static YTensor<T, sizeof...(Args)> ones(const Args... args);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | A vector specifying the tensor's shape. |
+| `args` | `Args...` | Variadic arguments, where each argument represents a dimension's size. |
+
+### Core Function Description
+
+Creates a tensor where all elements are initialized to 1.
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>` or `YTensor<T, sizeof...(Args)>`
+- **Description**: Returns a tensor of the specified shape filled with ones.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a 3x4 tensor filled with ones
+    auto a = yt::YTensor<float, 2>::ones(3, 4);
+    std::cout << a.at(1, 2) << std::endl;  // Output: 1
+    
+    // Specify shape using a vector
+    std::vector<int> shape = {2, 3};
+    auto b = yt::YTensor<double, 2>::ones(shape);
+    
+    // Create a 1D vector filled with ones
+    auto vec = yt::YTensor<int, 1>::ones(10);
+    std::cout << vec.at(5) << std::endl;  // Output: 1
+}
+```
+
+### Exceptions
+
+- For the vector version: If the number of elements in `shape` does not match `dim`, a `std::invalid_argument` exception is thrown.
+
+---
+
+## randn (Normal Distribution Generator)
+
+### Type Declaration
+
+```cpp
+static _RandnGenerator randn;
+```
+
+### Core Function Description
+
+`randn` is a **function object (functor)**, not a standard static member function. It is a static instance of the `_RandnGenerator` type.
+
+### _RandnGenerator Struct
+
+```cpp
+struct _RandnGenerator {
+    _RandnGenerator(std::mt19937& gen_p): gen(gen_p) {}
+    std::mt19937& gen;
+    
+    template<typename... Args>
+    auto operator()(Args... args) const -> YTensor<T, sizeof...(args)>;
+};
+```
+
+- Internally uses `std::normal_distribution<double>` to generate random numbers.
+- Distribution parameters: Mean μ = 0.0, Standard Deviation σ = 1.0.
+- Uses the global random number generator `yt::infos::gen`.
+
+### Usage
+
+```cpp
+// Call randn to generate a tensor
+auto tensor = yt::YTensor<T, dim>::randn(shape_args...);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `args` | `Args...` | Variadic arguments, where each argument represents a dimension's size. |
+
+### Return Value
+
+- **Type**: `YTensor<T, sizeof...(args)>`
+- **Description**: Returns a tensor filled with normally distributed random numbers, N(0, 1).
+
+### Usage Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // Set random seed (optional)
+    yt::YTensor<float, 2>::seed(42);
+    
+    // Create a 3x4 normally distributed tensor
+    auto a = yt::YTensor<float, 2>::randn(3, 4);
+    std::cout << a << std::endl;
+    
+    // Create a 1D vector
+    auto vec = yt::YTensor<double, 1>::randn(100);
+    
+    // Create a 3D tensor
+    auto tensor3d = yt::YTensor<float, 3>::randn(2, 3, 4);
+}
+```
+
+### Output Example
+
+```
+Tensor shape: [3, 4], dtype: float32
+[[-0.847631  0.523284 -1.021932  0.349874]
+ [ 1.183421 -0.284719  0.847291 -0.192847]
+ [ 0.491023  1.374829 -0.638291  0.927384]]
+```
+
+### Notes
+
+:::warning
+**Thread Safety**
+
+In a multi-threaded environment, `randn` uses a mutex (`yt::infos::rngMutex`) to protect the random number generator, which may become a performance bottleneck.
+
+**Recommendations**:
+- For parallel scenarios, consider generating all random tensors in a single thread first.
+- Alternatively, maintain an independent random number generator for each thread.
+:::
+
+---
+
+## randu (Uniform Distribution Generator)
+
+### Type Declaration
+
+```cpp
+static _RanduGenerator randu;
+```
+
+### Core Function Description
+
+`randu` is a **function object (functor)** similar to `randn`, but it generates random numbers from a uniform distribution.
+
+### _RanduGenerator Struct
+
+```cpp
+struct _RanduGenerator {
+    _RanduGenerator(std::mt19937& gen_p): gen(gen_p) {}
+    std::mt19937& gen;
+    
+    template<typename... Args>
+    auto operator()(Args... args) const -> YTensor<T, sizeof...(args)>;
+};
+```
+
+- Internally uses `std::uniform_real_distribution<double>` to generate random numbers.
+- Distribution range: [0.0, 1.0).
+- Uses the global random number generator `yt::infos::gen`.
+
+### Usage
+
+```cpp
+// Call randu to generate a tensor
+auto tensor = yt::YTensor<T, dim>::randu(shape_args...);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `args` | `Args...` | Variadic arguments, where each argument represents a dimension's size. |
+
+### Return Value
+
+- **Type**: `YTensor<T, sizeof...(args)>`
+- **Description**: Returns a tensor filled with uniformly distributed random numbers, U(0, 1).
+
+### Usage Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // Set random seed
+    yt::YTensor<float, 2>::seed(42);
+    
+    // Create a 3x4 uniformly distributed tensor
+    auto a = yt::YTensor<float, 2>::randu(3, 4);
+    std::cout << a << std::endl;
+    
+    // Create a 1D vector
+    auto vec = yt::YTensor<double, 1>::randu(100);
+    
+    // Ensure all elements are within [0, 1)
+    for (size_t i = 0; i < vec.size(); ++i) {
+        assert(vec.atData_(i) >= 0.0 && vec.atData_(i) < 1.0);
+    }
+}
+```
+
+### Output Example
+
+```
+Tensor shape: [3, 4], dtype: float32
+[[0.374540  0.950714  0.731994  0.598658]
+ [0.156019  0.155995  0.058084  0.866176]
+ [0.601115  0.708073  0.020584  0.969910]]
+```
+
+### Notes
+
+:::warning
+**Thread Safety**
+
+Just like `randn`, `randu` uses a mutex in multi-threaded environments, which may impact performance.
+:::
+
+:::info
+**SIMD Optimization**
+
+The implementation of `randu` includes the `#pragma omp simd` directive, which may enable SIMD acceleration on supported compilers.
+:::
+
+---
+
+## seed()
+
+### Function Signature
+
+```cpp
+static void seed(unsigned int seed = std::random_device{}());
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `seed` | `unsigned int` | `std::random_device{}()` | The seed for random number generation. |
+
+### Core Function Description
+
+Sets the seed for the global random number generator. Affects the `randn` and `randu` methods of all `YTensor` types (irrespective of `T` and `dim`).
+
+### Return Value
+
+- **Type**: `void`
+
+### Usage Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // Use a fixed seed for reproducible results
+    yt::YTensor<float, 2>::seed(42);
+    auto a1 = yt::YTensor<float, 2>::randn(3, 3);
+    
+    // Reset to the same seed
+    yt::YTensor<float, 2>::seed(42);
+    auto a2 = yt::YTensor<float, 2>::randn(3, 3);
+    
+    // a1 and a2 will have identical values
+    
+    // Use a truly random seed (different every time)
+    yt::YTensor<double, 1>::seed();
+    auto b = yt::YTensor<double, 1>::randu(10);
+}
+```
+
+### Global Nature
+
+:::important
+**Global Singleton Generator**
+
+`seed()` configures the global shared generator `yt::infos::gen`. Consequently:
+
+1. Calling `seed()` on any `YTensor<T, dim>` type affects all other types.
+2. This applies to `randn` and `randu` across both `YTensor` and `YTensorBase`.
+:::
+
+### Reproducibility
+
+```cpp
+// Example: Verifying reproducibility
+void test_reproducibility() {
+    yt::YTensor<float, 2>::seed(123);
+    auto tensor1 = yt::YTensor<float, 2>::randn(5, 5);
+    
+    yt::YTensor<float, 2>::seed(123);
+    auto tensor2 = yt::YTensor<float, 2>::randn(5, 5);
+    
+    // tensor1 and tensor2 are identical
+    for (int i = 0; i < 5; ++i) {
+        for (int j = 0; j < 5; ++j) {
+            assert(tensor1.at(i, j) == tensor2.at(i, j));
+        }
+    }
+}
+```
+
+### Thread Safety
+
+`seed()` is protected internally by the mutex `yt::infos::rngMutex` and is therefore thread-safe.
+
+---
+
+## Factory Method Comparison
+
+| Method | Initial Value | Performance | Best Use Case |
+| --- | --- | --- | --- |
+| `zeros()` | 0 | Requires fill | When explicit 0 initialization is required |
+| `ones()` | 1 | Requires fill | When explicit 1 initialization is required |
+| `randn` | N(0,1) | Slower (RNG) | Neural network weight initialization |
+| `randu` | U(0,1) | Slower (RNG) | Random sampling, simulation |
+| Constructor | Undefined | Fastest | When initial value doesn't matter |
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include <iomanip>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 1. Create a zero tensor
+    auto zeros = yt::YTensor<float, 2>::zeros(2, 3);
+    std::cout << "Zeros:\n" << zeros << std::endl;
+    
+    // 2. Create a tensor of ones
+    auto ones = yt::YTensor<float, 2>::ones(2, 3);
+    std::cout << "Ones:\n" << ones << std::endl;
+    
+    // 3. Set random seed
+    yt::YTensor<float, 2>::seed(42);
+    
+    // 4. Create a normally distributed tensor
+    auto randn_tensor = yt::YTensor<float, 2>::randn(2, 3);
+    std::cout << "Random Normal N(0,1):\n" << randn_tensor << std::endl;
+    
+    // 5. Create a uniformly distributed tensor
+    auto randu_tensor = yt::YTensor<float, 2>::randu(2, 3);
+    std::cout << "Random Uniform U(0,1):\n" << randu_tensor << std::endl;
+    
+    // 6. Verify reproducibility
+    yt::YTensor<float, 2>::seed(42);
+    auto randn_copy = yt::YTensor<float, 2>::randn(2, 3);
+    
+    bool identical = true;
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            if (randn_tensor.at(i, j) != randn_copy.at(i, j)) {
+                identical = false;
+            }
+        }
+    }
+    std::cout << "Reproducible: " << (identical ? "Yes" : "No") << std::endl;
+    
+    return 0;
+}
+```
+
+---
+
+## Related Content
+
+- [Constructors](./constructors.mdx) - Learn about basic tensor construction.
+- [Memory Management](./memory.mdx) - `reserve()`, `clone()`, and other memory operations.
+- [Iteration Operations](../access/iteration.mdx) - Detailed description of the `fill()` method.
+- [YTensorBase Factory Methods](../../YTensorBase/construction/factories.mdx) - Runtime versions of factory methods.

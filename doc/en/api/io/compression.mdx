@@ -1,0 +1,82 @@
+# Compression Methods
+
+This document describes the compression configuration options in the `yt::io` namespace.
+
+## Global Configuration
+
+```cpp
+namespace yt::io {
+    static int8_t compressLevel = Z_DEFAULT_COMPRESSION;
+    static std::string compressMethod = "";
+    static bool verbose = false;
+}
+```
+
+## Compression Levels
+
+```cpp
+yt::io::compressLevel = Z_DEFAULT_COMPRESSION;  // Default level
+yt::io::compressLevel = Z_BEST_SPEED;           // Best speed
+yt::io::compressLevel = Z_BEST_COMPRESSION;     // Best compression
+```
+
+## Compression Methods
+
+| Method | Description |
+| --- | --- |
+| `""` | No compression |
+| `"zlib"` | Compress with zlib |
+| `"zlibfloat"` | Optimized compression for floating point numbers |
+
+:::warning
+**zlib for Floating-point Numbers**
+
+The standard `zlib` compression algorithm usually performs poorly on floating-point data (and may even lead to an increase in size) because the binary representation of floating-point numbers has high entropy.
+For floating-point tensors, it is recommended to use the `"zlibfloat"` method or keep it empty (no compression).
+:::
+
+```cpp
+yt::io::compressMethod = "zlib";  // Enable compression
+```
+
+## Helper Functions
+
+```cpp
+// Check and correct compression method
+std::string checkCompressMethod(const std::string& method);
+
+// Compress data
+template<typename T>
+std::vector<char> compressData(const std::vector<T>& input);
+
+// Decompress data
+std::vector<char> decompressData(const std::vector<char>& input, 
+                                  size_t decompressedSize = 0,
+                                  const std::string& method = "");
+```
+
+## Usage Example
+
+```cpp
+#include "ytensor_io.hpp"
+
+void save_compressed() {
+    // Set compression
+    yt::io::compressMethod = "zlib";
+    yt::io::compressLevel = 6;
+    
+    auto tensor = yt::YTensor<float, 2>::randn({100, 100});
+    
+    yt::io::YTensorIO writer;
+    writer.open("compressed.yt", yt::io::Write);
+    writer.save(tensor, "data");
+    writer.close();
+}
+```
+
+---
+
+## Related Content
+
+- [YTensorIO](./YTensorIO.mdx) - IO class
+- [File Format](./file_format.mdx) - .yt file specification

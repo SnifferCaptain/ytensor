@@ -1,0 +1,144 @@
+# Type Dispatch
+
+This document describes the runtime type dispatch mechanism in the `yt::kernel` namespace.
+
+## Overview
+
+`Type Dispatch` serves as a bridge between `YTensorBase` (runtime dynamic typing) and `YTensor<T>` (compile-time static typing). It allows you to automatically select and instantiate the corresponding template function based on a string-type `dtype` (e.g., `"float32"`).
+
+This is extremely useful for:
+1. Implementing generic operators that support arbitrary types.
+2. Handling `YTensorBase` inputs and converting them internally to specific `T` types for computation.
+3. Avoiding verbose `if-else` or `switch-case` statements.
+
+## Core Macros and Type Lists
+
+For convenience, YTensor pre-defines several common Type Lists:
+
+| Type List | Included Types |
+| --- | --- |
+| `StandardFloatTypes` | `float`, `double` |
+| `StandardIntTypes` | `int8`, `int16`, `int32`, `int64`, `uint8`, `...`, `uint64` |
+| `IntegerTypes` | Same as `StandardIntTypes` |
+| `StandardNumericTypes` | Standard Floats + Standard Integers |
+| `ExtendedFloatTypes` | `bfloat16`, `float16`, `float8_...` |
+| `AllNumericTypes` | All of the above types |
+
+## `dispatch`
+
+### Function Signatures
+
+```cpp
+template<typename TypeListT, typename Func>
+bool dispatch(const std::string& dtype, Func&& func);
+
+template<typename TypeListT, typename Func>
+void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
+```
+
+### Core Function Description
+
+Looks up a matching C++ type `T` in `TypeListT` based on the `dtype` string, and calls the generic lambda function `func.operator()<T>()`.
+
+*   `dispatch`: Returns `true` if a matching type is found and execution is successful; otherwise returns `false`.
+*   `dispatchOrThrow`: Throws a `std::runtime_error` exception if no matching type is found.
+
+### Usage Example
+
+Suppose we need to write a print function that supports all numeric types:
+
+```cpp
+#include "ytensor_kernel.hpp" // or type_dispatch.hpp
+
+void printValue(const yt::YTensorBase& tensor) {
+    // Define a generic lambda
+    auto kernel = [&]<typename T>() {
+        // Here, T is the concrete type (e.g., float, int)
+        // We can safely access data via data<T>()
+        const T* data = tensor.data<T>();
+        std::cout << "Value: " << data[0] << std::endl;
+    };
+
+    // Dispatch!
+    // Try to match tensor.dtype() within AllNumericTypes
+    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+        tensor.dtype(), 
+        kernel, 
+        "printValue"
+    );
+}
+```
+
+## `dispatch2`
+
+### Function Signatures
+
+```cpp
+template<typename SrcTypeList, typename DstTypeList, typename Func>
+bool dispatch2(const std::string& srcDtype, const std::string& dstDtype, Func&& func);
+
+template<typename SrcTypeList, typename DstTypeList, typename Func>
+void dispatch2OrThrow(const std::string& srcDtype, const std::string& dstDtype, Func&& func, const std::string& opName = "dispatch2");
+```
+
+### Core Function Description
+
+Dual type dispatch. Used for scenarios requiring simultaneous handling of two potentially different types, such as type casting (Cast) or mixed-type operations.
+It attempts to match both `srcDtype` and `dstDtype`, and calls `func.operator()<SrcT, DstT>()`.
+
+### Usage Example
+
+Implementing a generic type conversion function:
+
+```cpp
+void castTensor(const yt::YTensorBase& src, yt::YTensorBase& dst) {
+    auto kernel = [&]<typename SrcT, typename DstT>() {
+        const SrcT* s = src.data<SrcT>();
+        DstT* d = dst.data<DstT>();
+        // Execute conversion logic
+        for(size_t i=0; i<src.size(); ++i) {
+            d[i] = static_cast<DstT>(s[i]);
+        }
+    };
+
+    yt::kernel::dispatch2OrThrow<yt::types::AllNumericTypes, yt::types::AllNumericTypes>(
+        src.dtype(), 
+        dst.dtype(), 
+        kernel, 
+        "castTensor"
+    );
+}
+```
+
+## Custom Trait Check
+
+Sometimes simply matching types is not enough; you may require types to satisfy specific conditions (e.g., supporting addition).
+
+```cpp
+template<template<typename> class Trait, typename TypeListT, typename Func>
+void dispatchWithTraitOrThrow(const std::string& dtype, Func&& func, const std::string& opName);
+```
+
+### Usage Example
+
+Execute addition only for types that support `operator+`:
+
+```cpp
+auto kernel = [&]<typename T>() {
+    /* ... This code is instantiated only if T supports addition ... */
+};
+
+yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumericTypes>(
+    tensor.dtype(),
+    kernel,
+    "addOperation"
+);
+```
+
+---
+
+## Best Practices
+
+1.  **Use Generic Lambdas (C++20)**: With the `[&]<typename T>() { ... }` syntax, code is concise and readable.
+2.  **Choose Appropriate Type Lists**: Include only the types you actually support to reduce compilation time and binary size.
+3.  **Error Handling**: For operations that must succeed, prefer `dispatchOrThrow` as it provides clear error messages.

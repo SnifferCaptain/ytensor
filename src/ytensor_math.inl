@@ -9,6 +9,9 @@
 #include "../include/kernel/math_utils.hpp"
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
+#if YT_USE_AVX2
+#include "../include/kernel/gemm.hpp"
+#endif
 
 template <typename T, int dim>
 template <typename Func, typename... Args>
@@ -20,8 +23,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
 #define YT_YTENSOR_OPERATOR(OP, ENABLE_IF_T)                                                          \
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
-    yt::YTensor<T, std::max(dim, dim1)>                                                                   \
-        yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                           \
+    auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
             return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
                 return a OP b;                                                                        \
@@ -48,7 +50,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     }                                                                                                 \
                                                                                                       \
     template <typename T, int dim>                                                                    \
-    yt::YTensor<T, dim> yt::YTensor<T, dim>::operator OP(const T& other) const {                              \
+    auto yt::YTensor<T, dim>::operator OP(const T& other) const {                                     \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
             return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
                 return a OP b;                                                                        \
@@ -59,7 +61,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     }                                                                                                 \
                                                                                                       \
     template <typename T, int dim>                                                                    \
-    yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator OP##=(const T& other) {                                \
+    yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator OP##=(const T& other) {                        \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
             return broadcastInplace([](T& a, const T& b) {                                            \
                 return a OP## = b;                                                                    \
@@ -80,13 +82,49 @@ YT_YTENSOR_OPERATOR(*, yt::concepts::HAVE_MUL)
 YT_YTENSOR_OPERATOR(/, yt::concepts::HAVE_DIV)
 // %有特殊处理
 YT_YTENSOR_OPERATOR(&, yt::concepts::HAVE_AND)
-YT_YTENSOR_OPERATOR(|, yt::concepts::HAVE_MOD)
+YT_YTENSOR_OPERATOR(|, yt::concepts::HAVE_OR)
 YT_YTENSOR_OPERATOR(^, yt::concepts::HAVE_XOR)
+YT_YTENSOR_OPERATOR(<<, yt::concepts::HAVE_LSHIFT)
+YT_YTENSOR_OPERATOR(>>, yt::concepts::HAVE_RSHIFT)
 
 #undef YT_YTENSOR_OPERATOR
 
+// 比较运算符生成规则，返回YTensor<bool, dim>
+#define YT_YTENSOR_CMP_OPERATOR(OP, ENABLE_IF_T)                                                      \
+    template <typename T, int dim>                                                                    \
+    template <int dim1>                                                                               \
+    auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
+        if constexpr (ENABLE_IF_T<T>) {                                                               \
+            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+                return a OP b;                                                                        \
+            }, *this, other);                                                                         \
+        } else {                                                                                      \
+            throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
+        }                                                                                             \
+    }                                                                                                 \
+                                                                                                      \
+    template <typename T, int dim>                                                                    \
+    auto yt::YTensor<T, dim>::operator OP(const T& other) const {                                     \
+        if constexpr (ENABLE_IF_T<T>) {                                                               \
+            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+                return a OP b;                                                                        \
+            }, *this, other);                                                                         \
+        } else {                                                                                      \
+            throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
+        }                                                                                             \
+    }
+
+YT_YTENSOR_CMP_OPERATOR(<, yt::concepts::HAVE_LT)
+YT_YTENSOR_CMP_OPERATOR(<=, yt::concepts::HAVE_LE)
+YT_YTENSOR_CMP_OPERATOR(>, yt::concepts::HAVE_GT)
+YT_YTENSOR_CMP_OPERATOR(>=, yt::concepts::HAVE_GE)
+YT_YTENSOR_CMP_OPERATOR(==, yt::concepts::HAVE_EQ)
+YT_YTENSOR_CMP_OPERATOR(!=, yt::concepts::HAVE_NEQ)
+
+#undef YT_YTENSOR_CMP_OPERATOR
+
 template <typename T, int dim> template<int dim1>
-yt::YTensor<T, std::max(dim, dim1)> yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
+auto yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
     if constexpr (yt::concepts::HAVE_MOD<T>){
         return yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
@@ -127,7 +165,7 @@ yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator%=(const yt::Y
 }
 
 template <typename T, int dim>
-yt::YTensor<T, dim> yt::YTensor<T, dim>::operator%(const T& other) const {
+auto yt::YTensor<T, dim>::operator%(const T& other) const {
     if constexpr (yt::concepts::HAVE_MOD<T>){
         return yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
@@ -241,35 +279,25 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     yt::infos::MatmulBackend backend) const {
     static_assert(yt::concepts::HAVE_ADD<T> && yt::concepts::HAVE_MUL<T>, "Type must have add and mul in matmul");
     static_assert(dim >= 1 && dim1 >= 1, "matmul only support dim >= 1");
-    int lw = this->shape(-1);
-    int rw = other.shape(-2);
-    if(lw != rw){
+    if(this->shape(-1) != other.shape(-2)){
         throwShapeNotMatch("matmul", other.shape());
     }
     
-    // 根据后端选择调用相应实现
+    // 根据后端分派，各后端自己处理fastpath优化
     if constexpr (std::is_arithmetic_v<T>) {
         switch (backend) {
 #if YT_USE_AVX2
             case yt::infos::MatmulBackend::AVX2:
-                if constexpr (std::is_same_v<T, float>) {
-                    return matmul_avx2_backend(other);
-                }
-                // 非float类型回退到Eigen或Naive
+                if constexpr (std::is_same_v<T, float>) return matmul_avx2_backend(other);
                 [[fallthrough]];
 #endif
 #if YT_USE_EIGEN
-            case yt::infos::MatmulBackend::Eigen:
-                return matmul_eigen_backend(other);
+            case yt::infos::MatmulBackend::Eigen: return matmul_eigen_backend(other);
 #endif
-            case yt::infos::MatmulBackend::Naive:
-            default:
-                return matmul_zero_backend(other);
+            default: return matmul_naive_backend(other);
         }
     } else {
-        // 非算术类型只能使用naive实现
-        (void)backend;
-        return matmul_zero_backend(other);
+        return matmul_naive_backend(other);
     }
 }
 
@@ -556,7 +584,7 @@ std::pair<T, int> yt::YTensor<T, dim>::max(int)const requires (dim == 1) {
 }
 
 template <typename T, int dim> template<int dim1>
-yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_zero_backend(const yt::YTensor<T, dim1>& other) const{
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_naive_backend(const yt::YTensor<T, dim1>& other) const{
     auto thisMatView = this->matView();
     auto otherMatView = other.matView();
     int ah = this->shape(-2);
@@ -638,14 +666,75 @@ yt::YTensor<T, dim>::EigenMatrixMap yt::YTensor<T, dim>::matViewEigen() const re
 
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_eigen_backend(const yt::YTensor<T, dim1>& other) const{    
+    int aw = this->shape(-1);
+    int bw = other.shape(-1);
+    
+    // ==================== Fastpath检测 ====================
+    if constexpr (dim > 2) {
+        bool rightIs2D = (dim1 <= 2);
+        if (!rightIs2D) {
+            rightIs2D = true;
+            for (int i = 0; i < dim1 - 2; ++i) {
+                if (other.shape(i) != 1) { rightIs2D = false; break; }
+            }
+        }
+        if (rightIs2D) {
+            int contiguousStart = this->isContiguousFrom(0, -1);
+            if (contiguousStart < dim - 1) {
+                // 可以使用fastpath
+                int outerSize = 1, innerRows = 1;
+                for (int i = 0; i < contiguousStart; ++i) outerSize *= this->shape(i);
+                for (int i = contiguousStart; i < dim - 1; ++i) innerRows *= this->shape(i);
+                
+                // 准备输出
+                std::vector<int> opShape;
+                for (int i = 0; i < dim - 1; ++i) opShape.push_back(this->shape(i));
+                opShape.push_back(bw);
+                yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+                
+                // 右矩阵2D view
+                yt::YTensor<T, 2> right2D;
+                right2D._shape = {aw, bw}; right2D._stride = {other.stride_(-2), other.stride_(-1)};
+                right2D._offset = other._offset; right2D._data = other._data;
+                right2D._element_size = sizeof(T); right2D._dtype = yt::types::getTypeName<T>();
+                
+                int innerStride = (contiguousStart == 0) ? aw : this->stride_(contiguousStart);
+                int opInnerStride = (contiguousStart == 0) ? bw : op.stride_(contiguousStart);
+                
+                for (int outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
+                    int leftOffset = 0, opOffset = 0;
+                    if (contiguousStart > 0) {
+                        int idx = outerIdx;
+                        for (int i = contiguousStart - 1; i >= 0; --i) {
+                            int coord = idx % this->shape(i); idx /= this->shape(i);
+                            leftOffset += coord * this->stride_(i);
+                            opOffset += coord * op.stride_(i);
+                        }
+                    }
+                    yt::YTensor<T, 2> leftFlat, opFlat;
+                    leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, this->stride_(-1)};
+                    leftFlat._offset = this->_offset + leftOffset; leftFlat._data = this->_data;
+                    leftFlat._element_size = sizeof(T); leftFlat._dtype = yt::types::getTypeName<T>();
+                    opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
+                    opFlat._offset = opOffset; opFlat._data = op._data;
+                    opFlat._element_size = sizeof(T); opFlat._dtype = yt::types::getTypeName<T>();
+                    
+                    auto mapA = leftFlat.matViewEigen();
+                    auto mapB = right2D.matViewEigen();
+                    auto mapC = opFlat.matViewEigen();
+                    mapC.noalias() = mapA * mapB;
+                }
+                return op;
+            }
+        }
+    }
+    
+    // ==================== 普通路径 ====================
     auto thisMatView = this->matView();
     auto otherMatView = other.matView();
     int ah = this->shape(-2);
-    // int aw = this->shape(-1);
-    int bw = other.shape(-1);
     std::vector<int> opShape;
     if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
-        // 如果是二维矩阵，直接返回
         opShape = {ah, bw};
     } else {
         opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
@@ -666,18 +755,80 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
 
 /////////////// AVX2 GEMM 后端 ///////////////
 #if YT_USE_AVX2
-#include "../include/kernel/gemm.hpp"
 
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_avx2_backend(const yt::YTensor<T, dim1>& other) const requires std::is_same_v<T, float> {    
+    int aw = this->shape(-1);
+    int bw = other.shape(-1);
+    
+    // ==================== Fastpath检测 ====================
+    if constexpr (dim > 2) {
+        bool rightIs2D = (dim1 <= 2);
+        if (!rightIs2D) {
+            rightIs2D = true;
+            for (int i = 0; i < dim1 - 2; ++i) {
+                if (other.shape(i) != 1) { rightIs2D = false; break; }
+            }
+        }
+        if (rightIs2D) {
+            int contiguousStart = this->isContiguousFrom(0, -1);
+            if (contiguousStart < dim - 1) {
+                // 可以使用fastpath
+                int outerSize = 1, innerRows = 1;
+                for (int i = 0; i < contiguousStart; ++i) outerSize *= this->shape(i);
+                for (int i = contiguousStart; i < dim - 1; ++i) innerRows *= this->shape(i);
+                
+                // 准备输出
+                std::vector<int> opShape;
+                for (int i = 0; i < dim - 1; ++i) opShape.push_back(this->shape(i));
+                opShape.push_back(bw);
+                yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+                
+                // 右矩阵2D view
+                yt::YTensor<T, 2> right2D;
+                right2D._shape = {aw, bw}; right2D._stride = {other.stride_(-2), other.stride_(-1)};
+                right2D._offset = other._offset; right2D._data = other._data;
+                right2D._element_size = sizeof(T); right2D._dtype = yt::types::getTypeName<T>();
+                
+                int innerStride = (contiguousStart == 0) ? aw : this->stride_(contiguousStart);
+                int opInnerStride = (contiguousStart == 0) ? bw : op.stride_(contiguousStart);
+                
+                for (int outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
+                    int leftOffset = 0, opOffset = 0;
+                    if (contiguousStart > 0) {
+                        int idx = outerIdx;
+                        for (int i = contiguousStart - 1; i >= 0; --i) {
+                            int coord = idx % this->shape(i); idx /= this->shape(i);
+                            leftOffset += coord * this->stride_(i);
+                            opOffset += coord * op.stride_(i);
+                        }
+                    }
+                    yt::YTensor<T, 2> leftFlat, opFlat;
+                    leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, this->stride_(-1)};
+                    leftFlat._offset = this->_offset + leftOffset; leftFlat._data = this->_data;
+                    leftFlat._element_size = sizeof(T); leftFlat._dtype = yt::types::getTypeName<T>();
+                    opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
+                    opFlat._offset = opOffset; opFlat._data = op._data;
+                    opFlat._element_size = sizeof(T); opFlat._dtype = yt::types::getTypeName<T>();
+                    
+                    yt::kernel::gemm::matmul(
+                        leftFlat.data(), right2D.data(), opFlat.data(),
+                        innerRows, bw, aw,
+                        static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
+                        static_cast<int64_t>(right2D.stride_(0)), static_cast<int64_t>(right2D.stride_(1)),
+                        static_cast<int64_t>(opFlat.stride_(0)), static_cast<int64_t>(opFlat.stride_(1)));
+                }
+                return op;
+            }
+        }
+    }
+    
+    // ==================== 普通路径 ====================
     auto thisMatView = this->matView();
     auto otherMatView = other.matView();
     int ah = this->shape(-2);
-    // int aw = this->shape(-1);
-    int bw = other.shape(-1);
     std::vector<int> opShape;
     if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
-        // 如果是二维矩阵，直接返回
         opShape = {ah, bw};
     } else {
         opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
@@ -687,19 +838,12 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     auto opMatView = op.matView();
 
     opMatView.broadcastInplace([](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
-        // 获取维度信息
         int m = a.shape(0);
         int k = a.shape(1);
         int n = b.shape(1);
-        
-        // 获取步幅信息
         auto aStride = a.stride_();
         auto bStride = b.stride_();
         auto oStride = o.stride_();
-        
-        // 调用 GEMM 内核，使用带步幅的 matmul 接口
-        // matmul 接口: A, B, C, m, n, k, rsa, csa, rsb, csb, rsc, csc
-        // 注意：使用 data() 而非 data_()，以正确考虑张量的 _offset
         yt::kernel::gemm::matmul(
             a.data(), b.data(), o.data(),
             m, n, k,

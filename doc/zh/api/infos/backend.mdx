@@ -1,0 +1,47 @@
+# 后端系统
+
+本文档介绍 `yt::infos` 命名空间中的矩阵乘法后端配置。
+
+## MatmulBackend 枚举
+
+```cpp
+enum class MatmulBackend {
+    Naive = 0,  // 朴素实现，无依赖
+    Eigen = 1,  // Eigen 库实现
+    AVX2 = 2    // 自定义 AVX2+FMA 实现
+};
+```
+
+## 默认后端
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+优先级：AVX2 > Eigen > Naive
+
+## 编译宏
+
+| 宏 | 说明 |
+| --- | --- |
+| `YT_USE_EIGEN` | 启用 Eigen 后端 |
+| `YT_USE_AVX2` | 启用 AVX2 后端 |
+
+## 后端性能与选择
+
+关于不同后端的详细性能对比和选择建议，请参阅 **[后端选择指南](../guides/backend_selection.mdx)**。
+
+---
+
+## 相关内容
+
+- [性能优化指南](../guides/performance_tips.mdx)
+- [后端选择指南](../guides/backend_selection.mdx)

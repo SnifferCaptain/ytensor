@@ -1,0 +1,144 @@
+# 类型分发 (Type Dispatch)
+
+本文档介绍 `yt::kernel` 命名空间中的运行时类型分发机制。
+
+## 概述
+
+`Type Dispatch` 是连接 `YTensorBase`（运行时动态类型）和 `YTensor<T>`（编译时静态类型）的桥梁。它允许你根据字符串类型的 `dtype`（如 `"float32"`）自动选择并实例化对应的模板函数。
+
+这对于以下场景非常有用：
+1. 实现支持任意类型的通用算子。
+2. 处理 `YTensorBase` 输入并在内部转为具体的 `T` 类型进行计算。
+3. 避免编写冗长的 `if-else` 或 `switch-case` 语句。
+
+## 核心宏与类型列表
+
+为了方便使用，YTensor 预定义了一些常用的类型列表（Type Lists）：
+
+| 类型列表 | 包含的类型 |
+| --- | --- |
+| `StandardFloatTypes` | `float`, `double` |
+| `StandardIntTypes` | `int8`, `int16`, `int32`, `int64`, `uint8`, `...`, `uint64` |
+| `IntegerTypes` | 同 `StandardIntTypes` |
+| `StandardNumericTypes` | 标准浮点 + 标准整数 |
+| `ExtendedFloatTypes` | `bfloat16`, `float16`, `float8_...` |
+| `AllNumericTypes` | 所有上述类型 |
+
+## `dispatch`
+
+### 函数签名
+
+```cpp
+template<typename TypeListT, typename Func>
+bool dispatch(const std::string& dtype, Func&& func);
+
+template<typename TypeListT, typename Func>
+void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
+```
+
+### 核心功能描述
+
+根据 `dtype` 字符串，在 `TypeListT` 中查找匹配的 C++ 类型 `T`，并调用泛型 lambda 函数 `func.operator()<T>()`。
+
+*   `dispatch`: 如果找到匹配类型并成功执行，返回 `true`；否则返回 `false`。
+*   `dispatchOrThrow`: 如果未找到匹配类型，抛出 `std::runtime_error` 异常。
+
+### 使用示例
+
+假设我们需要编写一个打印函数，支持所有数值类型：
+
+```cpp
+#include "ytensor_kernel.hpp" // 或者是 type_dispatch.hpp
+
+void printValue(const yt::YTensorBase& tensor) {
+    // 定义一个泛型 lambda
+    auto kernel = [&]<typename T>() {
+        // 在这里，T 是具体的类型（如 float, int 等）
+        // 我们可以安全地通过 data<T>() 访问数据
+        const T* data = tensor.data<T>();
+        std::cout << "Value: " << data[0] << std::endl;
+    };
+
+    // 分发！
+    // 尝试在 AllNumericTypes 中匹配 tensor.dtype()
+    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+        tensor.dtype(), 
+        kernel, 
+        "printValue"
+    );
+}
+```
+
+## `dispatch2`
+
+### 函数签名
+
+```cpp
+template<typename SrcTypeList, typename DstTypeList, typename Func>
+bool dispatch2(const std::string& srcDtype, const std::string& dstDtype, Func&& func);
+
+template<typename SrcTypeList, typename DstTypeList, typename Func>
+void dispatch2OrThrow(const std::string& srcDtype, const std::string& dstDtype, Func&& func, const std::string& opName = "dispatch2");
+```
+
+### 核心功能描述
+
+双类型分发。用于需要同时处理两个不同类型的场景，例如类型转换（Cast）或混合类型运算。
+它会尝试匹配 `srcDtype` 和 `dstDtype`，并调用 `func.operator()<SrcT, DstT>()`。
+
+### 使用示例
+
+实现一个通用的类型转换函数：
+
+```cpp
+void castTensor(const yt::YTensorBase& src, yt::YTensorBase& dst) {
+    auto kernel = [&]<typename SrcT, typename DstT>() {
+        const SrcT* s = src.data<SrcT>();
+        DstT* d = dst.data<DstT>();
+        // 执行转换逻辑
+        for(size_t i=0; i<src.size(); ++i) {
+            d[i] = static_cast<DstT>(s[i]);
+        }
+    };
+
+    yt::kernel::dispatch2OrThrow<yt::types::AllNumericTypes, yt::types::AllNumericTypes>(
+        src.dtype(), 
+        dst.dtype(), 
+        kernel, 
+        "castTensor"
+    );
+}
+```
+
+## 自定义 Trait 检查
+
+有时仅仅匹配类型是不够的，你可能还需要类型满足特定的条件（例如支持加法运算）。
+
+```cpp
+template<template<typename> class Trait, typename TypeListT, typename Func>
+void dispatchWithTraitOrThrow(const std::string& dtype, Func&& func, const std::string& opName);
+```
+
+### 使用示例
+
+只对支持 `operator+` 的类型执行加法：
+
+```cpp
+auto kernel = [&]<typename T>() {
+    /* ... 仅当 T 支持加法时才会实例化此代码 ... */
+};
+
+yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumericTypes>(
+    tensor.dtype(),
+    kernel,
+    "addOperation"
+);
+```
+
+---
+
+## 最佳实践
+
+1.  **使用泛型 Lambda (C++20)**：配合 `[&]<typename T>() { ... }` 语法，代码最简洁。
+2.  **选择合适的 TypeList**：尽量只包含你真正支持的类型列表，以减少编译时间及二进制大小（虽然模板实例化是按需的，但错误的匹配尝试也可能有开销）。
+3.  **错误处理**：对于必须成功的操作，优先使用 `dispatchOrThrow`，它能提供清晰的错误信息。

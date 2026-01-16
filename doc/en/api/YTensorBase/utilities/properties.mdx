@@ -1,0 +1,194 @@
+# Property Queries
+
+This document describes the property query methods for the `YTensorBase` class.
+
+## Overview
+
+| Method | Return Type | Description |
+| --- | --- | --- |
+| `isContiguous()` | `bool` | Checks if the tensor is contiguous from a specified dimension onwards. |
+| `isContiguousFrom()` | `int` | Returns the first dimension index from which the tensor is contiguous. |
+| `isDisjoint()` | `bool` | Checks if elements in the tensor view do not overlap in memory. |
+| `shapeMatch()` | `bool` | Checks if the tensor's shape matches a given shape. |
+
+---
+
+## `isContiguous()`
+
+### Function Signature
+
+```cpp
+bool isContiguous(int fromDim = 0, int toDim = -1) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `fromDim` | `int` | `0` | The dimension index from which to start the check (supports negative and circular indexing). |
+| `toDim` | `int` | `-1` | The dimension index at which to end the check (exclusive, supports negative and circular indexing). Defaults to `-1` (end of tensor). |
+
+### Core Function Description
+
+Checks whether the tensor is memory-contiguous starting from the specified dimension. "Contiguous" means that the logical strides match the actual internal strides.
+
+### Return Value
+
+- `true`: All dimensions starting from `fromDim` are contiguous.
+- `false`: At least one dimension is non-contiguous, or the underlying `_data` is null.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+bool cont0 = tensor.isContiguous();    // true (Fully contiguous)
+bool cont1 = tensor.isContiguous(1);   // true
+
+YTensorBase t = tensor.transpose();
+bool cont2 = t.isContiguous();         // false (Transposition breaks contiguity)
+bool cont3 = t.isContiguous(1);        // Might be true depending on the specific layout
+```
+
+---
+
+## `isContiguousFrom()`
+
+### Function Signature
+
+```cpp
+int isContiguousFrom() const;
+```
+
+### Core Function Description
+
+Returns the index of the first dimension from which the layout is contiguous.
+
+### Return Value
+
+- **Type**: `int`
+- **Description**: Returns the index of the first dimension from which the layout is contiguous.
+  - Returns `0`: Fully contiguous.
+  - Returns `ndim()`: Not contiguous at all (or `_data` is null).
+  - Returns `k`: The tensor is contiguous from dimension `k` onwards (dimensions $0 \dots k-1$ may be non-contiguous).
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+int from0 = tensor.isContiguousFrom();  // Output: 0 (Fully contiguous)
+
+// Check only the first two dimensions
+bool cont4 = tensor.isContiguous(0, 2);
+```
+
+---
+
+## `isContiguousFrom()`
+
+### Function Signature
+
+```cpp
+int isContiguousFrom(int fromDim = 0, int toDim = -1) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `fromDim` | `int` | `0` | The starting dimension index (inclusive, supports negative/circular indexing). |
+| `toDim` | `int` | `-1` | The ending dimension index (exclusive, supports negative/circular indexing). |
+
+### Core Function Description
+
+Returns the index of the first dimension from which the layout is contiguous within the specified range.
+
+### Return Value
+
+- **Type**: `int`
+- **Description**: Returns the index of the first non-contiguous dimension + 1 within the range. If fully contiguous within the range, returns `fromDim`.
+  - Basic Logic: Finds the largest `k` such that dimensions `k` through `toDim` are contiguous.
+  - If fully contiguous, returns `fromDim`.
+  - If fully non-contiguous, returns the positive index corresponding to `toDim`.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+int from0 = tensor.isContiguousFrom();  // Output: 0 (Fully contiguous)
+
+YTensorBase t = tensor.transpose(-2, -1);
+int from1 = t.isContiguousFrom();
+// Might return ndim() - 2 or a smaller value
+```
+
+---
+
+## `isDisjoint()`
+
+### Function Signature
+
+```cpp
+bool isDisjoint() const;
+```
+
+### Core Function Description
+
+Checks whether the tensor elements are **disjoint** (i.e., no two distinct logical coordinates point to the same physical memory location).
+
+### Return Value
+
+- `true`: Elements do not overlap.
+- `false`: Elements overlap (e.g., as a result of a `repeat()` operation where strides are 0).
+
+### Internal Logic
+
+For each dimension $d$ where size > 1, the check is: $|stride[d]| \geq theoretical\_minimum\_stride$. If $|stride[d]| < theoretical\_minimum\_stride$, overlapping occurs.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+bool disj1 = tensor.isDisjoint();  // true
+
+// repeat() creates a view with overlapping elements (dimension 0 has stride 0)
+YTensorBase t = YTensorBase::zeros({1, 4}, "float32").repeat({3, 1});
+bool disj2 = t.isDisjoint();       // false because stride[0] = 0
+```
+
+---
+
+## `shapeMatch()`
+
+### Function Signature
+
+```cpp
+bool shapeMatch(const std::vector<int>& otherShape) const;
+```
+
+### Core Function Description
+
+Checks if the tensor's shape **perfectly matches** the provided shape.
+
+### Return Value
+
+- `true`: The number of dimensions is the same, and the size of each dimension matches exactly.
+- `false`: Mismatch in the number of dimensions or any individual dimension's size.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+bool match1 = tensor.shapeMatch({3, 4, 5});  // true
+bool match2 = tensor.shapeMatch({3, 4});     // false (Different ndim)
+bool match3 = tensor.shapeMatch({4, 3, 5});  // false (Different dimension sizes)
+```
+
+---
+
+## Related Content
+
+- [Shape Queries](../shape/query.mdx) - Methods like `shape()` and `ndim()`.
+- [Shape Operations: Reshaping](../shape/reshape.mdx) - The `contiguous()` method.
+- [Coordinate Conversion](./conversion.mdx) - Methods like `toIndex()` and `toCoord()`.

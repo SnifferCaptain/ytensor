@@ -1,0 +1,309 @@
+# Data Pointer Access
+
+This document describes the low-level data pointer access methods for the `YTensorBase` class, including the `data<T>()`, `atData<T>()`, and `atData_<T>()` methods.
+
+## Overview
+
+YTensorBase provides three methods for accessing underlying data:
+
+| Method | Return Type | Offset Handling | Best Use Case |
+| --- | --- | --- | --- |
+| `data<T>()` | `T*` | Already includes `_offset` | Retrieving the starting pointer |
+| `atData<T>(index)` | `T&` | Logical Index → Coordinate → Physical Position | Backwards compatibility (lower performance) |
+| `atData_<T>(index)` | `T&` | Direct access via physical index | High-performance element-wise operations (requires contiguity) |
+
+:::warning
+When using these methods, ensure that the template parameter `T` exactly matches the tensor's actual `dtype()`; otherwise, undefined behavior will occur.
+:::
+
+---
+
+## `data<T>()`
+
+### Function Signatures
+
+```cpp
+template <typename T>
+T* data();
+
+template <typename T>
+const T* data() const;
+
+// float specialization (no template parameter needed)
+float* data();
+const float* data() const;
+```
+
+### Core Function Description
+
+Retrieves the starting pointer of the tensor's data. The returned pointer already accounts for the internal offset (`_offset`), directly pointing to the first element of the current view.
+
+### Return Value
+
+- **Type**: `T*` or `const T*`
+- **Description**: A pointer to the first element (offset applied); returns `nullptr` if the internal data buffer is empty.
+
+### Implementation Details
+
+```cpp
+template <typename T>
+inline T* YTensorBase::data() {
+    if (!_data) return nullptr;
+    return reinterpret_cast<T*>(_data.get()) + _offset;
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // Get a float pointer using the specialized version
+    float* ptr = tensor.data();
+    ptr[0] = 1.0f;  // Modify the first element
+
+    // Get a pointer for a specific type
+    YTensorBase intTensor = YTensorBase::zeros({10}, "int32");
+    int* intPtr = intTensor.data<int>();
+    intPtr[0] = 42;
+}
+```
+
+### Working with Sub-tensors
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4, 5}, "float32");
+YTensorBase b = a.slice(0, 1, 2);  // Slice, shape: [1, 4, 5]
+
+// a.data() and b.data() will differ (different view starting positions)
+// but they share the same underlying memory buffer.
+float* aPtr = a.data();
+float* bPtr = b.data();
+// bPtr = aPtr + offset_difference
+```
+
+:::caution
+For non-contiguous tensors, the pointer returned by `data()` cannot be safely accessed using simple linear indexing. To iterate through all elements, use the `at<T>()` method or call `contiguous()` first.
+:::
+
+---
+
+## `atData<T>()`
+
+### Function Signatures
+
+```cpp
+template <typename T>
+T& atData(int index);
+
+template <typename T>
+const T& atData(int index) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `int` | Logical index (from 0 to `size() - 1`). |
+
+### Core Function Description
+
+Accesses an element via its logical (linear) index. Internally, this converts the logical index into multi-dimensional coordinates (`toCoord`) and then calls `at<T>()`.
+
+**Usage is generally discouraged** due to lower performance; it is primarily provided for compatibility scenarios.
+
+### Return Value
+
+- **Type**: `T&` or `const T&`
+- **Description**: Returns a reference to the element at the specified logical position.
+
+### Implementation Details
+
+```cpp
+template <typename T>
+inline T& YTensorBase::atData(int index) {
+    auto coord = toCoord(index);  // Logical index -> Coordinate
+    return at<T>(coord);          // Coordinate -> Element reference
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // Access via logical index
+    tensor.atData<float>(0) = 1.0f;   // Equivalent to at<float>({0, 0})
+    tensor.atData<float>(5) = 5.0f;   // Equivalent to at<float>({1, 1})
+
+    // Logical index calculation (row-major):
+    // index = i * shape[1] + j
+    // 5 = 1 * 4 + 1  => Coordinate (1, 1)
+}
+```
+
+:::warning
+**Performance Warning**
+
+`atData<T>()` performs two steps internally:
+1. Converts the logical index to multi-dimensional coordinates (`toCoord()`).
+2. Converts the coordinates to a physical index (`at<T>()`).
+
+Performance is significantly lower than using `at<T>()` directly or using `atData_<T>()`. Use only when logical indexing is strictly required.
+:::
+
+---
+
+## `atData_<T>()`
+
+### Function Signatures
+
+```cpp
+template <typename T>
+T& atData_(int index);
+
+template <typename T>
+const T& atData_(int index) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `int` | Physical index (relative to the pointer returned by `data<T>()`). |
+
+### Core Function Description
+
+Directly accesses an element via its physical index. This is extremely efficient but **requires the tensor to be contiguous**. No bounds checking is performed.
+
+### Return Value
+
+- **Type**: `T&` or `const T&`
+- **Description**: Returns a reference to the element at the specified physical memory position.
+
+### Implementation Details
+
+```cpp
+template <typename T>
+inline T& YTensorBase::atData_(int index) {
+    return this->data<T>()[index + _offset];
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // Ensure the tensor is contiguous
+    assert(tensor.isContiguous());
+
+    // High-performance access via physical index
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_<float>(i) = static_cast<float>(i);
+    }
+
+    // Verification
+    std::cout << tensor.at<float>({0, 0}) << std::endl;  // Output: 0
+    std::cout << tensor.at<float>({1, 2}) << std::endl;  // Output: 6
+}
+```
+
+### Element-wise Operations
+
+`atData_<T>()` is ideal for high-performance element-wise operations:
+
+```cpp
+void scale_inplace(YTensorBase& tensor, float factor) {
+    assert(tensor.isContiguous());  // Ensure contiguity
+    assert(tensor.dtype() == "float32");  // Ensure type match
+
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_<float>(i) *= factor;
+    }
+}
+```
+
+:::danger
+**Strict Requirements**
+
+Before using `atData_<T>()`, you must ensure:
+1. **The tensor is contiguous** (`isContiguous() == true`).
+2. **The index is within bounds** (checks are not performed).
+3. **The type matches** (`T` corresponds to the `dtype()`).
+
+Incorrect use will result in undefined behavior or program crashes!
+:::
+
+---
+
+## Comparison of Methods
+
+| Feature | `data<T>()` | `atData<T>()` | `atData_<T>()` |
+| --- | --- | --- | --- |
+| **Return Type** | Pointer | Reference | Reference |
+| **Indexing** | Manual calculation | Logical index | Physical index |
+| **Performance** | ✅ High | ❌ Low | ✅ High |
+| **Contiguity Req.** | None (but requires strides) | None | ✅ Must be contiguous |
+| **Bounds Checking** | None | Yes | None |
+| **Best Use Case** | Low-level operations | Compatibility | Element-wise loops |
+
+---
+
+## Best Practices
+
+### ✅ Recommended
+
+```cpp
+// ✅ Single element access: Use at<T>()
+tensor.at<float>({i, j, k}) = value;
+
+// ✅ Element-wise operations (contiguous): Use atData_<T>()
+if (tensor.isContiguous()) {
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_<float>(i) *= 2.0f;
+    }
+}
+
+// ✅ Low-level pointer operations: Use data<T>() + strides
+float* ptr = tensor.data<float>();
+auto stride = tensor.stride_();
+ptr[i * stride[0] + j * stride[1]] = value;
+```
+
+### ❌ What to Avoid
+
+```cpp
+// ❌ Avoid: Iterating with atData<T>() (poor performance)
+for (size_t i = 0; i < tensor.size(); ++i) {
+    tensor.atData<float>(i) = value;  // Re-calculates coordinates every loop
+}
+
+// ❌ Avoid: Using atData_<T>() on non-contiguous tensors
+if (!tensor.isContiguous()) {
+    // tensor.atData_<float>(i) = value;  // Undefined behavior!
+}
+
+// ❌ Avoid: Data type mismatch
+YTensorBase t = YTensorBase::zeros({10}, "int32");
+float* ptr = t.data<float>();  // Type mismatch!
+```
+
+---
+
+## Related Content
+
+- [Element Access: Indexing](./indexing.mdx) - Using the `at<T>()` template method.
+- [Type Querying](./dtype.mdx) - Methods like `dtype()` and `elementSize()`.
+- [Shape Transformation: Reshaping](../shape/reshape.mdx) - Using the `contiguous()` method.

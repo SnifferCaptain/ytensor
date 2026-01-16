@@ -1,0 +1,194 @@
+# Coordinate Conversion
+
+This document describes the coordinate conversion methods for the `YTensorBase` class.
+
+## Overview
+
+| Method | Return Type | Description |
+| --- | --- | --- |
+| `toIndex()` | `size_t` | Coordinate → Logical index (based on logical strides). |
+| `toIndex_()` | `size_t` | Coordinate → Physical index (based on actual physical strides). |
+| `toCoord()` | `std::vector<int>` | Logical index → Coordinate. |
+| `autoShape()` | `std::vector<int>` | Infers shape automatically (supports the `-1` placeholder). |
+| `cast()` | `YTensorBase` | Type conversion (casting). |
+
+---
+
+## `toIndex()`
+
+### Function Signatures
+
+```cpp
+template <typename... Args>
+size_t toIndex(const Args... args) const;
+
+size_t toIndex(const std::vector<int>& pos) const;
+```
+
+### Description
+
+Converts multi-dimensional coordinates into a **logical index**. The logical index is based on logical strides, assuming a standard row-major contiguous storage.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+size_t idx = tensor.toIndex({1, 2, 3});
+// idx = 1 * 20 + 2 * 5 + 3 = 33 (Logical index)
+
+// Variadic argument version
+size_t idx2 = tensor.toIndex(1, 2, 3);
+```
+
+### Note
+
+- If the tensor is **non-contiguous**, `toIndex()` returns the logical position, which does not represent the actual memory offset.
+- To obtain the actual memory offset, use `toIndex_()`.
+
+---
+
+## `toIndex_()`
+
+### Function Signatures
+
+```cpp
+template <typename... Args>
+size_t toIndex_(const Args... args) const;
+
+size_t toIndex_(const std::vector<int>& pos) const;
+```
+
+### Description
+
+Converts coordinates into a **physical index** (based on internal `_stride` values). This is useful when combined with `data<T>()` to access memory directly.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+YTensorBase transposed = tensor.transpose();
+
+// Physical index != Logical index because transposition changed the strides
+size_t physIdx = transposed.toIndex_({0, 0});
+float* ptr = transposed.data<float>();
+float value = ptr[physIdx];
+```
+
+---
+
+## `toCoord()`
+
+### Function Signature
+
+```cpp
+std::vector<int> toCoord(size_t index) const;
+```
+
+### Description
+
+Converts a logical index back into multi-dimensional coordinates. This is the inverse operation of `toIndex()`.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+std::vector<int> coord = tensor.toCoord(33);
+// coord = {1, 2, 3}
+
+// Verification
+size_t idx = tensor.toIndex(coord);
+// idx == 33
+```
+
+---
+
+## `autoShape()`
+
+### Function Signatures
+
+```cpp
+template<typename... Args>
+std::vector<int> autoShape(const Args... shape) const;
+
+std::vector<int> autoShape(const std::vector<int>& shape) const;
+```
+
+### Description
+
+Automatically infers the dimensions of a shape. Supports the `-1` placeholder, which is calculated based on the total number of elements.
+
+### Rules
+
+1. **Single `-1`**: Its size is calculated automatically using the total number of elements.
+2. **Multiple `-1`s**: Non-final `-1`s take the value from the current shape at the same position; the final `-1` is calculated automatically.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+// tensor.size() = 60
+
+// Single -1: automatic calculation
+std::vector<int> s1 = tensor.autoShape({-1, 12});
+// s1 = {5, 12} (because 60 / 12 = 5)
+
+std::vector<int> s2 = tensor.autoShape({2, -1, 5});
+// s2 = {2, 6, 5} (because 60 / (2 * 5) = 6)
+
+// Multiple -1s: positional inheritance from original shape
+std::vector<int> s3 = tensor.autoShape({-1, 2, 2, -1});
+// s3 = {3, 2, 2, 5}
+// First -1 -> original shape[0] = 3
+// Final -1 -> 60 / (3 * 2 * 2) = 5
+```
+
+### Exceptions
+
+- Throws `std::invalid_argument` if the total number of elements cannot be evenly divided.
+- Throws an exception if a `-1` placeholder corresponds to a position outside the range of the original shape.
+
+---
+
+## `cast()`
+
+### Function Signature
+
+```cpp
+YTensorBase cast(const std::string& newDtype) const;
+```
+
+### Core Function Description
+
+Type casting: Returns a new tensor with the specified data type.
+*   If the target type is the same as the current type, it returns a deep copy (`clone()`).
+*   If different, it creates a new tensor and converts data element-wise.
+*   Supports conversion between any registered types (requires underlying support).
+
+### Usage Example
+
+```cpp
+// 1. Basic conversion: int -> float
+YTensorBase a = YTensorBase::zeros({2, 3}, "int32");
+YTensorBase b = a.cast("float32");
+// b.dtype() == "float32"
+
+// 2. Precision conversion: float64 -> float32
+YTensorBase c = b.cast("float64");
+
+// 3. Boolean conversion: float -> bool
+YTensorBase d = a.cast("bool");
+```
+
+### Exceptions
+
+*   May throw an exception if the conversion is not supported for the target type (depends on specific type dispatch implementation).
+
+---
+
+## Related Content
+
+- [Data Pointers](../access/data_ptr.mdx) - Methods like `data<T>()` and `atData_()`.
+- [Shape Queries](../shape/query.mdx) - Methods like `shape()` and `stride()`.
+- [Properties](./properties.mdx) - The `isContiguous()` method.

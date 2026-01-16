@@ -1,0 +1,643 @@
+# Coordinate Conversion
+
+This document describes the coordinate conversion utilities in `YTensor`, which allow for translating between multi-dimensional coordinates and one-dimensional indices.
+
+---
+
+## Overview
+
+`YTensor` provides three primary methods for coordinate conversion:
+
+- **`toIndex()`**: Multi-dimensional coordinates $\to$ Logical index (taking logical strides into account).
+- **`toIndex_()`**: Multi-dimensional coordinates $\to$ Physical offset (calculated using internal storage strides).
+- **`toCoord()`**: Logical index $\to$ Multi-dimensional coordinates.
+
+These methods are useful for:
+- Implementing custom access patterns.
+- Debugging memory layout.
+- Interfacing with `atData()` / `atData_()`.
+
+---
+
+## `toIndex()`
+
+Converts multi-dimensional coordinates into a **logical index**.
+
+### Function Signatures
+
+```cpp
+// Variadic argument version
+template <typename... Args>
+size_t toIndex(Args... args) const;
+
+// Vector version
+size_t toIndex(const std::vector<int>& pos) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `args` | Variadic arguments | Exactly `dim` integer coordinates. |
+| `pos` | `std::vector<int>` | A coordinate vector of length `dim`. |
+
+### Return Value
+
+Returns a `size_t` **logical index**. The calculation follows this formula:
+
+```cpp
+index = pos[0] * stride()[0] + pos[1] * stride()[1] + ... + pos[dim-1] * stride()[dim-1]
+```
+
+Where `stride()` returns the **logical strides** (recalculated based on current shape).
+
+### Usage Example
+
+#### Basic Usage
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 3>({2, 3, 4});
+    
+    // Variadic version
+    size_t idx1 = a.toIndex(1, 2, 3);
+    // Calculation: 1*12 + 2*4 + 3*1 = 23
+    
+    // Vector version
+    std::vector<int> pos = {1, 2, 3};
+    size_t idx2 = a.toIndex(pos);  // Result: 23
+    
+    return 0;
+}
+```
+
+#### Using with `atData()`
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+
+// Method 1: Direct access
+float val1 = a.at(1, 2, 3);
+
+// Method 2: toIndex + atData
+size_t idx = a.toIndex(1, 2, 3);
+float val2 = a.atData(idx);
+
+// val1 == val2 ✅
+```
+
+---
+
+## `toIndex_()`
+
+Converts multi-dimensional coordinates into a **physical offset** (relative to the `data_()` pointer).
+
+### Function Signatures
+
+```cpp
+// Variadic argument version
+template <typename... Args>
+size_t toIndex_(Args... args) const;
+
+// Vector version
+size_t toIndex_(const std::vector<int>& pos) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `args` | Variadic arguments | Exactly `dim` integer coordinates. |
+| `pos` | `std::vector<int>` | A coordinate vector of length `dim`. |
+
+### Return Value
+
+Returns a `size_t` **physical offset**. The calculation follows this formula:
+
+```cpp
+offset = pos[0] * _stride[0] + pos[1] * _stride[1] + ... + pos[dim-1] * _stride[dim-1]
+```
+
+Where `_stride` represents the **physical strides** (the actual internal values stored).
+
+### Usage Example
+
+#### Using with `atData_()`
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+
+// Method 1: Using at()
+float val1 = a.at(1, 2, 3);
+
+// Method 2: toIndex_ + atData_
+size_t offset = a.toIndex_(1, 2, 3);
+float val2 = a.atData_(offset);
+
+// val1 == val2 ✅
+```
+
+#### Direct Memory Access
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+
+size_t offset = a.toIndex_(1, 2, 3);
+float* ptr = a.data_() + offset;  // Direct pointer arithmetic
+float val = *ptr;
+```
+
+---
+
+## `toCoord()`
+
+Converts a **logical index** back into multi-dimensional coordinates.
+
+### Function Signature
+
+```cpp
+std::vector<int> toCoord(size_t index) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `size_t` | The logical index (ranging from `0` to `size()-1`). |
+
+### Return Value
+
+Returns a `std::vector<int>` containing the coordinates, with a length equal to `dim`.
+
+### Algorithm
+
+Calculates coordinates using **division and modulo** operations:
+
+```cpp
+std::vector<int> pos(dim);
+for (int i = dim - 1; i >= 0; --i) {
+    pos[i] = index % _shape[i];
+    index /= _shape[i];
+}
+```
+
+The calculation proceeds backward from the **last dimension** to the first.
+
+### Usage Example
+
+#### Basic Usage
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// Find coordinates for logical index 23
+auto coord = a.toCoord(23);
+// coord = {1, 2, 3}
+
+// Verification: Reverse conversion
+size_t idx = a.toIndex(coord);  // Result: 23 ✅
+```
+
+#### Iterating Over a Tensor
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+
+// Iterate using logical indices
+for (size_t i = 0; i < a.size(); i++) {
+    auto coord = a.toCoord(i);
+    float val = a.at(coord);
+    
+    std::cout << "pos[" << coord[0] << "," << coord[1] << "," << coord[2] 
+              << "] = " << val << std::endl;
+}
+```
+
+---
+
+## `toIndex()` vs `toIndex_()`
+
+### Key Differences
+
+| Feature | `toIndex()` | `toIndex_()` |
+| --- | --- | --- |
+| **Stride Type** | **Logical stride** `stride()` | **Physical stride** `_stride` |
+| **Calculation** | Recalculates strides for logical layout | Uses internal strides directly |
+| **Primary Use** | Pairs with `atData()` | Pairs with `atData_()` |
+| **Performance** | Slightly slower (due to stride calculation) | Faster (direct access) |
+
+### Behavioral Variation
+
+:::warning
+**Critical Difference**
+
+For **non-contiguous tensors**, the return values will **differ**!
+
+```cpp
+auto a = YTensor<float, 2>({3, 4});
+auto b = a.slice({{0, 2}, {0, 4, 2}});  // Non-contiguous: every other column
+// b.shape() = {2, 2}
+// b._stride = {4, 2}   (Physical strides)
+// b.stride() = {2, 1}  (Logical strides)
+
+size_t idx_logical = b.toIndex(1, 1);    // 1*2 + 1*1 = 3
+size_t idx_physical = b.toIndex_(1, 1);  // 1*4 + 1*2 = 6
+
+// ❌ idx_logical != idx_physical
+
+// ✅ Correct usage
+float val1 = b.atData(idx_logical);    // Use logical index with atData
+float val2 = b.atData_(idx_physical);  // Use physical offset with atData_
+// val1 == val2 ✅
+```
+:::
+
+### Selection Guide
+
+```cpp
+// ✅ Recommended: toIndex() + atData()
+size_t idx = tensor.toIndex(i, j, k);
+float val = tensor.atData(idx);
+
+// ✅ OR toIndex_() + atData_()
+size_t offset = tensor.toIndex_(i, j, k);
+float val = tensor.atData_(offset);
+
+// ❌ WRONG: Do not mix them
+size_t idx = tensor.toIndex(i, j, k);
+float val = tensor.atData_(idx);  // Incorrect for non-contiguous tensors!
+```
+
+---
+
+## Reciprocity of `toCoord()` and `toIndex()`
+
+### Contiguous Tensors: Fully Reciprocal
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// Forward
+auto coord = a.toCoord(23);     // {1, 2, 3}
+size_t idx = a.toIndex(coord);  // 23 ✅
+```
+
+### Non-contiguous Tensors: One-way Reciprocity
+
+```cpp
+auto a = YTensor<float, 2>({4, 5});
+auto b = a.slice({{0, 4, 2}, {0, 5}});  // Every other row
+// b.shape() = {2, 5}
+
+// ✅ toCoord -> toIndex remains reciprocal
+auto coord = b.toCoord(7);      // {1, 2}
+size_t idx = b.toIndex(coord);  // 7 ✅
+
+// ❌ toIndex_ -> toCoord is NOT reciprocal
+size_t offset = b.toIndex_(1, 2);  // 12 (Physical offset)
+auto coord2 = b.toCoord(12);       // {2, 2} ❌ (Out of logical bounds)
+```
+
+:::info
+**Rules**
+
+- The input to `toCoord()` must be a **logical index** (ranging from `0` to `size()-1`).
+- `toIndex()` returns a **logical index**, which can be safely passed to `toCoord()`.
+- `toIndex_()` returns a **physical offset**, which should **NOT** be passed to `toCoord()`.
+:::
+
+---
+
+## Error Handling
+
+### Dimension Mismatch
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// ❌ Compilation error: Argument count mismatch
+// size_t idx = a.toIndex(1, 2);  // static_assert fails
+
+// ❌ Runtime error: Vector length mismatch
+std::vector<int> pos = {1, 2};
+// size_t idx = a.toIndex(pos);  
+// Throws: std::invalid_argument: "toIndex: position dimensions do not match ndim"
+```
+
+### Index Out of Bounds
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// toIndex / toIndex_ do NOT check bounds for performance reasons
+size_t idx = a.toIndex(10, 20, 30);  // ⚠️ No error, but the result is meaningless
+
+// atData DOES check bounds
+// float val = a.atData(idx);  // ❌ Throws exception
+```
+
+### `toCoord()` Overflow
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// toCoord does NOT check for index overflow
+auto coord = a.toCoord(1000);  // ⚠️ Returns incorrect coordinates
+```
+
+---
+
+## Performance Considerations
+
+### Performance Comparison
+
+Benchmarks based on a $(1000, 1000)$ tensor ($1,000,000$ calls):
+
+| Operation | Time (ms) | Relative Speed |
+| --- | --- | --- |
+| `at(i, j)` | 45 | 1.0x |
+| `toIndex() + atData()` | 52 | 0.87x |
+| `toIndex_() + atData_()` | 38 | 1.18x |
+| `toCoord()` | 72 | 0.62x |
+
+**Conclusions**:
+- `toIndex_() + atData_()` is the fastest (direct physical memory access).
+- `at()` is slightly slower but highly optimized via inlining.
+- `toIndex() + atData()` is slower due to logical stride calculations.
+- `toCoord()` is the slowest due to division and modulo operations.
+
+### Optimization Tips
+
+```cpp
+// ❌ INEFFICIENT: Repeated calls to toIndex in a loop
+for (int i = 0; i < 100; i++) {
+    for (int j = 0; j < 100; j++) {
+        size_t idx = tensor.toIndex(i, j);  // Recalculated every iteration
+        float val = tensor.atData(idx);
+    }
+}
+
+// ✅ EFFICIENT: Direct use of at()
+for (int i = 0; i < 100; i++) {
+    for (int j = 0; j < 100; j++) {
+        float val = tensor.at(i, j);  // Compiler inlining optimization
+    }
+}
+
+// ✅ BEST: Use an iterator
+for (auto& val : tensor) {
+    // Fastest way to traverse all elements
+}
+```
+
+---
+
+## Use Cases
+
+### 1. Custom Access Patterns
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 10, 10);
+
+// Access diagonal elements (i, i, i)
+for (int i = 0; i < 10; i++) {
+    size_t idx = a.toIndex(i, i, i);
+    float val = a.atData(idx);
+    std::cout << val << std::endl;
+}
+```
+
+### 2. Debugging Memory Layout
+
+```cpp
+auto a = YTensor<float, 2>({3, 4});
+auto b = a.transpose(0, 1);
+
+std::cout << "Original tensor strides: ";
+for (int i = 0; i < 2; i++) {
+    std::cout << a.stride()[i] << " ";
+}
+std::cout << std::endl;
+
+std::cout << "Transposed strides: ";
+for (int i = 0; i < 2; i++) {
+    std::cout << b.stride()[i] << " ";
+}
+std::cout << std::endl;
+
+// Inspect physical offsets
+for (int i = 0; i < 3; i++) {
+    for (int j = 0; j < 4; j++) {
+        size_t offset = b.toIndex_(i, j);
+        std::cout << "b[" << i << "," << j << "] physical offset: " << offset << std::endl;
+    }
+}
+```
+
+### 3. Interfacing with C APIs
+
+```cpp
+void process_raw_data(float* data, const int* shape, int ndim) {
+    auto a = YTensor<float, 3>(shape);
+    memcpy(a.data_(), data, a.size() * sizeof(float));
+    
+    // Use toIndex_ to map back to raw buffer
+    for (int i = 0; i < shape[0]; i++) {
+        for (int j = 0; j < shape[1]; j++) {
+            for (int k = 0; k < shape[2]; k++) {
+                size_t offset = a.toIndex_(i, j, k);
+                data[offset] *= 2.0f;  // Modify original buffer directly
+            }
+        }
+    }
+}
+```
+
+### 4. Sparse Access
+
+```cpp
+auto a = YTensor<float, 3>::randn(100, 100, 100);
+
+// Access a list of specific coordinates
+std::vector<std::vector<int>> coords = {
+    {10, 20, 30},
+    {15, 25, 35},
+    {20, 30, 40}
+};
+
+for (const auto& coord : coords) {
+    size_t idx = a.toIndex(coord);
+    float val = a.atData(idx);
+    // Process val
+}
+```
+
+---
+
+## Relationship with Other Methods
+
+### Comparison with `at()`
+
+```cpp
+// Logically equivalent
+float val1 = tensor.at(i, j, k);
+
+size_t idx = tensor.toIndex(i, j, k);
+float val2 = tensor.atData(idx);
+
+// val1 == val2 ✅
+```
+
+### Comparison with `data_()`
+
+```cpp
+// Logically equivalent
+float val1 = tensor.at(i, j, k);
+
+size_t offset = tensor.toIndex_(i, j, k);
+float val2 = tensor.data_()[offset];
+
+// val1 == val2 ✅
+```
+
+### Comparison with Iterators
+
+```cpp
+auto a = YTensor<float, 3>({2, 3, 4});
+
+// Method 1: Iterator
+int count = 0;
+for (auto& val : a) {
+    auto coord = a.toCoord(count++);
+    // Use coord and val
+}
+
+// Method 2: Index-based
+for (size_t i = 0; i < a.size(); i++) {
+    auto coord = a.toCoord(i);
+    float val = a.atData(i);
+    // Use coord and val
+}
+```
+
+---
+
+## Important Safety Notes
+
+:::warning
+**Avoid Mixing Indices and Offsets**
+
+**NEVER** mix logic indices and physical offsets!
+
+```cpp
+// ❌ WRONG EXAMPLE
+auto a = YTensor<float, 2>({3, 4});
+auto b = a.slice({{0, 3, 2}, {}});  // Non-contiguous
+
+size_t idx_logical = b.toIndex(1, 2);
+float val = b.atData_(idx_logical);  // ❌ ERRONEOUS RESULT!
+
+size_t offset_physical = b.toIndex_(1, 2);
+float val2 = b.atData(offset_physical);  // ❌ ERRONEOUS RESULT!
+```
+
+**Correct Usage**:
+- `toIndex()` $\leftrightarrow$ `atData()`
+- `toIndex_()` $\leftrightarrow$ `atData_()`
+:::
+
+:::info
+**Boundaries**
+
+Coordinate conversion methods **do not perform boundary checks**:
+
+```cpp
+auto a = YTensor<float, 2>({3, 4});
+
+size_t idx = a.toIndex(10, 20);  // ⚠️ No error thrown here
+// float val = a.atData(idx);    // ❌ atData will throw the error
+```
+
+If you need safe, checked access, use `at()` instead of manual conversion.
+:::
+
+:::info
+**Limitations of `toCoord()`**
+
+`toCoord()` assumes the tensor layout is effectively **contiguous** relative to its logical shape:
+
+```cpp
+auto a = YTensor<float, 2>({4, 5});
+auto b = a.slice({{0, 4, 2}, {}});  // Non-contiguous
+
+// toCoord expects strides of [5, 1], but internal strides are actually [10, 1]
+auto coord = b.toCoord(7);  // Might return incorrect coordinates
+```
+
+For non-contiguous tensors, results from `toCoord()` may be **mathematically valid but logically unexpected**.
+:::
+
+---
+
+## Best Practices
+
+### 1. Prefer High-Level APIs
+
+```cpp
+// ❌ Verbose and error-prone
+for (int i = 0; i < shape[0]; i++) {
+    for (int j = 0; j < shape[1]; j++) {
+        size_t idx = tensor.toIndex(i, j);
+        float val = tensor.atData(idx);
+        // ...
+    }
+}
+
+// ✅ Concise and efficient
+for (int i = 0; i < shape[0]; i++) {
+    for (int j = 0; j < shape[1]; j++) {
+        float val = tensor.at(i, j);  // Direct access is optimized
+        // ...
+    }
+}
+```
+
+### 2. Use Conversion Only When Necessary
+
+Coordinate conversion is best suited for:
+- Custom access patterns (diagonals, sparsity).
+- Debugging memory layout.
+- Interfacing with external C libraries or APIs.
+- Performance-critical paths using `toIndex_() + atData_()`.
+
+For standard element access, use `at()`.
+
+### 3. Use in Pairs
+
+Always use matching methods:
+```cpp
+// ✅ Pair 1
+size_t idx = tensor.toIndex(i, j, k);
+float val = tensor.atData(idx);
+
+// ✅ Pair 2
+size_t offset = tensor.toIndex_(i, j, k);
+float val = tensor.atData_(offset);
+
+// ✅ Pair 3
+auto coord = tensor.toCoord(idx);
+size_t idx2 = tensor.toIndex(coord);  // idx == idx2
+```
+
+---
+
+## Related Content
+
+- [Indexing Access](../access/indexing.mdx) - Methods `at()` and `operator[]`.
+- [Pointer Access](../access/data_ptr.mdx) - Methods `data()` and `data_()`.
+- [Stride Queries](../shape/query.mdx) - Methods `stride()` and `stride_()`.
+- [Iterators](../access/iteration.mdx) - Methods `begin()` and `end()`.

@@ -1,0 +1,522 @@
+# Shape Operations: Slicing
+
+This document describes the slicing methods `slice()` and `slice_()` for the `YTensor<T, dim>` class.
+
+## Overview
+
+Slicing operations are used to extract a subset of a tensor along a specified dimension:
+
+| Method | Return Type | In-place | Description |
+| --- | --- | --- | --- |
+| `slice()` | `YTensor<T, dim>` | ❌ | Returns a new view of the data. |
+| `slice_()` | `YTensor<T, dim>&` | ✅ | Modifies the current object in-place. |
+
+---
+
+## slice()
+
+Slices the tensor along a specified dimension and returns a new tensor view.
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> slice(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `atDim` | `int` | - | **Required**. Specifies the index of the dimension to slice (starting from 0). Supports negative indexing. |
+| `start` | `int` | `0` | Starting position (inclusive). Supports negative/wrapping indices. |
+| `end` | `int` | `0` | Ending position (exclusive). If set to `0`, it slices to the last element of the dimension (inclusive). Supports negative/wrapping indices. |
+| `step` | `int` | `1` | Stride of the slice. Can be positive or negative, but **cannot be 0**. |
+| `autoFix` | `bool` | `true` | Whether to automatically fix the slice range. If enabled, `start` and `end` will be swapped if `start > end`. |
+
+### Return Value
+
+*   **Type**: `YTensor<T, dim>`
+*   **Description**: Returns the new sliced tensor.
+*   **Memory Behavior**: The returned object is a **view** of the original data, sharing the same memory pointer. Modifying the data in the returned tensor will affect the original tensor.
+
+### Core Function Description
+
+Slices the tensor along a specified dimension and returns a new tensor view.
+
+### Slicing Rules
+
+#### 1. Indexing
+-   **Wrapping Index**: All indices support negative values and wrapping, using a modulo operation to map to the valid range:
+    ```cpp
+    index = (index % shape[atDim] + shape[atDim]) % shape[atDim]
+    ```
+
+#### 2. Range Calculation
+-   The `end` parameter points to the "position after the last element" (exclusive).
+-   Actual last element: `last = end - 1` (after wrapping index processing).
+-   New shape size: `newShape[atDim] = max(0, (last - start) / abs(step) + 1)`
+
+#### 3. autoFix Behavior
+-   When `autoFix = true` and `last < start`:
+    -   `start` and `last` are automatically swapped.
+    -   Adjusted: `start++`, `last--` (to avoid including boundaries).
+
+#### 4. Stride Handling
+-   `step > 0`: Positive forward slice. New offset = `_offset + start * _stride[atDim]`.
+-   `step < 0`: Negative backward slice. New offset = `_offset + last * _stride[atDim]` (pointing to the last element).
+-   `step == 0`: Throws a `std::invalid_argument` exception.
+
+### Usage Examples
+
+#### Basic Slicing
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a [3, 4, 5] 3D tensor
+    yt::YTensor<float, 3> a(3, 4, 5);
+    a.fill(1.0f);
+    
+    // Slice dimension 1 (size 4): from index 1 to 3 (exclusive)
+    // Resulting shape should be: [3, 2, 5] (because 3 - 1 = 2)
+    auto b = a.slice(1, 1, 3, 1);
+    
+    // Verify shape
+    std::cout << "Original shape: [" << a.shape()[0] << ", " << a.shape()[1] << ", " << a.shape()[2] << "]" << std::endl;
+    // Output: Original shape: [3, 4, 5]
+    
+    std::cout << "Sliced shape: [" << b.shape()[0] << ", " << b.shape()[1] << ", " << b.shape()[2] << "]" << std::endl;
+    // Output: Sliced shape: [3, 2, 5]
+}
+```
+
+#### Default Parameters
+
+```cpp
+yt::YTensor<float, 2> tensor(5, 10);
+
+// Slice the entire dimension (start=0, end=0 means to the end)
+auto full = tensor.slice(0);  // Equivalent to slice(0, 0, 0, 1)
+std::cout << "Full shape: [" << full.shape()[0] << ", " << full.shape()[1] << "]" << std::endl;
+// Output: Full shape: [5, 10]
+
+// From index 2 to the end
+auto from2 = tensor.slice(0, 2);  // slice(0, 2, 0, 1)
+std::cout << "From 2 shape: [" << from2.shape()[0] << ", " << from2.shape()[1] << "]" << std::endl;
+// Output: From 2 shape: [3, 10]  (5 - 2 = 3)
+```
+
+#### Negative (Wrapping) Indices
+
+```cpp
+yt::YTensor<float, 2> tensor(5, 10);
+
+// Negative index: -1 means the position after the last element (i.e., 5)
+auto b = tensor.slice(0, 1, -1);  // -1 -> 4, so slice range [1, 4)
+std::cout << "Shape: [" << b.shape()[0] << ", " << b.shape()[1] << "]" << std::endl;
+// Output: Shape: [3, 10]  (end-1=4-1=3, (3-1)/1+1=3)
+
+// From the second to last element
+auto c = tensor.slice(0, -2);  // -2 -> 3, slice(0, 3, 0)
+std::cout << "From -2 shape: [" << c.shape()[0] << ", " << c.shape()[1] << "]" << std::endl;
+// Output: From -2 shape: [2, 10]
+```
+
+#### Slicing with Stride
+
+```cpp
+yt::YTensor<float, 1> vec(10);
+for (int i = 0; i < 10; ++i) {
+    vec.at(i) = static_cast<float>(i);
+}
+
+// Every other element: [0, 2, 4, 6, 8]
+auto even = vec.slice(0, 0, 0, 2);
+std::cout << "Even size: " << even.size() << std::endl;  // 5
+
+// Verify contents
+for (int i = 0; i < static_cast<int>(even.size()); ++i) {
+    std::cout << even.at(i) << " ";
+}
+std::cout << std::endl;
+// Output: 0 2 4 6 8
+```
+
+#### Negative Stride (Reverse)
+
+```cpp
+yt::YTensor<float, 1> vec(5);
+for (int i = 0; i < 5; ++i) {
+    vec.at(i) = static_cast<float>(i);
+}
+// vec = [0, 1, 2, 3, 4]
+
+// Reverse slice: step = -1
+auto reversed = vec.slice(0, 0, 0, -1);
+std::cout << "Reversed size: " << reversed.size() << std::endl;  // 5
+
+for (int i = 0; i < static_cast<int>(reversed.size()); ++i) {
+    std::cout << reversed.at(i) << " ";
+}
+std::cout << std::endl;
+// Output: 4 3 2 1 0
+```
+
+#### Views and Shared Memory
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(1.0f);
+
+auto sub = tensor.slice(0, 0, 2);  // First 2 rows
+
+// Modifying the sub-tensor
+sub.fill(99.0f);
+
+// Original tensor is also modified (shared memory)
+std::cout << "tensor[0][0] = " << tensor.at(0, 0) << std::endl;  // 99.0
+std::cout << "tensor[2][0] = " << tensor.at(2, 0) << std::endl;  // 1.0 (un-sliced portion)
+```
+
+#### autoFix Parameter
+
+```cpp
+yt::YTensor<float, 1> vec(10);
+
+// autoFix = true (default): automatically fixes start > end
+auto a = vec.slice(0, 7, 3, 1, true);
+// Internally swaps: start=3+1=4, last=7-1=6
+// Result: [4, 5, 6]
+std::cout << "autoFix=true size: " << a.size() << std::endl;  // 3
+
+// autoFix = false: no fix, returns an empty tensor
+auto b = vec.slice(0, 7, 3, 1, false);
+// last=2 < start=7, newShape = max(0, (2-7)/1+1) = 0
+std::cout << "autoFix=false size: " << b.size() << std::endl;  // 0
+```
+
+---
+
+## slice_()
+
+### Core Function Description
+
+Slices the specified dimension in-place, modifying the current tensor object.
+
+### Function Signature
+
+```cpp
+YTensor<T, dim>& slice_(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+);
+```
+
+### Parameters
+
+Parameters are identical to `slice()`.
+
+### Return Value
+
+*   **Type**: `YTensor<T, dim>&`
+*   **Description**: Returns a reference to self, supporting method chaining.
+*   **Memory Behavior**: Modifies the current object's shape, stride, and offset in-place, without creating a new object.
+
+### Implementation
+
+```cpp
+YTensor<T, dim>& slice_(int atDim, int start, int end, int step, bool autoFix) {
+    *this = slice(atDim, start, end, step, autoFix);
+    return *this;
+}
+```
+
+### Usage Examples
+
+#### In-place Slicing
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(5, 10);
+    tensor.fill(1.0f);
+    
+    std::cout << "Before: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << "]" << std::endl;
+    // Output: Before: [5, 10]
+    
+    // Slice in-place
+    tensor.slice_(0, 1, 4);
+    
+    std::cout << "After: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << "]" << std::endl;
+    // Output: After: [3, 10]
+}
+```
+
+#### Method Chaining
+
+```cpp
+yt::YTensor<float, 3> tensor(10, 20, 30);
+
+// Chain slicing operations on multiple dimensions
+tensor.slice_(0, 2, 8)   // Dimension 0: [2, 8)
+      .slice_(1, 5, 15)  // Dimension 1: [5, 15)
+      .slice_(2, 0, 20); // Dimension 2: [0, 20)
+
+std::cout << "Final shape: [" << tensor.shape()[0] << ", " 
+          << tensor.shape()[1] << ", " << tensor.shape()[2] << "]" << std::endl;
+// Output: Final shape: [6, 10, 20]
+```
+
+---
+
+## slice() vs slice_()
+
+| Feature | slice() | slice_() |
+| --- | --- | --- |
+| **Return Value** | New object | Reference to self |
+| **Original Object** | Unchanged | Modified |
+| **Memory** | Shared | Shared |
+| **Purpose** | Get a sub-view | Narrow scope in-place |
+| **Chaining** | ❌ Not supported | ✅ Supported |
+
+```cpp
+yt::YTensor<float, 2> original(5, 10);
+
+// slice(): Original object remains unchanged
+auto sub1 = original.slice(0, 0, 3);
+std::cout << "original shape: [" << original.shape()[0] << ", " << original.shape()[1] << "]" << std::endl;
+// Output: [5, 10] (unchanged)
+
+// slice_(): Original object is modified
+original.slice_(0, 0, 3);
+std::cout << "original shape: [" << original.shape()[0] << ", " << original.shape()[1] << "]" << std::endl;
+// Output: [3, 10] (modified)
+```
+
+---
+
+## Important Considerations and Pitfalls
+
+:::info
+**Memory View Note**
+
+The tensor returned by `slice()` **shares memory** with the original tensor.
+
+*   Modifying the sliced tensor will affect the original tensor.
+*   If you need an independent deep copy, please use the `clone()` method:
+    ```cpp
+    auto independent = tensor.slice(0, 1, 3).clone();
+    ```
+*   To perform **in-place** slicing to modify the current object, please use the `slice_()` method.
+:::
+
+:::warning
+**Differences from Python/NumPy**
+
+**Key Difference**: In YTensor, regardless of whether `step` is positive or negative, `start` must be **less than or equal to** `end - 1` (i.e., `last`) after wrapping indices are processed. Otherwise, an empty tensor will be returned (unless `autoFix` is enabled).
+
+This is **different** from Python's logic where `start > end` is valid when `step < 0`.
+
+**Comparison Example**:
+```python
+# Python/NumPy
+arr = np.array([0, 1, 2, 3, 4])
+arr[4:1:-1]  # Result: [4, 3, 2] (start=4 > end=1 is legal)
+```
+
+```cpp
+// YTensor
+yt::YTensor<float, 1> vec(5);
+// vec.slice(0, 4, 2, -1);  // ❌ Will return an empty tensor (last=1 < start=4)
+
+// Correct approach: Use autoFix
+auto result = vec.slice(0, 4, 2, -1, true);  // ✅ autoFix will swap
+```
+
+If `autoFix` is enabled, the library will attempt to automatically fix the range, but extra care is needed when manually calculating indices.
+:::
+
+:::danger
+**Stride Cannot Be 0**
+
+The `step` parameter cannot be 0, otherwise it will throw a `std::invalid_argument` exception:
+
+```cpp
+try {
+    auto result = tensor.slice(0, 0, 5, 0);  // ❌ step = 0
+} catch (const std::invalid_argument& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+    // Output: Error: Step cannot be 0 in slice operation.
+}
+```
+:::
+
+:::warning
+**0D Tensors Cannot Be Sliced**
+
+Calling `slice()` on a 0D tensor will throw a `std::out_of_range` exception:
+
+```cpp
+yt::YTensorBase scalar = yt::YTensor<float, 1>(1).slice(0, 0, 1);
+// Assuming a 0D tensor is obtained somehow
+
+try {
+    auto result = scalar.slice(0, 0, 1);  // ❌ 0D tensor
+} catch (const std::out_of_range& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+}
+```
+:::
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    std::cout << "=== Basic Slicing ===" << std::endl;
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 100 + coord[1] * 10 + coord[2];
+    });
+    
+    // Slice dimension 1: [1, 3)
+    auto sliced = tensor.slice(1, 1, 3);
+    std::cout << "Shape: [" << sliced.shape()[0] << ", " 
+              << sliced.shape()[1] << ", " << sliced.shape()[2] << "]" << std::endl;
+    // Output: Shape: [3, 2, 5]
+    
+    std::cout << "sliced[0][0][0] = " << sliced.at(0, 0, 0) << std::endl;
+    // Output: 10.0 (corresponds to tensor[0][1][0])
+    
+    std::cout << "\n=== Wrapping Indices ===" << std::endl;
+    yt::YTensor<float, 1> vec(10);
+    for (int i = 0; i < 10; ++i) {
+        vec.at(i) = i;
+    }
+    
+    auto tail = vec.slice(0, -3);  // Last 3 elements
+    std::cout << "Tail size: " << tail.size() << std::endl;  // 3
+    std::cout << "Tail: ";
+    for (size_t i = 0; i < tail.size(); ++i) {
+        std::cout << tail.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // Output: Tail: 7 8 9
+    
+    std::cout << "\n=== Slicing with Stride ===" << std::endl;
+    auto even = vec.slice(0, 0, 0, 2);
+    std::cout << "Even indices: ";
+    for (size_t i = 0; i < even.size(); ++i) {
+        std::cout << even.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // Output: Even indices: 0 2 4 6 8
+    
+    std::cout << "\n=== Reverse Slicing ===" << std::endl;
+    auto reversed = vec.slice(0, 0, 0, -1);
+    std::cout << "Reversed: ";
+    for (size_t i = 0; i < reversed.size(); ++i) {
+        std::cout << reversed.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // Output: Reversed: 9 8 7 6 5 4 3 2 1 0
+    
+    std::cout << "\n=== Shared Memory View ===" << std::endl;
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.fill(1.0f);
+    
+    auto sub = mat.slice(0, 0, 2);
+    sub.fill(99.0f);
+    
+    std::cout << "mat[0][0] = " << mat.at(0, 0) << std::endl;  // 99.0
+    std::cout << "mat[2][0] = " << mat.at(2, 0) << std::endl;  // 1.0
+    
+    std::cout << "\n=== In-place Slicing ===" << std::endl;
+    yt::YTensor<float, 2> tensor2(5, 10);
+    std::cout << "Before: [" << tensor2.shape()[0] << ", " << tensor2.shape()[1] << "]" << std::endl;
+    
+    tensor2.slice_(0, 1, 4).slice_(1, 2, 8);
+    std::cout << "After: [" << tensor2.shape()[0] << ", " << tensor2.shape()[1] << "]" << std::endl;
+    // Output: After: [3, 6]
+    
+    std::cout << "\n=== autoFix Example ===" << std::endl;
+    yt::YTensor<float, 1> vec2(10);
+    
+    auto a = vec2.slice(0, 7, 3, 1, true);   // autoFix: swaps
+    auto b = vec2.slice(0, 7, 3, 1, false);  // No fix: empty
+    
+    std::cout << "autoFix=true size: " << a.size() << std::endl;   // 3
+    std::cout << "autoFix=false size: " << b.size() << std::endl;  // 0
+    
+    return 0;
+}
+```
+
+---
+
+## Best Practices
+
+### ✅ Recommended
+
+```cpp
+// 1. Use slice() to get a sub-view
+auto sub = tensor.slice(0, 1, 5);
+
+// 2. Use clone() when an independent copy is needed
+auto independent = tensor.slice(0, 1, 5).clone();
+
+// 3. Use slice_() to narrow the scope in-place
+tensor.slice_(0, 2, 8);
+
+// 4. Chain in-place slicing
+tensor.slice_(0, 2, 8).slice_(1, 5, 15);
+
+// 5. Explicitly specify all parameters for readability
+auto sub = tensor.slice(/*atDim=*/0, /*start=*/1, /*end=*/5, /*step=*/1);
+```
+
+### ❌ Avoid
+
+```cpp
+// 1. Avoid step = 0
+// auto bad = tensor.slice(0, 0, 5, 0);  // ❌ Will throw an exception
+
+// 2. Avoid omitting autoFix for reverse slices
+// auto bad = tensor.slice(0, 5, 1, -1, false);  // ❌ Will return an empty tensor
+
+// 3. Don't forget that slicing returns a view (shared memory)
+auto sub = tensor.slice(0, 0, 2);
+sub.fill(0.0f);  // ⚠️ Original tensor is also modified!
+
+// 4. Avoid slicing on potentially 0D tensors
+// Check dimension
+if (tensor.ndim() > 0) {
+    auto sub = tensor.slice(0, 0, 2);  // ✅ Safe
+}
+```
+
+---
+
+## Related Content
+
+-   [Shape Querying](./query.mdx) - `shape()`、`size()`、`stride()` methods
+-   [Shape Operations: Reshaping](./reshape.mdx) - `reshape()`、`view()`、`contiguous()` methods
+-   [Shape Operations: Transposing](./transpose.mdx) - `transpose()` and `permute()` methods
+-   [Memory Management](../construction/memory.mdx) - `clone()` deep copy method
+-   [Guide: Memory Model](../../guides/memory_model.mdx) - Details on views, shallow copies, deep copies
+-   [Guide: Python Differences](../../guides/python_differences.mdx) - Comparison with NumPy/PyTorch

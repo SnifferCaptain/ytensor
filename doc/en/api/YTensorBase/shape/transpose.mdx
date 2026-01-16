@@ -1,0 +1,195 @@
+# Shape Operations: Transposition
+
+This document describes the transposition methods for the `YTensorBase` class, including `permute()`, `permute_()`, and `transpose()`.
+
+## Overview
+
+| Method | Return Type | In-place | Description |
+| --- | --- | --- | --- |
+| `permute()` | `YTensorBase` | ❌ | Reorders dimensions according to a specified sequence. |
+| `permute_()` | `YTensorBase&` | ✅ | Reorders dimensions in-place. |
+| `transpose()` | `YTensorBase` | ❌ | Swaps two specified dimensions. |
+
+All of these operations are **zero-copy**; the returned tensor shares its underlying memory with the original tensor.
+
+---
+
+## `permute()`
+
+### Function Signatures
+
+```cpp
+YTensorBase permute(const std::vector<int>& newOrder) const;
+
+template<typename... Args>
+YTensorBase permute(const Args... newOrder) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` or `Args...` | The new order of dimensions. The length must equal `ndim()`. Supports negative indexing. |
+
+### Core Function Description
+
+Reorders dimensions according to a specified sequence.
+*   Returns a view of the tensor (zero-copy).
+*   Supports negative indexing.
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**: Returns a view of the tensor with the dimensions reordered.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+    // tensor.shape() -> {2, 3, 4}
+    
+    // Reorder dimensions
+    YTensorBase permuted = tensor.permute({2, 0, 1});
+    // permuted.shape() -> {4, 2, 3}
+    
+    // Using variadic arguments
+    YTensorBase permuted2 = tensor.permute(1, 2, 0);
+    // permuted2.shape() -> {3, 4, 2}
+}
+```
+
+---
+
+## `permute_()`
+
+### Function Signature
+
+```cpp
+YTensorBase& permute_(const std::vector<int>& newOrder);
+```
+
+### Core Function Description
+
+Reorders dimensions in-place.
+*   Modifies the current tensor object.
+*   Zero-copy operation.
+
+### Return Value
+
+- **Type**: `YTensorBase&`
+- **Description**: Returns a reference to the current object, supporting method chaining.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+
+// Reorder in-place
+tensor.permute_({2, 0, 1});
+// tensor.shape() -> {4, 2, 3}
+```
+
+---
+
+## `transpose()`
+
+### Function Signature
+
+```cpp
+YTensorBase transpose(int dim0 = -2, int dim1 = -1) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `dim0` | `int` | `-2` | The first dimension to swap (supports negative indexing). |
+| `dim1` | `int` | `-1` | The second dimension to swap (supports negative indexing). |
+
+### Core Function Description
+
+Swaps two specified dimensions.
+*   Equivalent to a special case of `permute`.
+*   Returns a view of the tensor (zero-copy).
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**: Returns a view of the tensor with the two specified dimensions swapped.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+    
+    // Default: swap the last two dimensions
+    YTensorBase transposed = mat.transpose();
+    // transposed.shape() -> {4, 3}
+    
+    // Specify dimensions
+    YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+    YTensorBase t = tensor.transpose(0, 2);
+    // t.shape() -> {4, 3, 2}
+}
+```
+
+---
+
+## `permute()` vs `transpose()`
+
+| Feature | `permute()` | `transpose()` |
+| --- | --- | --- |
+| **Functionality**| Arbitrarily reorder all dimensions | Swap exactly two dimensions |
+| **Arguments** | Full list representing the new order | Indices of the two dimensions to swap |
+| **Default** | None | Swaps the last two dimensions |
+| **Use Case** | Complex dimension orchestration | Standard matrix transposition |
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+
+// Equivalent operations
+YTensorBase a = tensor.transpose(0, 2);     // Swaps dim0 and dim2
+YTensorBase b = tensor.permute({2, 1, 0});  // Achieve the same result
+```
+
+---
+
+## Notes
+
+:::info
+**Zero-copy Views**
+
+All transposition operations return views (shared memory). Modifying the transposed tensor affects the original.
+```cpp
+YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase t = mat.transpose();
+t.at<float>({0, 0}) = 1.0f;  // mat.at<float>({0, 0}) also becomes 1.0
+```
+:::
+
+:::warning
+**Post-Transposition Contiguity**
+
+Transposing a tensor usually makes it non-contiguous. You must call `contiguous()` before calling `view()`.
+```cpp
+YTensorBase t = mat.transpose();
+std::cout << t.isContiguous() << std::endl;  // Output: 0 (false, typically)
+
+// Must call contiguous() first
+YTensorBase c = t.contiguous().view({12});
+```
+:::
+
+---
+
+## Related Content
+
+- [Shape Queries](./query.mdx) - Methods like `shape()` and `ndim()`.
+- [Shape Operations: Reshaping](./reshape.mdx) - Methods like `view()` and `reshape()`.
+- [Shape Operations: Dimension](./dimension.mdx) - Methods like `unsqueeze()` and `squeeze()`.

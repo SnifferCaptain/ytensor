@@ -1,0 +1,56 @@
+# TensorInfo Struct
+
+This document describes the `yt::io::TensorInfo` struct, which is used to store tensor metadata.
+
+## Structure Definition
+
+```cpp
+struct TensorInfo {
+    std::string name;               // Tensor name
+    std::string typeName;           // Element type name
+    int32_t typeSize;               // Element size in bytes
+    std::string tensorType;         // Tensor type (dense, sparse, etc.)
+    std::vector<int> shape;         // Tensor shape
+    uint64_t dataOffset;            // Data offset within the file
+    uint64_t compressedSize;        // Size after compression
+    std::string compressMethod;     // Compression algorithm
+    uint64_t uncompressedSize;      // Original data size
+    std::vector<char> compressedData;  // Compressed data in memory (optional)
+};
+```
+
+## Fields
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | `string` | Tensor name |
+| `typeName` | `string` | Type name, e.g., "float32" |
+| `typeSize` | `int32_t` | Element size in bytes |
+| `tensorType` | `string` | Currently only "dense" is supported |
+| `shape` | `vector<int>` | Tensor shape |
+| `dataOffset` | `uint64_t` | Data offset within the file |
+| `compressedSize` | `uint64_t` | Compressed size in bytes |
+| `compressMethod` | `string` | Name of the compression algorithm |
+| `uncompressedSize` | `uint64_t` | Original data size in bytes |
+| `compressedData` | `vector<char>` | Compressed data stored in memory |
+
+## Usage Example
+
+```cpp
+yt::io::YTensorIO reader;
+reader.open("test.yt", yt::io::Read);
+
+// Get tensor information
+yt::io::TensorInfo info = reader.getTensorInfo("my_tensor");
+
+std::cout << "Name: " << info.name << std::endl;
+std::cout << "Type: " << info.typeName << std::endl;
+std::cout << "Shape: [" << info.shape[0] << ", " << info.shape[1] << "]" << std::endl;
+```
+
+---
+
+## Related Content
+
+- [YTensorIO](./YTensorIO.mdx) - IO class
+- [Compression Methods](./compression.mdx) - Compression configuration

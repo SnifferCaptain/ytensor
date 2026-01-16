@@ -1,5 +1,7 @@
 #include "../include/ytensor_infos.hpp"
 #include "../include/ytensor_types.hpp"
+#include "../include/kernel/parallel_for.hpp"
+#include "../include/kernel/type_dispatch.hpp"
 
 namespace yt{
 
@@ -303,123 +305,113 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     if (!this->shapeMatch(src.shape())) {
         throw std::runtime_error("copy_: source and destination shapes must match");
     }
-    // 验证dtype一致
-    if (this->_dtype != src._dtype) {
-        throw std::runtime_error("copy_: source and destination dtypes must match");
-    }
     
-    size_t elemSize = _element_size;
+    size_t dstElemSize = _element_size;
+    size_t srcElemSize = src._element_size;
     int d = ndim();
-    size_t total = size();
+    int total = static_cast<int>(size());
     
-    // 如果两者都是完全连续的，直接memcpy
-    if (this->isContiguous() && src.isContiguous()) {
-        std::memcpy(_data.get() + _offset * elemSize, 
-                    src._data.get() + src._offset * elemSize, 
-                    total * elemSize);
+    // 检查是否存在内存重叠
+    bool mayOverlap = (_data.get() == src._data.get());
+    
+    // 检查类型是否相同
+    bool sameType = (_dtype == src._dtype);
+    
+    // 如果类型相同且两者都是完全连续且无重叠，直接memcpy
+    if (sameType && this->isContiguous() && src.isContiguous() && !mayOverlap) {
+        std::memcpy(_data.get() + _offset * dstElemSize, 
+                    src._data.get() + src._offset * srcElemSize, 
+                    static_cast<size_t>(total) * dstElemSize);
         return *this;
     }
     
-    // 找到从哪个维度开始两者都是连续的
-    int dstCFrom = this->isContiguousFrom();
-    int srcCFrom = src.isContiguousFrom();
+    // 处理重叠情况：先复制源数据到临时缓冲区
+    std::unique_ptr<char[]> tempBuffer;
+    const char* srcBasePtr = src._data.get();
+    bool needTemp = mayOverlap;
     
-    // 检查两者stride是否完全匹配
-    bool strideMatch = (d == src.ndim());
-    for (int i = 0; i < d && strideMatch; ++i) {
-        if (_stride[i] != src._stride[i]) {
-            strideMatch = false;
-        }
-    }
-    
-    // 只有当两者从相同维度开始都连续，且连续部分的stride也匹配时，才能优化
-    if (dstCFrom == srcCFrom && dstCFrom < d) {
-        // 检查从dstCFrom开始的stride是否匹配
-        bool contiguousMatch = true;
-        for (int i = dstCFrom; i < d && contiguousMatch; ++i) {
-            if (_stride[i] != src._stride[i]) {
-                contiguousMatch = false;
-            }
-        }
+    if (needTemp) {
+        // 分配临时缓冲区存储源数据
+        tempBuffer = std::make_unique<char[]>(static_cast<size_t>(total) * srcElemSize);
         
-        if (contiguousMatch) {
-            // 连续部分stride匹配，可以分块memcpy
-            size_t contiguousSize = 1;
-            for (int i = dstCFrom; i < d; i++) {
-                contiguousSize *= _shape[i];
-            }
-            
-            size_t outerSize = 1;
-            for (int i = 0; i < dstCFrom; i++) {
-                outerSize *= _shape[i];
-            }
-            
-            char* dstBasePtr = _data.get();
-            const char* srcBasePtr = src._data.get();
-            
-            #pragma omp parallel for if(outerSize > 64)
-            for (size_t outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
-                // 计算非连续部分的坐标
-                std::vector<int> outerCoord(dstCFrom);
-                size_t remaining = outerIdx;
-                for (int i = dstCFrom - 1; i >= 0; i--) {
-                    outerCoord[i] = remaining % _shape[i];
-                    remaining /= _shape[i];
+        // 复制源数据到临时缓冲区（处理非连续情况）
+        if (src.isContiguous()) {
+            std::memcpy(tempBuffer.get(), srcBasePtr + src._offset * srcElemSize, 
+                        static_cast<size_t>(total) * srcElemSize);
+        } else {
+            auto srcLogicStride = src.stride();
+            yt::kernel::parallelFor(0, total, [&](int index) {
+                size_t srcIndex = src._offset;
+                size_t remaining = static_cast<size_t>(index);
+                for (int i = 0; i < d; i++) {
+                    int coord = static_cast<int>((remaining / srcLogicStride[i]) % src._shape[i]);
+                    srcIndex += coord * src._stride[i];
+                    remaining = remaining % srcLogicStride[i];
                 }
-                
-                // 计算dst的偏移
-                size_t dstOffset = _offset;
-                for (int i = 0; i < dstCFrom; i++) {
-                    dstOffset += outerCoord[i] * _stride[i];
-                }
-                
-                // 计算src的偏移
-                size_t srcOffset = src._offset;
-                for (int i = 0; i < dstCFrom; i++) {
-                    srcOffset += outerCoord[i] * src._stride[i];
-                }
-                
-                // 复制连续部分
-                std::memcpy(dstBasePtr + dstOffset * elemSize, 
-                            srcBasePtr + srcOffset * elemSize, 
-                            contiguousSize * elemSize);
-            }
-            
-            return *this;
+                std::memcpy(tempBuffer.get() + index * srcElemSize, 
+                            srcBasePtr + srcIndex * srcElemSize, 
+                            srcElemSize);
+            });
         }
+        srcBasePtr = tempBuffer.get();
     }
     
-    // 通用情况：逐元素复制
+    char* dstBasePtr = _data.get();
     auto thisLogicStride = this->stride();
     auto srcLogicStride = src.stride();
     
-    char* dstBasePtr = _data.get();
-    const char* srcBasePtr = src._data.get();
-    
-    #pragma omp parallel for if(total > 1024)
-    for (size_t index = 0; index < total; ++index) {
-        // 计算逻辑坐标
-        std::vector<int> coord(d);
-        size_t remaining = index;
-        for (int i = 0; i < d; i++) {
-            coord[i] = (remaining / thisLogicStride[i]) % _shape[i];
-        }
-        
-        // 计算dst的物理索引
+    // 辅助lambda：计算dst物理索引
+    auto calcDstIndex = [&](int index) -> size_t {
         size_t dstIndex = _offset;
+        size_t remaining = static_cast<size_t>(index);
         for (int i = 0; i < d; i++) {
-            dstIndex += coord[i] * _stride[i];
+            int coord = static_cast<int>((remaining / thisLogicStride[i]) % _shape[i]);
+            dstIndex += coord * _stride[i];
+            remaining = remaining % thisLogicStride[i];
         }
-        
-        // 计算src的物理索引
+        return dstIndex;
+    };
+    
+    // 辅助lambda：计算src物理索引
+    auto calcSrcIndex = [&](int index) -> size_t {
+        if (needTemp) {
+            return static_cast<size_t>(index);
+        }
         size_t srcIndex = src._offset;
+        size_t remaining = static_cast<size_t>(index);
         for (int i = 0; i < d; i++) {
-            srcIndex += coord[i] * src._stride[i];
+            int coord = static_cast<int>((remaining / srcLogicStride[i]) % src._shape[i]);
+            srcIndex += coord * src._stride[i];
+            remaining = remaining % srcLogicStride[i];
         }
-        
-        std::memcpy(dstBasePtr + dstIndex * elemSize, 
-                    srcBasePtr + srcIndex * elemSize, 
-                    elemSize);
+        return srcIndex;
+    };
+    
+    // 如果类型相同，使用memcpy
+    if (sameType) {
+        yt::kernel::parallelFor(0, total, [&](int index) {
+            size_t dstIndex = calcDstIndex(index);
+            size_t srcIndex = calcSrcIndex(index);
+            std::memcpy(dstBasePtr + dstIndex * dstElemSize, 
+                        srcBasePtr + srcIndex * srcElemSize, 
+                        dstElemSize);
+        });
+    } else {
+        // 类型不同，需要类型转换
+        // 使用 dispatch2 进行双类型分发
+        yt::kernel::dispatch2OrThrow<yt::types::AllNumericTypes, yt::types::AllNumericTypes>(
+            src._dtype, _dtype,
+            [&]<typename SrcType, typename DstType>() {
+                const SrcType* srcPtr = reinterpret_cast<const SrcType*>(srcBasePtr);
+                DstType* dstPtr = reinterpret_cast<DstType*>(dstBasePtr);
+                yt::kernel::parallelFor(0, total, [&](int index) {
+                    size_t dstIndex = calcDstIndex(index);
+                    size_t srcIndex = calcSrcIndex(index);
+                    dstPtr[dstIndex] = static_cast<DstType>(srcPtr[srcIndex]);
+                });
+            },
+            "copy_"
+        );
     }
     
     return *this;
@@ -428,41 +420,75 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
 inline std::string YTensorBase::dtype() const { return _dtype; }
 inline size_t YTensorBase::elementSize() const { return _element_size; }
 
-inline bool YTensorBase::isContiguous(int fromDim) const {
+inline bool YTensorBase::isContiguous(int fromDim, int toDim) const {
     if (_data == nullptr) {
         return false;
     }
+    int d = ndim();
+    if (d == 0) {
+        return true;
+    }
+    
     auto logStride = this->stride();
-    if (logStride.size() != static_cast<size_t>(this->ndim())) {
+    if (logStride.size() != static_cast<size_t>(d)) {
         return false;
     }
-    // 检查数据是否是连续的
-    int d = ndim();
-    fromDim = (fromDim % d + d) % d; // 循环索引
-    for (int i = fromDim; i < d; ++i) {
+    
+    // 循环索引处理
+    fromDim = (fromDim % d + d) % d;
+    // toDim默认-1表示到最后一维（不含），即检查整个张量时等于d
+    if (toDim < 0) {
+        toDim = d + toDim + 1;  // -1 -> d, 即检查全部
+    } else {
+        toDim = (toDim % d + d) % d;
+    }
+    
+    if (fromDim >= toDim) {
+        return true; // 空范围视为连续
+    }
+    
+    // 检查 [fromDim, toDim) 范围内的维度是否连续
+    for (int i = fromDim; i < toDim; ++i) {
         if (logStride[i] != _stride[i] && _shape[i] > 1) {
-            // 步长不匹配
             return false;
         }
     }
     return true;
 }
 
-inline int YTensorBase::isContiguousFrom() const {
+inline int YTensorBase::isContiguousFrom(int fromDim, int toDim) const {
     if (_data == nullptr) {
         return ndim();
     }
-    auto logStride = this->stride();
-    if (logStride.size() != static_cast<size_t>(this->ndim())) {
-        return ndim();
+    int d = ndim();
+    if (d == 0) {
+        return 0;
     }
-    // 检查数据从哪个维度开始是连续的
-    for (int a = ndim() - 1; a >= 0; --a) {
+    
+    auto logStride = this->stride();
+    if (logStride.size() != static_cast<size_t>(d)) {
+        return d;
+    }
+    
+    // 循环索引处理
+    fromDim = (fromDim % d + d) % d;
+    if (toDim < 0) {
+        toDim = d + toDim + 1;
+    } else {
+        toDim = (toDim % d + d) % d;
+    }
+    
+    if (fromDim >= toDim) {
+        return fromDim;
+    }
+    
+    // 从后往前检查，找到第一个不连续的维度
+    for (int a = toDim - 1; a >= fromDim; --a) {
         if (logStride[a] != _stride[a] && _shape[a] > 1) {
             return a + 1;
         }
     }
-    return 0; // 全部连续
+    return fromDim; // 全部连续
 }
 
 inline size_t YTensorBase::toIndex_(const std::vector<int> &pos) const {

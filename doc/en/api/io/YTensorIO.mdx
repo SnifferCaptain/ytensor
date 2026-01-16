@@ -1,0 +1,283 @@
+# YTensorIO Class
+
+This document describes the `YTensorIO` class in the `yt::io` namespace, which is used for tensor file input and output operations.
+
+`YTensorIO` supports storing multiple tensors in the same file in binary format and provides optional compression functionality.
+
+## Header File
+
+```cpp
+#include "ytensor_io.hpp"
+```
+
+## Class Definition
+
+```cpp
+namespace yt::io {
+    class YTensorIO;
+}
+```
+
+---
+
+## `open()`
+
+Opens a specified file for subsequent read or write operations.
+
+### Core Function Description
+
+Opens a `.yt` file for reading or writing. It supports three modes: Read, Write (overwrite), and Append.
+If opening the file fails (e.g., the file does not exist in Read mode, or insufficient permissions), the function returns `false`.
+
+### Function Signature
+
+```cpp
+bool open(const std::string& fileName, int fileMode = yt::io::Read);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `fileName` | `const std::string&` | - | Path to the target file. |
+| `fileMode` | `int` | `yt::io::Read` | File opening mode. Available values are listed below. |
+
+### File Mode Constants
+
+| Constant | Value | Description |
+| --- | --- | --- |
+| `yt::io::Read` | `1` | **Read-only mode**. The file must exist. |
+| `yt::io::Write` | `2` | **Write mode**. Overwrites the file if it exists, otherwise creates it. |
+| `yt::io::Append` | `3` | **Append mode**. Appends to the end of the file if it exists, otherwise creates it. |
+
+### Return Value
+
+*   **Type**: `bool`
+*   **Description**: Returns `true` if the file is successfully opened, otherwise `false`.
+
+### Usage Example
+
+```cpp
+yt::io::YTensorIO io;
+
+// Open in write mode (overwrites existing content)
+if (io.open("model.yt", yt::io::Write)) {
+    // ... we can write now
+}
+```
+
+### Notes
+
+*   A `YTensorIO` instance can only have one file open at a time. If a file is already open, call `close()` before calling `open()` again.
+
+---
+
+## `close()`
+
+Closes the currently open file and releases related resources.
+
+### Core Function Description
+
+Closes the file stream. If the file is in a write mode, `close()` ensures that all buffered data is flushed to disk.
+This function is also called automatically upon object destruction, but explicit calling allows for better control over the file handle's lifecycle.
+
+### Function Signature
+
+```cpp
+void close();
+```
+
+---
+
+## `save()`
+
+Saves a tensor to the currently open file.
+
+### Core Function Description
+
+This function serializes and writes the tensor's metadata (shape, type) and data content to the file.
+If a global compression option (`yt::io::compressMethod`) has been set, the data is automatically compressed before writing.
+
+### Function Signature
+
+```cpp
+// 1. Base class version (supports runtime polymorphism)
+bool save(const yt::YTensorBase& tensor, const std::string& name);
+
+// 2. Template version (supports strong typing)
+template<typename T, int dim>
+bool save(const yt::YTensor<T, dim>& tensor, const std::string& name);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `tensor` | `const YTensorBase&` or `const YTensor<T, dim>&` | The tensor object to be saved. |
+| `name` | `const std::string&` | The name (key) of the tensor in the file. Must be unique. |
+
+### Return Value
+
+*   **Type**: `bool`
+*   **Description**: Returns `true` if the write is successful, otherwise `false`.
+
+### Usage Example
+
+```cpp
+auto t = yt::YTensor<float, 2>::eye(3);
+yt::io::YTensorIO io;
+io.open("data.yt", yt::io::Write);
+
+// Save tensor named "identity_matrix"
+io.save(t, "identity_matrix");
+
+io.close();
+```
+
+### Notes
+
+*   Must be called in `yt::io::Write` or `yt::io::Append` mode.
+*   Tensor names must not duplicate existing tensor names in the file (especially important in Append mode).
+
+:::warning
+**Non-POD Type Support Limitation**
+The current IO system is primarily designed for POD (Plain Old Data) types (e.g., `float`, `int`, `double`). While it may support `string` or other complex types, it may not be compatible across platforms or versions.
+It is recommended to only use IO functionality for numerical tensors.
+:::
+
+---
+
+## `load()`
+
+Loads a tensor with the specified name from the currently open file.
+
+### Core Function Description
+
+Finds a tensor in the file by name and reads its metadata and data content.
+*   If using the **base class version** (`YTensorBase`), the function automatically sets the correct type and shape based on the metadata in the file.
+*   If using the **template version** (`YTensor<T, dim>`), the function validates whether the tensor type and dimensions in the file match the template parameters. If they do not match (e.g., trying to load `float` data into an `int` tensor, or dimension mismatch), it returns `false` or throws an exception.
+
+### Function Signature
+
+```cpp
+// 1. Base class version
+bool load(yt::YTensorBase& tensor, const std::string& name = "");
+
+// 2. Template version
+template<typename T, int dim>
+bool load(yt::YTensor<T, dim>& tensor, const std::string& name = "");
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `tensor` | `YTensorBase&` or `YTensor<T, dim>&` | **Output parameter**. After a successful load, this object will be reconstructed to contain the file data. |
+| `name` | `const std::string&` | `""` | Name of the tensor to read. If an empty string, the **first** tensor in the file is read by default. |
+
+### Return Value
+
+*   **Type**: `bool`
+*   **Description**: Returns `true` if the load is successful, otherwise `false`.
+
+### Usage Example
+
+```cpp
+yt::io::YTensorIO io;
+io.open("data.yt", yt::io::Read);
+
+// 1. Load into base class (automatic typing)
+yt::YTensorBase baseTensor;
+io.load(baseTensor, "identity_matrix");
+// baseTensor.dtype() -> "float32"
+
+// 2. Load into strongly-typed tensor (requires type matching)
+yt::YTensor<float, 2> tensor;
+io.load(tensor, "identity_matrix");
+```
+
+---
+
+## `getTensorNames()`
+
+Gets a list of names for all tensors stored in the file.
+
+### Function Signature
+
+```cpp
+std::vector<std::string> getTensorNames() const;
+```
+
+### Return Value
+
+*   **Type**: `std::vector<std::string>`
+*   **Description**: A list of strings containing all tensor names.
+
+### Usage Example
+
+```cpp
+auto names = io.getTensorNames();
+for (const auto& name : names) {
+    std::cout << "Found tensor: " << name << std::endl;
+}
+```
+
+---
+
+## `getTensorInfo()`
+
+Gets detailed metadata for a specified tensor.
+
+### Function Signature
+
+```cpp
+TensorInfo getTensorInfo(const std::string& name = "") const;
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | `const std::string&` | `""` | Target tensor name. If empty, retrieves information for the first tensor. |
+
+### Return Value
+
+*   **Type**: `TensorInfo`
+*   **Description**: Returns a struct containing information such as tensor type, shape, and offset. If the tensor does not exist, an exception is thrown.
+
+### Related Structure
+
+For the detailed definition of the `TensorInfo` struct, please refer to the [TensorInfo Documentation](./tensor_info.mdx).
+
+---
+
+## `validateFile()`
+
+Validates whether the current file format is legal.
+
+### Function Signature
+
+```cpp
+bool validateFile();
+```
+
+### Return Value
+
+*   **Type**: `bool`
+*   **Description**: Returns `true` if the file header identifier (Magic Number) and version number are correct and the index is complete.
+
+---
+
+## Convenience Functions
+
+To simplify reading and writing single tensors, the `yt::io` namespace also provides a set of global convenience functions:
+
+```cpp
+// Save a single tensor
+yt::io::saveTensor("file.yt", tensor, "name");
+
+// Load a single tensor
+yt::io::loadTensor("file.yt", tensor, "name");
+```
+
+These functions internally create a `YTensorIO` instance and handle the open/close operations automatically.

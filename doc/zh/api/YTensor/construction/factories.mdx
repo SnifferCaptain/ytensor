@@ -1,0 +1,470 @@
+# 工厂方法
+
+本文档介绍 `YTensor<T, dim>` 类的静态工厂方法，用于创建具有特定初始值的张量。
+
+## 概览
+
+工厂方法是静态成员函数，提供便捷的张量创建方式：
+
+| 方法 | 说明 | 初始值 |
+| --- | --- | --- |
+| `zeros()` | 创建全0张量 | 所有元素为 0 |
+| `ones()` | 创建全1张量 | 所有元素为 1 |
+| `randn` | 创建正态分布张量 | N(0, 1) 正态分布 |
+| `randu` | 创建均匀分布张量 | U(0, 1) 均匀分布 |
+| `seed()` | 设置随机数种子 | 全局设置 |
+
+---
+
+## zeros()
+
+### 函数签名
+
+```cpp
+// vector 版本
+static YTensor<T, dim> zeros(const std::vector<int>& shape);
+
+// 可变参数版本
+template<typename... Args> 
+static YTensor<T, sizeof...(Args)> zeros(Args... args);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | 张量的形状向量 |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的大小 |
+
+### 核心功能描述
+
+创建一个所有元素初始化为 0 的张量。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>` 或 `YTensor<T, sizeof...(Args)>`
+- **说明**: 返回指定形状的全0张量
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 方法1：可变参数版本（推荐）
+    auto a = yt::YTensor<float, 2>::zeros(3, 4);
+    std::cout << a.at(1, 2) << std::endl;  // 输出: 0
+    
+    // 方法2：vector 版本
+    std::vector<int> shape = {3, 4};
+    auto b = yt::YTensor<double, 2>::zeros(shape);
+    
+    // 创建三维全0张量
+    auto c = yt::YTensor<int, 3>::zeros(2, 3, 4);
+    std::cout << c.size() << std::endl;  // 输出: 24
+}
+```
+
+### 异常
+
+- 如果参数个数与 `dim` 不匹配，抛出 `std::invalid_argument` 异常（vector版本）
+- 可变参数版本在编译时检查参数个数
+
+### 注意事项
+
+:::info
+**性能说明**
+
+`zeros()` 使用 `fill()` 方法填充元素，对于大型张量可能有一定开销。如果只需要分配内存而不关心初始值，直接使用构造函数会更快。
+:::
+
+---
+
+## ones()
+
+### 函数签名
+
+```cpp
+// vector 版本
+static YTensor<T, dim> ones(const std::vector<int>& shape);
+
+// 可变参数版本
+template<typename... Args> 
+static YTensor<T, sizeof...(Args)> ones(const Args... args);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | 张量的形状向量 |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的大小 |
+
+### 核心功能描述
+
+创建一个所有元素初始化为 1 的张量。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>` 或 `YTensor<T, sizeof...(Args)>`
+- **说明**: 返回指定形状的全1张量
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建 3x4 的全1矩阵
+    auto a = yt::YTensor<float, 2>::ones(3, 4);
+    std::cout << a.at(1, 2) << std::endl;  // 输出: 1
+    
+    // 使用 vector 指定形状
+    std::vector<int> shape = {2, 3};
+    auto b = yt::YTensor<double, 2>::ones(shape);
+    
+    // 创建一维全1向量
+    auto vec = yt::YTensor<int, 1>::ones(10);
+    std::cout << vec.at(5) << std::endl;  // 输出: 1
+}
+```
+
+### 异常
+
+- 如果参数个数与 `dim` 不匹配，抛出 `std::invalid_argument` 异常（vector版本）
+
+---
+
+## randn（正态分布生成器）
+
+### 类型声明
+
+```cpp
+static _RandnGenerator randn;
+```
+
+### 核心功能描述
+
+`randn` 是一个**函数对象（functor）**，而非普通的静态成员函数。它是 `_RandnGenerator` 类型的静态实例。
+
+### _RandnGenerator 结构体
+
+```cpp
+struct _RandnGenerator {
+    _RandnGenerator(std::mt19937& gen_p): gen(gen_p) {}
+    std::mt19937& gen;
+    
+    template<typename... Args>
+    auto operator()(Args... args) const -> YTensor<T, sizeof...(args)>;
+};
+```
+
+- 内部使用 `std::normal_distribution<double>` 生成正态分布随机数
+- 分布参数：均值 μ = 0.0，标准差 σ = 1.0
+- 使用全局随机数生成器 `yt::infos::gen`
+
+### 使用方式
+
+```cpp
+// 调用 randn 生成张量
+auto tensor = yt::YTensor<T, dim>::randn(shape_args...);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的大小 |
+
+### 返回值
+
+- **类型**: `YTensor<T, sizeof...(args)>`
+- **说明**: 返回填充了正态分布随机数的张量，N(0, 1)
+
+### 使用示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // 设置随机种子（可选）
+    yt::YTensor<float, 2>::seed(42);
+    
+    // 创建 3x4 的正态分布张量
+    auto a = yt::YTensor<float, 2>::randn(3, 4);
+    std::cout << a << std::endl;
+    
+    // 创建一维向量
+    auto vec = yt::YTensor<double, 1>::randn(100);
+    
+    // 创建三维张量
+    auto tensor3d = yt::YTensor<float, 3>::randn(2, 3, 4);
+}
+```
+
+### 输出示例
+
+```
+Tensor shape: [3, 4], dtype: float32
+[[-0.847631  0.523284 -1.021932  0.349874]
+ [ 1.183421 -0.284719  0.847291 -0.192847]
+ [ 0.491023  1.374829 -0.638291  0.927384]]
+```
+
+### 注意事项
+
+:::warning
+**线程安全性**
+
+在多线程环境下，`randn` 使用互斥锁（`yt::infos::rngMutex`）保护随机数生成器，可能成为性能瓶颈。
+
+**建议**：
+- 对于并行计算场景，考虑在单线程中生成所有随机张量
+- 或者为每个线程维护独立的随机数生成器
+:::
+
+---
+
+## randu（均匀分布生成器）
+
+### 类型声明
+
+```cpp
+static _RanduGenerator randu;
+```
+
+### 核心功能描述
+
+`randu` 是一个**函数对象（functor）**，与 `randn` 类似，但生成均匀分布的随机数。
+
+### _RanduGenerator 结构体
+
+```cpp
+struct _RanduGenerator {
+    _RanduGenerator(std::mt19937& gen_p): gen(gen_p) {}
+    std::mt19937& gen;
+    
+    template<typename... Args>
+    auto operator()(Args... args) const -> YTensor<T, sizeof...(args)>;
+};
+```
+
+- 内部使用 `std::uniform_real_distribution<double>` 生成均匀分布随机数
+- 分布范围：[0.0, 1.0)
+- 使用全局随机数生成器 `yt::infos::gen`
+
+### 使用方式
+
+```cpp
+// 调用 randu 生成张量
+auto tensor = yt::YTensor<T, dim>::randu(shape_args...);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的大小 |
+
+### 返回值
+
+- **类型**: `YTensor<T, sizeof...(args)>`
+- **说明**: 返回填充了均匀分布随机数的张量，U(0, 1)
+
+### 使用示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // 设置随机种子
+    yt::YTensor<float, 2>::seed(42);
+    
+    // 创建 3x4 的均匀分布张量
+    auto a = yt::YTensor<float, 2>::randu(3, 4);
+    std::cout << a << std::endl;
+    
+    // 创建一维向量
+    auto vec = yt::YTensor<double, 1>::randu(100);
+    
+    // 所有元素都在 [0, 1) 范围内
+    for (size_t i = 0; i < vec.size(); ++i) {
+        assert(vec.atData_(i) >= 0.0 && vec.atData_(i) < 1.0);
+    }
+}
+```
+
+### 输出示例
+
+```
+Tensor shape: [3, 4], dtype: float32
+[[0.374540  0.950714  0.731994  0.598658]
+ [0.156019  0.155995  0.058084  0.866176]
+ [0.601115  0.708073  0.020584  0.969910]]
+```
+
+### 注意事项
+
+:::warning
+**线程安全性**
+
+与 `randn` 相同，`randu` 在多线程环境下使用互斥锁，可能影响性能。
+:::
+
+:::info
+**SIMD 优化**
+
+`randu` 的实现中包含 `#pragma omp simd` 指令，在支持的编译器上可能获得 SIMD 加速。
+:::
+
+---
+
+## seed()
+
+### 函数签名
+
+```cpp
+static void seed(unsigned int seed = std::random_device{}());
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `seed` | `unsigned int` | `std::random_device{}()` | 随机数种子 |
+
+### 核心功能描述
+
+设置全局随机数生成器的种子。影响所有 `YTensor` 类型（不同 `T` 和 `dim`）的 `randn` 和 `randu` 方法。
+
+### 返回值
+
+- **类型**: `void`
+
+### 使用示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+void example() {
+    // 使用固定种子（可重现结果）
+    yt::YTensor<float, 2>::seed(42);
+    auto a1 = yt::YTensor<float, 2>::randn(3, 3);
+    
+    // 重新设置相同种子
+    yt::YTensor<float, 2>::seed(42);
+    auto a2 = yt::YTensor<float, 2>::randn(3, 3);
+    
+    // a1 和 a2 的值完全相同（可重现）
+    
+    // 使用真随机种子（每次不同）
+    yt::YTensor<double, 1>::seed();
+    auto b = yt::YTensor<double, 1>::randu(10);
+}
+```
+
+### 全局性质
+
+:::important
+**全局共享**
+
+`seed()` 设置的是全局共享的随机数生成器 `yt::infos::gen`，因此：
+
+1. 任何一个 `YTensor<T, dim>` 类型调用 `seed()` 都会影响所有类型
+2. 适用于 `randn`、`randu` 以及 `YTensorBase::randn`、`YTensorBase::randu`
+:::
+
+### 可重现性
+
+```cpp
+// 示例：验证可重现性
+void test_reproducibility() {
+    yt::YTensor<float, 2>::seed(123);
+    auto tensor1 = yt::YTensor<float, 2>::randn(5, 5);
+    
+    yt::YTensor<float, 2>::seed(123);
+    auto tensor2 = yt::YTensor<float, 2>::randn(5, 5);
+    
+    // tensor1 和 tensor2 完全相同
+    for (int i = 0; i < 5; ++i) {
+        for (int j = 0; j < 5; ++j) {
+            assert(tensor1.at(i, j) == tensor2.at(i, j));
+        }
+    }
+}
+```
+
+### 线程安全性
+
+`seed()` 内部使用互斥锁 `yt::infos::rngMutex` 保护，是线程安全的。
+
+---
+
+## 工厂方法对比
+
+| 方法 | 初始值 | 性能 | 适用场景 |
+| --- | --- | --- | --- |
+| `zeros()` | 0 | 需要填充 | 需要明确的0初始值 |
+| `ones()` | 1 | 需要填充 | 需要明确的1初始值 |
+| `randn` | N(0,1) | 较慢（RNG） | 神经网络权重初始化 |
+| `randu` | U(0,1) | 较慢（RNG） | 随机采样、模拟 |
+| 构造函数 | 未定义 | 最快 | 不关心初始值 |
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include <iomanip>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 1. 创建全0张量
+    auto zeros = yt::YTensor<float, 2>::zeros(2, 3);
+    std::cout << "Zeros:\n" << zeros << std::endl;
+    
+    // 2. 创建全1张量
+    auto ones = yt::YTensor<float, 2>::ones(2, 3);
+    std::cout << "Ones:\n" << ones << std::endl;
+    
+    // 3. 设置随机种子
+    yt::YTensor<float, 2>::seed(42);
+    
+    // 4. 创建正态分布张量
+    auto randn_tensor = yt::YTensor<float, 2>::randn(2, 3);
+    std::cout << "Random Normal N(0,1):\n" << randn_tensor << std::endl;
+    
+    // 5. 创建均匀分布张量
+    auto randu_tensor = yt::YTensor<float, 2>::randu(2, 3);
+    std::cout << "Random Uniform U(0,1):\n" << randu_tensor << std::endl;
+    
+    // 6. 验证可重现性
+    yt::YTensor<float, 2>::seed(42);
+    auto randn_copy = yt::YTensor<float, 2>::randn(2, 3);
+    
+    bool identical = true;
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            if (randn_tensor.at(i, j) != randn_copy.at(i, j)) {
+                identical = false;
+            }
+        }
+    }
+    std::cout << "Reproducible: " << (identical ? "Yes" : "No") << std::endl;
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [构造函数](./constructors.mdx) - 了解基本的张量构造方式
+- [内存管理](./memory.mdx) - `reserve()`、`clone()` 等内存操作
+- [迭代操作](../access/iteration.mdx) - `fill()` 方法的详细说明
+- [YTensorBase 工厂方法](../../YTensorBase/construction/factories.mdx) - 运行时版本的工厂方法

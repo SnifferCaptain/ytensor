@@ -376,9 +376,10 @@ public:
     YTensor<T, dim>& fill(T value);
 
     /// @brief 从源张量复制元素到本张量（原地操作，不重新分配内存）
-    /// @param src 源张量，shape和dtype必须与本张量一致
+    /// @param src 源张量，shape必须与本张量一致
     /// @return 返回自身引用
-    /// @note 目前不支持src与dst的内存重叠，若存在重叠则行为未定义
+    /// @note 支持不同dtype之间的类型转换（以本张量类型为准进行转换）
+    /// @note 支持src与dst内存重叠的情况（会自动使用临时缓冲区）
     YTensor<T, dim>& copy_(const YTensorBase& src);
 
 /////////////////// externs ////////////////

@@ -1,0 +1,210 @@
+# Activation Functions
+
+This document describes the activation functions in the `yt::function` namespace.
+
+## Overview
+
+| Function | Description | In-place Version |
+| --- | --- | --- |
+| `relu()` | ReLU activation function | `relu_()` |
+| `exp()` | Exponential function | - |
+| `sigmoid()` | Sigmoid activation function | - |
+| `softmax()` | Softmax normalization function | `softmax_()` |
+
+---
+
+## `relu()`
+
+Applies the Rectified Linear Unit (ReLU) activation to the input tensor.
+
+### Function Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> relu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& relu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | Input tensor |
+| `order` | `int` | `0` | Derivative order (0=function value, 1=first derivative, -n=n-fold integral) |
+
+### Core Function Description
+
+This function applies the ReLU function to each element of the input tensor.
+*   `order = 0`: Calculates $f(x) = \max(0, x)$
+*   `order = 1`: Calculates the derivative $f'(x) = 1 \text{ if } x > 0 \text{ else } 0$
+*   `order < 0`: Calculates the n-fold integral $\frac{x^n}{n!} (x > 0)$
+
+### Return Value
+
+*   **Type**: `YTensor<T, dim>`
+*   **Description**: Returns the calculation result. The non-in-place version returns a new tensor, while the in-place version returns a reference to itself.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    auto x = yt::YTensor<float, 2>({2, 3}, {-1, 0, 1, -2, 2, 3});
+    
+    // ReLU
+    auto y = yt::function::relu(x);
+    // y = {0, 0, 1, 0, 2, 3}
+    
+    // In-place operation
+    yt::function::relu_(x);
+    
+    // First derivative
+    auto dy = yt::function::relu(x, 1);
+    // dy = {0, 0, 1, 0, 1, 1}
+}
+```
+
+---
+
+## `exp()`
+
+Calculates the exponential of the input tensor.
+
+### Function Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | Input tensor |
+| `order` | `int` | `0` | Derivative order (Reserved parameter, currently only 0 is supported) |
+
+### Core Function Description
+
+Calculates $e^x$.
+
+### Return Value
+
+*   **Type**: `YTensor<T, dim>`
+*   **Description**: Returns a new tensor after the exponential operation.
+
+### Usage Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 2.0f});
+auto y = yt::function::exp(x);
+// y ≈ {1.0, 2.718, 7.389}
+```
+
+---
+
+## `sigmoid()`
+
+Applies the Sigmoid activation to the input tensor.
+
+### Function Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | Input tensor |
+| `order` | `int` | `0` | Derivative order |
+
+### Core Function Description
+
+This function applies the Sigmoid function to each element:
+*   `order = 0`: $\sigma(x) = \frac{1}{1 + e^{-x}}$
+*   `order = 1`: $\sigma'(x) = \sigma(x)(1 - \sigma(x))$
+*   `order = -1`: $\log(1 + e^x)$ (SoftPlus)
+
+### Return Value
+
+*   **Type**: `YTensor<T, dim>`
+*   **Description**: Returns a new tensor with the calculated results.
+
+### Usage Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1.0f, 0.0f, 1.0f});
+
+auto y = yt::function::sigmoid(x);
+// y ≈ {0.269, 0.5, 0.731}
+
+auto dy = yt::function::sigmoid(x, 1);
+// dy ≈ {0.197, 0.25, 0.197}
+```
+
+---
+
+## `softmax()`
+
+### Core Function Description
+
+This function performs Softmax normalization along the specified axis.
+
+### Function Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | Input tensor |
+| `axis` | `int` | `-1` | Axis along which to calculate softmax (supports negative indexing) |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: Normalized tensor along the specified axis.
+
+### Usage Example
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example() {
+    auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
+    
+    // Calculate softmax along the last axis
+    auto y = yt::function::softmax(x, -1);
+    // The sum of each row is 1
+    
+    // In-place operation
+    yt::function::softmax_(x, -1);
+}
+```
+
+### Implementation Details
+
+Uses a numerically stable implementation (subtracting the maximum value):
+
+1. Find the maximum value along the axis.
+2. Calculate `exp(x - max)`.
+3. Divide by `sum(exp(x - max))`.
+
+---
+
+## Related Content
+
+- [Attention Mechanism](./attention.mdx) - Scaled Dot-Product Attention

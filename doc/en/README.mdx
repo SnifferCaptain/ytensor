@@ -1,0 +1,123 @@
+# YTensor Documentation
+
+> A modern, lightweight C++20 multi-dimensional tensor library — header-only, easy to integrate, suitable for research, competition, and engineering.
+
+## Welcome to YTensor
+
+YTensor is a pure header-only C++ tensor library, designed for scenarios requiring high-performance multi-dimensional array operations. It provides an interface similar to NumPy/PyTorch, but without any runtime dependencies; just include a single header file to use.
+
+## Features
+
+- 🧩 **Header-only**: Only `ytensor_single.hpp` is needed, zero third-party dependencies, just `#include` and use.
+- 📐 **Arbitrary Dimensions**: Supports `shape`, `slice`, `transpose`, `reshape`, `permute`, and other common operations.
+- ⚡ **Multi-functional**: Supports parallelism, broadcasting, basic math, and some common deep learning functions (matmul/softmax/attention).
+- 🛠️ **Easy to Extend**: Clean source code, easy for secondary development.
+- 🗂️ **I/O Support**: Can save/load YTensor supported file formats.
+- 🔢 **Wide Type Support**: Supports common data types, such as `float16`, `bfloat16`, etc.
+
+## Quick Start
+
+### Installation
+
+See the [Installation Guide](./installation/installation.mdx) to learn how to integrate YTensor into your project.
+
+### Basic Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    // Create a 3x4 float tensor
+    yt::YTensor<float, 2> a(3, 4);
+    
+    // Create ones tensor
+    auto b = yt::YTensor<float, 2>::ones(3, 4);
+    
+    // Access and modify elements
+    a.at(1, 2) = 5.0f;
+    
+    // Perform operations
+    auto c = a + b;
+    
+    // Output tensor
+    std::cout << c << std::endl;
+    
+    return 0;
+}
+```
+
+See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
+
+## Documentation Navigation
+
+### Installation and Configuration
+
+- [Installation Guide](./installation/installation.mdx) - How to integrate YTensor into your project
+- [Build Options](./installation/build_options.mdx) - Compilation options and backend configuration
+
+### API Reference
+
+#### Core Classes
+
+- [YTensor Class](./api/YTensor/overview.mdx) - Compile-time type-safe tensor class (recommended)
+  - [Construction and Memory Management](./api/YTensor/construction/constructors.mdx)
+  - [Element Access](./api/YTensor/access/indexing.mdx)
+  - [Shape Operations](./api/YTensor/shape/query.mdx)
+  - [Mathematical Operations](./api/YTensor/math/arithmetic.mdx)
+
+- [YTensorBase Class](./api/YTensorBase/overview.mdx) - Runtime type-erased base class
+  - [Construction and Memory Management](./api/YTensorBase/construction/constructors.mdx)
+  - [Element Access](./api/YTensorBase/access/indexing.mdx)
+  - [Shape Operations](./api/YTensorBase/shape/query.mdx)
+  - [Mathematical Operations](./api/YTensorBase/math/arithmetic.mdx)
+
+#### Function Library
+
+- [function Namespace](./api/function/matmul.mdx) - Common function library
+  - [Matrix Multiplication](./api/function/matmul.mdx)
+  - [Activation Functions](./api/function/activation.mdx)
+  - [Attention Mechanism](./api/function/attention.mdx)
+
+#### I/O Operations
+
+- [io Namespace](./api/io/YTensorIO.mdx) - File I/O functionality
+  - [YTensorIO Class](./api/io/YTensorIO.mdx)
+  - [Tensor Info](./api/io/tensor_info.mdx)
+  - [Compression Methods](./api/io/compression.mdx)
+  - [File Format](./api/io/file_format.mdx)
+
+#### Configuration and Metadata
+
+- [infos Namespace](./api/infos/backend.mdx) - Global configuration
+  - [Backend Selection](./api/infos/backend.mdx)
+  - [Type System](./api/infos/types.mdx)
+  - [Constants Definition](./api/infos/constants.mdx)
+
+#### Kernel Tools
+
+- [kernel Namespace](./api/kernel/type_dispatch.mdx) - Low-level Tools
+  - [Type Dispatch](./api/kernel/type_dispatch.mdx)
+
+### User Guides
+
+- [Quick Start](./api/guides/quick_start.mdx) - A complete example from scratch
+- [Memory Model](./api/guides/memory_model.mdx) - In-depth analysis of view, copy, contiguous
+- [Broadcasting Mechanism](./api/guides/broadcast_guide.mdx) - How to use broadcasting operations
+- [Backend Selection Strategy](./api/guides/backend_selection.mdx) - Comparison of Naive, Eigen, AVX2
+- [Performance Optimization Tips](./api/guides/performance_tips.mdx) - How to write efficient code
+- [Differences from Python](./api/guides/python_differences.mdx) - Essential for NumPy/PyTorch users
+- [Common Pitfalls](./api/guides/common_pitfalls.mdx) - Avoid common mistakes
+
+## Project Information
+
+- **Version**: 0.3
+- **Author**: SnifferCaptain
+- **Email**: 3586554865@qq.com
+- **Language**: C++20
+
+## Getting Help
+
+If you encounter problems while using YTensor:
+
+1. Read the relevant API reference documentation
+2. Submit an Issue on the GitHub repository

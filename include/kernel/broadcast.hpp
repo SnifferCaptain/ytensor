@@ -231,14 +231,20 @@ inline int computeDataIndex(int linearIndex,
 }
 
 /// @brief 统一的广播操作函数（非原地），支持N元张量/标量操作
+/// @tparam resultDim 结果张量维度。当所有张量参数不包含YTensorBase时可省略（自动推导）；
 /// @tparam Func 函数类型，签名为 ReturnType func(const T&, const T&, ...) 或 ReturnType func(T, T, ...)
-/// @tparam Args 参数类型，可以是YTensor或标量（可转换为func参数类型）
+/// @tparam Args 参数类型，可以是YTensor、YTensorBase或标量（可转换为func参数类型）
 /// @param func 操作函数，返回类型用于推断结果张量的标量类型
 /// @param tensors 输入的张量或标量
-/// @return 返回结果张量，形状为所有输入张量广播后的形状，返回类型由func的返回值推断
-template <typename Func, typename... Args>
+/// @return 返回结果张量 YTensor<ReturnType, resultDim>，形状为所有输入张量广播后的形状
+template <int _resultDim = -1, typename Func, typename... Args>
 auto broadcast(Func&& func, Args&&... tensors) {
     using namespace ::yt::traits;
+    
+    // 计算结果维度：如果显式指定了resultDim则使用它，否则从YTensor参数推导
+    constexpr int computedDim = max_dim<Args...>();
+    constexpr int resultDim = (_resultDim > 0) ? _resultDim : (computedDim > 0 ? computedDim : 1);
+    static_assert(_resultDim > 0 || all_ytensor_template<Args...>(), "broadcast: when using YTensorBase, you must explicitly specify resultDim, ");
     
     using ScalarType = ::yt::traits::first_arg_of_t<Func>;
     
@@ -261,6 +267,14 @@ auto broadcast(Func&& func, Args&&... tensors) {
     // 计算广播shape
     auto broadcastShape = computeBroadcastShape(shapes);
     int opdim = static_cast<int>(broadcastShape.size());
+    
+    // 运行时验证：显式指定的resultDim必须与实际广播维度匹配（当有YTensorBase时）
+    if constexpr (_resultDim > 0) {
+        if (opdim != _resultDim) {
+            throw std::runtime_error("broadcast: specified resultDim (" + std::to_string(_resultDim) + 
+                ") does not match actual broadcast dimension (" + std::to_string(opdim) + ")");
+        }
+    }
     
     // 计算逻辑stride（连续存储）
     std::vector<int> logicStride(opdim);
@@ -307,8 +321,7 @@ auto broadcast(Func&& func, Args&&... tensors) {
     // 推断返回类型
     using ReturnType = std::invoke_result_t<Func, decltype(std::declval<std::conditional_t<is_ytensor_v<Args>, ScalarType, Args>>())...>;
     
-    // 创建结果张量（使用最大维度）
-    constexpr int resultDim = max_dim<Args...>() > 0 ? max_dim<Args...>() : 1;
+    // 创建结果张量
     yt::YTensor<ReturnType, resultDim> result;
     
     // 根据broadcastShape的实际维度调整

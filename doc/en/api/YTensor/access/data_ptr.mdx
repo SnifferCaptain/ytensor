@@ -1,0 +1,483 @@
+# Element Access: Data Pointers
+
+This document describes the methods for accessing the underlying data pointers of the `YTensor<T, dim>` class, including `data()`, `data_()`, `atData()`, and `atData_()`.
+
+## Overview
+
+YTensor provides four methods for accessing data pointers:
+
+| Method | Pointer Position | Offset | Safety | Best Use Case |
+| --- | --- | --- | --- | --- |
+| `data()` | Start of current view | Includes `_offset` | Safe | General pointer access |
+| `data_()` | Start of memory block | Excludes `_offset` | Use with caution | Internal implementation, advanced usage |
+| `atData()` | - | Logical index | Safe but slower | Compatibility |
+| `atData_()` | - | Physical index | Efficient but requires contiguity | Element-wise operations |
+
+---
+
+## data()
+
+### Function Signature
+
+```cpp
+T* data();
+const T* data() const;
+```
+
+### Core Function Description
+
+Retrieves the data pointer for the current tensor view. The returned pointer points to the first element of the current view and already includes the offset (`_offset`).
+
+### Return Value
+
+- **Type**: `T*` or `const T*`
+- **Description**: A pointer to the start of the current view.
+
+### Implementation
+
+```cpp
+T* data() {
+    return data_() + _offset;
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    tensor.fill(1.0f);
+    
+    // Get the data pointer
+    float* ptr = tensor.data();
+    
+    // Access elements using strides
+    auto stride = tensor.stride_();
+    for (int i = 0; i < tensor.shape(0); ++i) {
+        for (int j = 0; j < tensor.shape(1); ++j) {
+            int offset = i * stride[0] + j * stride[1];
+            ptr[offset] = i * 4 + j;
+        }
+    }
+    
+    // Verify
+    std::cout << tensor.at(1, 2) << std::endl;  // Output: 6
+}
+```
+
+### data() for Sub-tensors
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+auto sub = tensor[1];  // Sub-tensor
+
+// sub.data() points to the second "slice" of 'tensor'
+float* sub_ptr = sub.data();
+
+// sub_ptr is different from tensor.data()
+// sub_ptr = tensor.data_() + tensor._offset + 1 * tensor.stride(0)
+```
+
+### Notes
+
+:::info
+**View Awareness**
+
+The pointer returned by `data()` accounts for the current view's offset, meaning it always points to the logical start of the tensor.
+
+For non-contiguous tensors, you must use the `stride_()` values to access elements correctly.
+:::
+
+---
+
+## data_()
+
+### Function Signature
+
+```cpp
+T* data_();
+const T* data_() const;
+```
+
+### Core Function Description
+
+Retrieves the start pointer of the underlying memory block, **excluding** the offset (`_offset`). This is the true physical memory address.
+
+### Return Value
+
+- **Type**: `T*` or `const T*`
+- **Description**: A pointer to the start of the underlying memory block.
+
+### Implementation
+
+```cpp
+T* data_() {
+    return reinterpret_cast<T*>(_data.get());
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // Get the underlying pointer
+    float* raw_ptr = tensor.data_();
+    
+    // Access physical memory directly (ignoring offset)
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        raw_ptr[i] = static_cast<float>(i);
+    }
+    
+    // For contiguous tensors, data() is equivalent to data_() + offset
+    std::cout << (tensor.data() == tensor.data_() + tensor.offset_()) << std::endl;  // true
+}
+```
+
+### data_() for Sub-tensors
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+auto sub = tensor[1];  // Sub-tensor
+
+// sub.data_() is the same as tensor.data_() (shared memory)
+std::cout << (sub.data_() == tensor.data_()) << std::endl;  // true
+
+// But sub.data() and tensor.data() are different (different views)
+std::cout << (sub.data() == tensor.data()) << std::endl;  // false
+```
+
+### Notes
+
+:::warning
+**Advanced Usage**
+
+`data_()` is a low-level method, typically used only for:
+- Library internal implementation
+- High-performance scenarios (requiring manual memory layout handling)
+- Interaction with C APIs
+
+General users should prefer the `data()` method.
+:::
+
+---
+
+## data() vs data_()
+
+### Relationship
+
+```cpp
+// Implementation of data()
+T* data() {
+    return data_() + _offset;
+}
+```
+
+### Comparison
+
+| Feature | data() | data_() |
+| --- | --- | --- |
+| **Pointer Position** | Start of current view | Start of memory block |
+| **Includes Offset** | ✅ Yes | ❌ No |
+| **Sub-tensors** | Different pointers | Same pointers |
+| **Recommended Use** | ✅ General scenarios | ⚠️ Advanced scenarios |
+
+### Example Comparison
+
+```cpp
+yt::YTensor<float, 2> tensor(10, 10);
+auto sub = tensor.slice(0, 2, 5);  // Slicing
+
+// Full tensor
+std::cout << "Tensor data(): " << tensor.data() << std::endl;
+std::cout << "Tensor data_(): " << tensor.data_() << std::endl;
+
+// Sub-tensor
+std::cout << "Sub data(): " << sub.data() << std::endl;  // Offset position
+std::cout << "Sub data_(): " << sub.data_() << std::endl;  // Same as tensor
+
+// Verify relationships
+assert(sub.data_() == tensor.data_());  // Shared memory
+assert(sub.data() != tensor.data());    // Different views
+```
+
+---
+
+## atData()
+
+### Function Signature
+
+```cpp
+T& atData(int index);
+const T& atData(int index) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `int` | Logical index (starting from 0). |
+
+### Core Function Description
+
+Accesses an element via its logical index. Internally, it transforms the logical index into coordinates and then calls the `at()` method.
+
+**Not recommended** for frequent use due to lower performance; intended primarily for compatibility.
+
+### Return Value
+
+- **Type**: `T&` or `const T&`
+- **Description**: A reference to the element at the specified logical position.
+
+### Implementation
+
+```cpp
+T& atData(int index) {
+    auto coord = toCoord(index);  // Logical index -> coordinates
+    return at(coord);             // Coordinates -> element
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // Using logical index
+    tensor.atData(0) = 1.0f;   // Equivalent to tensor.at(0, 0)
+    tensor.atData(5) = 5.0f;   // Equivalent to tensor.at(1, 1)
+    
+    std::cout << tensor.atData(5) << std::endl;  // Output: 5.0
+    
+    // Calculation of logical index:
+    // index = i * shape[1] + j
+    // 5 = 1 * 4 + 1  => (i=1, j=1)
+}
+```
+
+### Performance Considerations
+
+:::warning
+**Lower Performance**
+
+`atData()` internally must:
+1. Convert the logical index to multi-dimensional coordinates (`toCoord()`).
+2. Convert those coordinates into a physical index (`at()`).
+
+Its performance is significantly lower than using the `at()` method directly. It is only intended for compatibility with legacy code.
+:::
+
+---
+
+## atData_()
+
+### Function Signature
+
+```cpp
+T& atData_(int index);
+const T& atData_(int index) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `index` | `int` | Physical index (relative to `data_() + _offset`). |
+
+### Core Function Description
+
+Accesses an element directly via its physical index, which is very efficient. **Requires the tensor to be contiguous** and does not perform bounds checking.
+
+### Return Value
+
+- **Type**: `T&` or `const T&`
+- **Description**: A reference to the element at the specified physical position.
+
+### Implementation
+
+```cpp
+T& atData_(int index) {
+    return data_()[_offset + index];
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // Using physical index (tensor must be contiguous)
+    assert(tensor.isContiguous());
+    
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) = static_cast<float>(i);
+    }
+    
+    // Verify
+    std::cout << tensor.at(0, 0) << std::endl;  // Output: 0
+    std::cout << tensor.at(1, 2) << std::endl;  // Output: 6 (1*4 + 2)
+}
+```
+
+### Element-wise Operations
+
+`atData_()` is ideal for element-wise operations:
+
+```cpp
+void add_scalar(yt::YTensor<float, 2>& tensor, float value) {
+    assert(tensor.isContiguous());  // Ensure contiguity
+    
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_(i) += value;
+    }
+}
+```
+
+### Notes
+
+:::danger
+**Strict Requirements**
+
+Before using `atData_()`, the following must be true:
+1. **The tensor must be contiguous** (`isContiguous() == true`).
+2. **The index must not be out of bounds** (no checking is performed).
+3. **The physical memory layout must be understood**.
+
+Incorrect use can result in undefined behavior or program crashes!
+:::
+
+---
+
+## atData() vs atData_()
+
+| Feature | atData() | atData_() |
+| --- | --- | --- |
+| **Index Type** | Logical index | Physical index |
+| **Coordinate Conversion** | ✅ Required | ❌ Not required |
+| **Performance** | ❌ Slow | ✅ Fast |
+| **Contiguity Requirement** | ❌ None | ✅ Must be contiguous |
+| **Bounds Checking** | ✅ Yes | ❌ No |
+| **Recommended Use** | ❌ Not recommended | ✅ Element-wise operations |
+
+---
+
+## Usage Suggestions
+
+### Recommended Practices
+
+```cpp
+// ✅ Element Access: Use at()
+tensor.at(i, j, k) = value;
+
+// ✅ Pointer Access: Use data()
+float* ptr = tensor.data();
+auto stride = tensor.stride_();
+ptr[i * stride[0] + j * stride[1]] = value;
+
+// ✅ Element-wise: Use atData_() (for contiguous tensors)
+if (tensor.isContiguous()) {
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) *= 2.0f;
+    }
+}
+```
+
+### Practices to Avoid
+
+```cpp
+// ❌ Avoid: Using atData() (poor performance)
+for (int i = 0; i < tensor.size(); ++i) {
+    tensor.atData(i) = value;  // Triggers coordinate conversion every time
+}
+
+// ❌ Avoid: Using atData_() on non-contiguous tensors
+if (!tensor.isContiguous()) {
+    // tensor.atData_(i) = value;  // Undefined behavior!
+}
+
+// ❌ Avoid: Direct operation on data_() (unless fully understood)
+float* raw = tensor.data_();
+// raw[index] = value;  // Might access incorrect location
+```
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    std::cout << "=== data() Example ===" << std::endl;
+    // Using data() and strides
+    float* ptr = tensor.data();
+    auto stride = tensor.stride_();
+    
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            int offset = i * stride[0] + j * stride[1];
+            ptr[offset] = i * 10 + j;
+        }
+    }
+    
+    std::cout << "tensor.at(1, 2) = " << tensor.at(1, 2) << std::endl;  // 12.0
+    
+    std::cout << "\n=== atData_() Example ===" << std::endl;
+    // Element-wise operation
+    assert(tensor.isContiguous());
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) += 100.0f;
+    }
+    
+    std::cout << "tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;  // 100.0
+    std::cout << "tensor.at(1, 2) = " << tensor.at(1, 2) << std::endl;  // 112.0
+    
+    std::cout << "\n=== Sub-tensor Pointers ===" << std::endl;
+    auto sub = tensor[1];
+    
+    std::cout << "tensor.data() = " << (void*)tensor.data() << std::endl;
+    std::cout << "sub.data() = " << (void*)sub.data() << std::endl;
+    std::cout << "tensor.data_() = " << (void*)tensor.data_() << std::endl;
+    std::cout << "sub.data_() = " << (void*)sub.data_() << std::endl;
+    
+    std::cout << "sub shares memory: " << (sub.data_() == tensor.data_()) << std::endl;  // true
+    
+    std::cout << "\n=== Non-contiguous Tensor ===" << std::endl;
+    auto transposed = tensor.transpose();
+    std::cout << "Transposed contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    // Must NOT use atData_() on non-contiguous tensors
+    // transposed.atData_(0) = 999.0f;  // DANGEROUS! Undefined behavior
+    
+    // Use data() + strides instead
+    float* t_ptr = transposed.data();
+    auto t_stride = transposed.stride_();
+    t_ptr[0 * t_stride[0] + 0 * t_stride[1]] = 999.0f;  // Safe
+    
+    return 0;
+}
+```
+
+---
+
+## Related Content
+
+- [Element Access: Indexing](./indexing.mdx) - `at()` and `operator[]` methods
+- [Iteration Operations](./iteration.mdx) - Advanced operations like `foreach()`, `fill()`, etc.
+- [Shape Querying](../shape/query.mdx) - `stride()`, `offset()` methods, etc.
+- [Performance Optimization](../../guides/performance_tips.mdx) - Tips for efficient access patterns

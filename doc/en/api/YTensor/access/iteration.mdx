@@ -1,0 +1,603 @@
+# Iteration Operations
+
+This document describes the iteration-related methods of the `YTensor<T, dim>` class, including `foreach()`, `fill()`, and `copy_()`.
+
+## Overview
+
+YTensor provides three primary iteration operations:
+
+| Method | Function | In-place | Auto-parallel | Typical Application |
+| --- | --- | --- | --- | --- |
+| `foreach()` | Applies a function to each element | ✅ | ✅ | Element transformation, statistics |
+| `fill()` | Fills all elements with the same value | ✅ | ✅ | Initialization, resetting |
+| `copy_()` | Copies elements from another tensor | ✅ | ✅ | Data transfer |
+
+---
+
+## foreach()
+
+### Function Signature
+
+```cpp
+template<typename Func>
+YTensor<T, dim>& foreach(Func&& func, double flop = 1e-11);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `func` | `Func&&` | The function object to apply to each element. |
+| `flop` | `double` | The compute work per operation (used to decide whether to parallelize). |
+
+### Function Object Signatures
+
+`func` supports two signatures:
+
+| Signature Type | Function Signature | Description |
+| --- | --- | --- |
+| **Coordinate-free** | `void func(T& value)` or `T func(T& value)` | More efficient, recommended. |
+| **Coordinate-aware** | `void func(T& value, const std::vector<int>& coord)` or `T func(T& value, const std::vector<int>& coord)` | Use when element coordinates are required. |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>&`
+- **Description**: Returns a reference to itself, supporting method chaining.
+
+### Core Function Description
+
+Applies the specified function to every element of the tensor. It automatically detects the function signature and selects the optimal implementation:
+- **Coordinate-free version**: Uses the efficient `broadcastInplace` implementation.
+- **Coordinate-aware version**: Requires coordinate calculation, slightly lower performance.
+
+Supports automatic parallelization (based on the `flop` parameter and tensor size).
+
+### Implementation Mechanism
+
+```cpp
+// 1. Detect function signature
+constexpr bool oneArgFunc = std::is_invocable_v<Func, T&> 
+                          && !std::is_invocable_v<Func, T&, const std::vector<int>&>;
+
+if constexpr (oneArgFunc) {
+    // Coordinate-free: uses broadcastInplace
+    broadcastInplace([&func](T& a) {
+        if constexpr (returns void) { func(a); }
+        else { a = func(a); }
+    });
+} else {
+    // Coordinate-aware: calculates coordinates before calling
+    if (mostContinuousView().isContiguous()) {
+        // Fast path: contiguous memory
+    } else {
+        // General path: element-by-element traversal
+    }
+}
+```
+
+### Usage Examples
+
+#### Basic Usage: Coordinate-free (returns void)
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    tensor.fill(1.0f);
+    
+    // Using a lambda that returns void (recommended)
+    tensor.foreach([](float& val) {
+        val *= 2.0f;  // Multiply each element by 2
+    });
+    
+    std::cout << tensor.at(0, 0) << std::endl;  // Output: 2.0
+}
+```
+
+#### Return Value Version (automatic assignment)
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(5.0f);
+
+// Function return value is automatically assigned to the element
+tensor.foreach([](float& val) {
+    return val * val;  // Return the square
+});
+
+std::cout << tensor.at(0, 0) << std::endl;  // Output: 25.0
+```
+
+#### Coordinate-aware Version
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+
+// Use coordinate information
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = coord[0] * 10.0f + coord[1];
+});
+
+std::cout << tensor.at(1, 2) << std::endl;  // Output: 12.0 (1*10 + 2)
+```
+
+#### Function Object with State
+
+```cpp
+struct Scaler {
+    float factor;
+    
+    void operator()(float& val) const {
+        val *= factor;
+    }
+};
+
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(2.0f);
+
+tensor.foreach(Scaler{3.0f});  // Multiply all elements by 3
+
+std::cout << tensor.at(0, 0) << std::endl;  // Output: 6.0
+```
+
+#### Statistical Application (requires capture)
+
+```cpp
+yt::YTensor<float, 2> tensor = yt::YTensor<float, 2>::randu(100, 100);
+
+// Count positive numbers (Note: capture variables in lambda must be thread-safe)
+std::atomic<int> count{0};
+tensor.foreach([&count](float val) {
+    if (val > 0.5f) {
+        count.fetch_add(1, std::memory_order_relaxed);
+    }
+});
+
+std::cout << "Count > 0.5: " << count << std::endl;
+```
+
+### Performance Tips
+
+:::tip
+**Choosing a Function Signature**
+
+Prefer the **coordinate-free version** (single parameter) unless coordinates are strictly necessary:
+- Coordinate-free is faster (skips coordinate calculation).
+- It enables more optimized implementation paths.
+:::
+
+:::info
+**Parallel Control**
+
+The `flop` parameter controls the parallelization strategy:
+- `flop = 1e-11` (default): Simple operations, automatic parallelization.
+- Increase `flop`: Complex operations, more aggressive parallelization.
+- Decrease `flop`: Lightweight operations, may run serially.
+
+Internally, the number of threads is decided by `flop * number of elements`.
+:::
+
+---
+
+## fill()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim>& fill(T value);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `value` | `T` | The value to fill. |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>&`
+- **Description**: Returns a reference to itself, supporting method chaining.
+
+### Core Function Description
+
+Fills all elements of the tensor with the specified value. It automatically detects contiguity and selects the most optimal implementation.
+
+### Implementation Strategy
+
+```cpp
+int cFrom = isContiguousFrom();  // Detect from which dimension contiguity begins
+
+if (cFrom == 0) {
+    // Fully contiguous: uses std::fill directly
+    std::fill(data(), data() + size(), value);
+} else if (cFrom < dim) {
+    // Partially contiguous: traverse non-contiguous dimensions and fill contiguous parts
+    // Parallelize outer traversal, serial std::fill for inner parts
+} else {
+    // Fully non-contiguous: use broadcastInplace for element-by-element filling
+}
+```
+
+### Usage Examples
+
+#### Basic Usage
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // Fill with 0
+    tensor.fill(0.0f);
+    std::cout << tensor.at(1, 2) << std::endl;  // Output: 0.0
+    
+    // Fill with another value
+    tensor.fill(3.14f);
+    std::cout << tensor.at(0, 0) << std::endl;  // Output: 3.14
+}
+```
+
+#### Method Chaining
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+
+tensor.fill(1.0f)
+      .foreach([](float& val) { val *= 2.0f; });
+
+std::cout << tensor.at(0, 0) << std::endl;  // Output: 2.0
+```
+
+#### Non-contiguous Tensors
+
+```cpp
+yt::YTensor<float, 2> tensor(4, 5);
+auto transposed = tensor.transpose();  // Non-contiguous
+
+// fill() handles non-contiguous logic automatically
+transposed.fill(99.0f);
+
+std::cout << transposed.at(0, 0) << std::endl;  // Output: 99.0
+std::cout << tensor.at(0, 0) << std::endl;      // Output: 99.0 (shared memory)
+```
+
+### Performance Advantages
+
+| Tensor State | Implementation | Performance |
+| --- | --- | --- |
+| Fully Contiguous | `std::fill` | ⚡️⚡️⚡️ Extremely fast |
+| Partially Contiguous | Parallel + Blocked `std::fill` | ⚡️⚡️ Fast |
+| Fully Non-contiguous | Element-by-element fill | ⚡️ Normal |
+
+:::tip
+**Recommended Initialization**
+
+For large tensor initialization, `fill()` is more efficient than `foreach()`:
+```cpp
+// ✅ Recommended
+tensor.fill(0.0f);
+
+// ❌ Not recommended (lower performance)
+tensor.foreach([](float& val) { val = 0.0f; });
+```
+:::
+
+---
+
+## copy_()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim>& copy_(const YTensorBase& src);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `src` | `const YTensorBase&` | Source tensor. |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>&`
+- **Description**: Returns a reference to itself, supporting method chaining.
+
+### Core Function Description
+
+Copies elements from a source tensor to the current tensor (in-place operation). Requirements:
+- `shape` of source and target tensors must match exactly.
+- `dtype` of source and target tensors must be the same.
+- No memory reallocation occurs.
+- Memory overlap is not supported (behavior is undefined).
+
+### Implementation Mechanism
+
+```cpp
+// Calls YTensorBase::copy_() internally
+YTensorBase::copy_(src);
+```
+
+### Usage Examples
+
+#### Basic Usage
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> src(3, 4);
+    yt::YTensor<float, 2> dst(3, 4);
+    
+    // Initialize source tensor
+    src.fill(5.0f);
+    
+    // Copy to destination
+    dst.copy_(src);
+    
+    std::cout << dst.at(0, 0) << std::endl;  // Output: 5.0
+    
+    // Modifying 'src' does not affect 'dst' (already copied)
+    src.fill(0.0f);
+    std::cout << dst.at(0, 0) << std::endl;  // Output: 5.0
+}
+```
+
+#### Method Chaining
+
+```cpp
+yt::YTensor<float, 2> src = yt::YTensor<float, 2>::ones(3, 4);
+yt::YTensor<float, 2> dst(3, 4);
+
+dst.copy_(src)
+   .foreach([](float& val) { val *= 10.0f; });
+
+std::cout << dst.at(0, 0) << std::endl;  // Output: 10.0
+std::cout << src.at(0, 0) << std::endl;  // Output: 1.0 (src unchanged)
+```
+
+#### Copying from YTensorBase
+
+```cpp
+yt::YTensorBase base = yt::YTensor<float, 2>::zeros(3, 4);
+yt::YTensor<float, 2> typed(3, 4);
+
+// copy_() accepts YTensorBase
+typed.copy_(base);
+```
+
+### copy_() vs clone()
+
+| Feature | copy_() | clone() |
+| --- | --- | --- |
+| **Operation** | In-place copy | Create new tensor |
+| **Memory Allocation** | ❌ None | ✅ Allocates new memory |
+| **Destination State** | ✅ Must exist | ❌ Creates new object |
+| **Shape Requirement** | ✅ Must match | ❌ None |
+| **Return Value** | Reference to itself | New tensor |
+
+```cpp
+yt::YTensor<float, 2> src(3, 4);
+src.fill(1.0f);
+
+// Option 1: clone() (creates a new tensor)
+auto dst1 = src.clone();
+
+// Option 2: copy_() (in-place copy)
+yt::YTensor<float, 2> dst2(3, 4);
+dst2.copy_(src);
+```
+
+### Notes
+
+:::danger
+**Memory Overlap**
+
+`copy_()` does not support cases where source and destination memory overlap:
+
+```cpp
+yt::YTensor<float, 2> tensor(10, 10);
+auto view1 = tensor.slice(0, 0, 5);
+auto view2 = tensor.slice(0, 2, 7);
+
+// ❌ Error: view1 and view2 memory overlap
+view1.copy_(view2);  // Undefined behavior!
+```
+:::
+
+:::warning
+**Shape Must Match**
+
+```cpp
+yt::YTensor<float, 2> src(3, 4);
+yt::YTensor<float, 2> dst(4, 3);  // Different shapes
+
+// ❌ Runtime error
+dst.copy_(src);  // Exception or assertion failure
+```
+:::
+
+---
+
+## Performance Comparison
+
+### foreach vs fill
+
+```cpp
+yt::YTensor<float, 2> tensor(1000, 1000);
+
+// Option 1: fill() (Recommended)
+tensor.fill(0.0f);  // ⚡️⚡️⚡️ Extremely fast (uses std::fill)
+
+// Option 2: foreach() (Not recommended)
+tensor.foreach([](float& val) { val = 0.0f; });  // ⚡️ Slower
+```
+
+### foreach: Coordinate-free vs Coordinate-aware
+
+```cpp
+yt::YTensor<float, 2> tensor(1000, 1000);
+
+// Option 1: Coordinate-free (Recommended)
+tensor.foreach([](float& val) {
+    val = std::sqrt(val);
+});  // ⚡️⚡️ Fast (uses broadcastInplace)
+
+// Option 2: Coordinate-aware (Not recommended unless coordinates are needed)
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = std::sqrt(val);  // coord not actually used
+});  // ⚡️ Slow (requires coordinate calculation)
+```
+
+### copy_ vs Loop Assignment
+
+```cpp
+yt::YTensor<float, 2> src(1000, 1000);
+yt::YTensor<float, 2> dst(1000, 1000);
+
+// Option 1: copy_() (Recommended)
+dst.copy_(src);  // ⚡️⚡️⚡️ Extremely fast (optimized batch copy)
+
+// Option 2: Manual loop (Not recommended)
+for (int i = 0; i < 1000; ++i) {
+    for (int j = 0; j < 1000; ++j) {
+        dst.at(i, j) = src.at(i, j);
+    }
+}  // ⚡️ Extremely slow (element-by-element access)
+```
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include <cmath>
+#include "ytensor_single.hpp"
+
+int main() {
+    // Create tensors
+    yt::YTensor<float, 2> tensor(5, 4);
+    
+    std::cout << "=== fill() Example ===" << std::endl;
+    tensor.fill(2.0f);
+    std::cout << "After fill(2.0): tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;
+    
+    std::cout << "\n=== foreach() Coordinate-free Example ===" << std::endl;
+    tensor.foreach([](float& val) {
+        val = val * val;  // Square
+    });
+    std::cout << "After square: tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;  // 4.0
+    
+    std::cout << "\n=== foreach() Coordinate-aware Example ===" << std::endl;
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 10.0f + coord[1];
+    });
+    std::cout << "After coord assignment: tensor.at(2, 3) = " << tensor.at(2, 3) << std::endl;  // 23.0
+    
+    std::cout << "\n=== copy_() Example ===" << std::endl;
+    yt::YTensor<float, 2> backup(5, 4);
+    backup.copy_(tensor);
+    
+    // Modify original tensor
+    tensor.fill(0.0f);
+    std::cout << "tensor.at(2, 3) = " << tensor.at(2, 3) << std::endl;  // 0.0
+    std::cout << "backup.at(2, 3) = " << backup.at(2, 3) << std::endl;  // 23.0 (independent copy)
+    
+    std::cout << "\n=== Method Chaining Example ===" << std::endl;
+    yt::YTensor<float, 2> result(5, 4);
+    result.fill(1.0f)
+          .foreach([](float& val) { val += 5.0f; })
+          .foreach([](float& val) { val *= 2.0f; });
+    
+    std::cout << "After chain: result.at(0, 0) = " << result.at(0, 0) << std::endl;  // 12.0
+    
+    std::cout << "\n=== Non-contiguous Tensor Example ===" << std::endl;
+    yt::YTensor<float, 2> original(4, 5);
+    original.fill(1.0f);
+    
+    auto transposed = original.transpose();
+    std::cout << "Is contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    // fill() handles non-contiguity automatically
+    transposed.fill(99.0f);
+    std::cout << "transposed.at(0, 0) = " << transposed.at(0, 0) << std::endl;  // 99.0
+    std::cout << "original.at(0, 0) = " << original.at(0, 0) << std::endl;      // 99.0
+    
+    std::cout << "\n=== Statistical Example (atomic operations) ===" << std::endl;
+    yt::YTensor<float, 2> data = yt::YTensor<float, 2>::randu(100, 100);
+    
+    std::atomic<int> count{0};
+    data.foreach([&count](float val) {
+        if (val > 0.5f) {
+            count.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    
+    std::cout << "Elements > 0.5: " << count << " / " << data.size() << std::endl;
+    
+    return 0;
+}
+```
+
+---
+
+## Best Practices
+
+### ✅ Recommended Practices
+
+```cpp
+// 1. Use fill() for initialization
+tensor.fill(0.0f);
+
+// 2. Use coordinate-free foreach() for simple transformations
+tensor.foreach([](float& val) { val *= 2.0f; });
+
+// 3. Use the coordinate-aware version only when coordinates are necessary
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = coord[0] + coord[1];
+});
+
+// 4. Use copy_() for batch copying
+dst.copy_(src);
+
+// 5. Use method chaining to improve readability
+tensor.fill(1.0f)
+      .foreach([](float& val) { val += 1.0f; });
+```
+
+### ❌ Practices to Avoid
+
+```cpp
+// 1. Avoid using foreach() for simple filling
+tensor.foreach([](float& val) { val = 0.0f; });  // Should use fill()
+
+// 2. Avoid unnecessary coordinate parameters
+tensor.foreach([](float& val, const std::vector<int>&) {
+    val *= 2.0f;  // Coordinates not needed, use coordinate-free version
+});
+
+// 3. Avoid manual loops
+for (int i = 0; i < h; ++i) {
+    for (int j = 0; j < w; ++j) {
+        dst.at(i, j) = src.at(i, j);  // Should use copy_()
+    }
+}
+
+// 4. Avoid unsafe captures in foreach()
+int sum = 0;  // ❌ Not thread-safe!
+tensor.foreach([&sum](float val) {
+    sum += val;  // Data race!
+});
+```
+
+---
+
+## Related Content
+
+- [Element Access: Indexing](./indexing.mdx) - `at()` and `operator[]` methods
+- [Element Access: Data Pointers](./data_ptr.mdx) - `data()` and `atData_()` methods
+- [Memory Management](../construction/memory.mdx) - `clone()`, `reserve()` methods, etc.
+- [Parallel Computing](../../guides/parallelism.mdx) - Parallel strategies and performance optimization

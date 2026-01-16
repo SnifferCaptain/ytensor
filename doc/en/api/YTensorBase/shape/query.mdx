@@ -1,0 +1,31 @@
+# YTensorBase Shape Queries
+
+The shape query methods for `YTensorBase` are identical to those of `YTensor`.
+
+For more details, please refer to [YTensor Shape Queries](../../YTensor/shape/query.mdx).
+
+## Quick Reference
+
+```cpp
+yt::YTensorBase tensor({3, 4, 5}, "float32");
+
+// Shape
+auto shape = tensor.shape();           // {3, 4, 5}
+int d0 = tensor.shape(0);              // 3
+
+// Sizes
+size_t n = tensor.size();              // 60
+int ndim = tensor.ndim();              // 3
+
+// Strides
+auto stride = tensor.stride();         // {20, 5, 1}
+auto stride_ = tensor.stride_();       // Physical strides
+
+// Offsets
+int off = tensor.offset(1, 2, 3);      // Logical offset
+int off_ = tensor.offset_(1, 2, 3);    // Physical offset
+
+// Coordinate Conversion
+auto coord = tensor.toCoord(33);       // {1, 2, 3}
+size_t idx = tensor.toIndex(1, 2, 3);  // 33
+```

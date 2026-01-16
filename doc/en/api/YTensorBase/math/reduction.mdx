@@ -1,0 +1,170 @@
+# Reduction Operations
+
+This document describes the reduction methods for the `YTensorBase` class, including `sum()` and `max()`.
+
+## Overview
+
+| Method | Return Type | Description |
+| --- | --- | --- |
+| `sum(axis)` | `YTensorBase` | Sum elements along a specified axis. |
+| `sum(axes)` | `YTensorBase` | Sum elements along multiple specified axes. |
+| `max(axis)` | `std::pair<YTensorBase, YTensorBase>` | Compute maximum values and their indices along a specified axis. |
+| `max(axes)` | `std::pair<YTensorBase, YTensorBase>` | Compute maximum values and their indices along multiple specified axes. |
+
+---
+
+## `sum()`
+
+### Function Signatures
+
+```cpp
+YTensorBase sum(int axis) const;
+YTensorBase sum(const std::vector<int>& axes) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `axis` | `int` | The index of the axis to reduce. Supports negative indexing (-1 refers to the last axis). |
+| `axes` | `std::vector<int>` | A vector of axis indices to reduce. |
+
+### Core Function Description
+
+Performs a summation along the specified axis.
+*   **Always preserves dimensions** (the size of the reduced axis becomes 1).
+*   Supports both single-axis and multi-axis reduction.
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**: Returns the sum result. The **size of each reduced axis is set to 1**.
+
+### Usage Examples
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::ones({3, 4, 5}, "float32");
+    
+    // Sum along axis 0
+    YTensorBase s0 = tensor.sum(0);
+    // s0.shape() -> {1, 4, 5}
+    // Each element in s0 is the sum of 3 elements from the original tensor along axis 0.
+    
+    // Sum along the last axis
+    YTensorBase s1 = tensor.sum(-1);
+    // s1.shape() -> {3, 4, 1}
+    
+    // Sum along multiple axes
+    YTensorBase s2 = tensor.sum({0, 2});
+    // s2.shape() -> {1, 4, 1}
+}
+```
+
+### Multi-axis Sum Implementation
+
+The multi-axis version internally calls the single-axis version for each specified axis. Axes are sorted in descending order to prevent index shifting during multi-step reduction:
+
+```cpp
+YTensorBase sum(const std::vector<int>& axes) const {
+    YTensorBase result = *this;
+    std::vector<int> sortedAxes = axes;
+    std::sort(sortedAxes.begin(), sortedAxes.end(), std::greater<int>());
+    for (int ax : sortedAxes) {
+        result = result.sum(ax);
+    }
+    return result;
+}
+```
+
+---
+
+## `max()`
+
+### Function Signatures
+
+```cpp
+std::pair<YTensorBase, YTensorBase> max(int axis) const;
+std::pair<YTensorBase, YTensorBase> max(const std::vector<int>& axes) const;
+```
+
+### Core Function Description
+
+Computes the maximum value along the specified axis.
+*   Returns both the maximum values and their indices.
+*   **Always preserves dimensions**.
+
+### Return Value
+
+- **Type**: `std::pair<YTensorBase, YTensorBase>`
+- **first**: A tensor containing the maximum values. Its `dtype` matches the original tensor.
+- **second**: A tensor containing the indices of the maximum values. Its **dtype is "int32"**.
+
+### Usage Examples
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+// Assume the tensor is filled with data...
+
+// Max along axis 1
+auto [values, indices] = tensor.max(1);
+// values.shape() -> {3, 1, 5}
+// indices.shape() -> {3, 1, 5}
+// indices.dtype() -> "int32"
+
+// Using structured bindings (C++17) for the last axis
+auto result = tensor.max(-1);
+YTensorBase maxVals = result.first;
+YTensorBase maxIdxs = result.second;
+```
+
+### Multi-axis Max
+
+```cpp
+auto [values, indices] = tensor.max({0, 2});
+// values.shape() -> {1, 4, 1}
+// indices contains the indices from the final axis reduction step.
+```
+
+---
+
+## Shape Behavior
+
+Reduction operations **do not remove** the reduced dimensions; instead, they set their size to 1:
+
+```cpp
+YTensorBase tensor = YTensorBase::ones({3, 4, 5}, "float32");
+
+YTensorBase s = tensor.sum(1);
+// Shape change: {3, 4, 5} -> {3, 1, 5} (Axis 1 size changes from 4 to 1)
+
+// To remove such "singleton" dimensions, use squeeze():
+YTensorBase squeezed = s.squeeze(1);
+// squeezed.shape() -> {3, 5}
+```
+
+---
+
+## Error Cases
+
+| Case | Exception Type |
+| --- | --- |
+| `ndim < 1` for `sum`/`max` | `std::runtime_error` |
+
+---
+
+## Performance Notes
+
+- These operations are automatically parallelized using `yt::kernel::parallelFor`.
+- Parallelization granularity is based on the `outerSize` and `axisSize` of the reduction.
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Element-wise math.
+- [Broadcasting Operations](./broadcast.mdx) - The `broadcastInplace` method.
+- [Matrix Multiplication](./matmul.mdx) - The `matmul` operation.
+- [Shape Operations: Dimension](../shape/dimension.mdx) - Using `squeeze()` to remove dimensions of size 1.

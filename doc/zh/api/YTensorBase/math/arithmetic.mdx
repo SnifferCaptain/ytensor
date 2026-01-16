@@ -1,0 +1,257 @@
+# 算术运算
+
+本文档介绍 `YTensorBase` 类的算术运算符重载。
+
+## 核心功能描述
+
+YTensorBase 支持以下算术运算符，可用于：
+- **张量与张量**运算（自动广播）
+- **张量与标量**运算
+
+### 支持的运算符
+
+| 运算符 | 说明 | 原地版本 | 类型限制 |
+|--------|------|---------|---------|
+| `+` | 加法 | `+=` | 所有数值类型 |
+| `-` | 减法 | `-=` | 所有数值类型 |
+| `*` | 逐元素乘法 | `*=` | 所有数值类型 |
+| `/` | 逐元素除法 | `/=` | 所有数值类型 |
+| `%` | 取模 | `%=` | 所有数值类型 (浮点使用fmod) |
+| `&` | 按位与 | `&=` | **仅整数类型** |
+| `\|` | 按位或 | `\|=` | **仅整数类型** |
+| `^` | 按位异或 | `^=` | **仅整数类型** |
+| `<<` | 左移 | `<<=` | **仅整数类型** |
+| `>>` | 右移 | `>>=` | **仅整数类型** |
+| `==` | 等于 | - | 返回 `bool` 类型张量 |
+| `!=` | 不等于 | - | 返回 `bool` 类型张量 |
+| `<` | 小于 | - | 返回 `bool` 类型张量 |
+| `<=` | 小于等于 | - | 返回 `bool` 类型张量 |
+| `>` | 大于 | - | 返回 `bool` 类型张量 |
+| `>=` | 大于等于 | - | 返回 `bool` 类型张量 |
+
+---
+
+## 函数签名
+
+### 张量与张量运算
+
+```cpp
+YTensorBase operator+(const YTensorBase& other) const;
+YTensorBase& operator+=(const YTensorBase& other);
+```
+
+### 张量与标量运算
+
+```cpp
+template<typename T>
+YTensorBase operator+(const T& scalar) const;
+
+template<typename T>
+YTensorBase& operator+=(const T& scalar);
+```
+
+**注意**: 数学和位运算符（`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`）都有相同的签名模式。比较运算符返回 `dtype="bool"` 的新张量。
+
+---
+
+## 使用示例
+
+### 张量与标量运算
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+    
+    // 加法
+    YTensorBase b = a + 2.0f;  // 所有元素 +2
+    
+    // 原地乘法
+    a *= 3.0f;  // 所有元素 *3
+    
+    // 链式操作
+    YTensorBase c = (a + 1.0f) * 2.0f - 0.5f;
+}
+```
+
+### 张量与张量运算（相同形状）
+
+```cpp
+YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+YTensorBase b = YTensorBase::zeros({3, 3}, "float32");
+
+// 逐元素加法
+YTensorBase c = a + b;
+// c[i][j] = a[i][j] + b[i][j]
+
+// 逐元素乘法
+YTensorBase d = a * b;
+// d[i][j] = a[i][j] * b[i][j]
+```
+
+### 广播运算
+
+```cpp
+YTensorBase a = YTensorBase::ones({3, 5}, "float32");
+YTensorBase b = YTensorBase::ones({5}, "float32");
+
+// b 自动广播到 (3, 5)
+YTensorBase c = a + b;
+// c[i][j] = a[i][j] + b[j]
+```
+
+### 位运算（仅整数类型）
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 2}, "int32");
+YTensorBase b = YTensorBase::ones({2, 2}, "int32");
+
+// 按位与
+YTensorBase c = a & b;
+
+// 按位或
+YTensorBase d = a | b;
+
+// 按位异或
+YTensorBase e = a ^ b;
+
+// 左移
+YTensorBase f = a << 1; 
+
+// 比较运算
+YTensorBase mask = a > 0; // 返回 bool 类型的 mask
+```
+
+---
+
+## 广播规则
+
+广播遵循 NumPy 的规则，从**最右侧维度**开始比较：
+
+### 兼容的形状
+
+```
+(3, 5) + (5,)         → (3, 5)  ✅
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)  ✅
+(2, 3, 4) + (3, 4)    → (2, 3, 4)  ✅
+```
+
+### 不兼容的形状
+
+```
+(3, 5) + (3, 4)  → 错误！维度5和4无法广播 ❌
+(3, 5) + (4,)    → 错误！维度5和4无法广播 ❌
+```
+
+---
+
+## 支持的数据类型
+
+### 数值类型（`+`, `-`, `*`, `/`）
+
+- `float32`, `float64`
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+- `bfloat16`
+- `%` 运算符在浮点类型下使用 `fmod` 实现
+
+### 整数类型（`&`, `|`, `^`）
+
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+
+### 整数类型（`<<`, `>>`）
+
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+
+### 比较运算符（返回 `bool` 类型）
+
+- 支持所有类型（浮点、整数、布尔）
+
+---
+
+## 内部实现
+
+所有运算符通过统一的宏 `YT_IMPL_BINARY_OP` 实现，内部使用 `broadcastInplace`：
+
+```cpp
+// 非原地版本
+YTensorBase operator+(const YTensorBase& other) const {
+    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});
+    YTensorBase result(opShape, _dtype);
+    result.copy_(*this);
+    result.broadcastInplace([](DType& a, const DType& b) { a = a + b; }, other);
+    return result;
+}
+
+// 原地版本
+YTensorBase& operator+=(const YTensorBase& other) {
+    this->broadcastInplace([](DType& a, const DType& b) { a = a + b; }, other);
+    return *this;
+}
+```
+
+---
+
+## 注意事项
+
+:::warning
+**整数除法与浮点除法**
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 2}, "int32");
+// 假设 a 的值为 {5, 7, 9, 11}
+YTensorBase b = a / 2;  // 整数除法：{2, 3, 4, 5}
+
+YTensorBase c = YTensorBase::zeros({2, 2}, "float32");
+// 假设 c 的值为 {5.0, 7.0, 9.0, 11.0}
+YTensorBase d = c / 2.0f;  // 浮点除法：{2.5, 3.5, 4.5, 5.5}
+```
+:::
+
+:::warning
+**除零行为**
+
+除法和取模运算**不检查除零**，行为未定义。
+:::
+
+:::info
+**原地操作的内存共享**
+
+原地操作会修改所有共享内存的视图：
+```cpp
+YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+YTensorBase b = a;  // b 和 a 共享内存
+
+a += 1.0f;  // a 和 b 都变化！
+```
+:::
+
+:::danger
+**类型不匹配**
+
+对浮点型张量使用位运算（`&`, `|`, `^`）会抛出 `std::runtime_error` 异常。
+:::
+
+---
+
+## 性能对比
+
+| 操作 | 时间复杂度 | 内存分配 |
+|------|-----------|---------| 
+| `a + b` | O(n) | 新张量 |
+| `a += b` | O(n) | 无 |
+| `a + scalar` | O(n) | 新张量 |
+| `a += scalar` | O(n) | 无 |
+
+**建议**: 尽可能使用原地操作（`+=`, `*=` 等）以提高性能。
+
+---
+
+## 相关内容
+
+- [广播操作](./broadcast.mdx) - `broadcastInplace` 详解
+- [矩阵乘法](./matmul.mdx) - `matmul` 运算
+- [归约操作](./reduction.mdx) - `sum`、`max` 运算

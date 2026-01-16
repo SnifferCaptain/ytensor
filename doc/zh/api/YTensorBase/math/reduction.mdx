@@ -1,0 +1,170 @@
+# 归约操作
+
+本文档介绍 `YTensorBase` 类的归约方法，包括 `sum()` 和 `max()`。
+
+## 概述
+
+| 方法 | 返回类型 | 说明 |
+| --- | --- | --- |
+| `sum(axis)` | `YTensorBase` | 沿指定轴求和 |
+| `sum(axes)` | `YTensorBase` | 沿多个轴求和 |
+| `max(axis)` | `std::pair<YTensorBase, YTensorBase>` | 沿指定轴求最大值和索引 |
+| `max(axes)` | `std::pair<YTensorBase, YTensorBase>` | 沿多个轴求最大值和索引 |
+
+---
+
+## `sum()`
+
+### 函数签名
+
+```cpp
+YTensorBase sum(int axis) const;
+YTensorBase sum(const std::vector<int>& axes) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `axis` | `int` | 轴索引，支持负数（-1 表示最后一轴） |
+| `axes` | `std::vector<int>` | 多个轴索引 |
+
+### 核心功能描述
+
+对指定轴进行求和操作。
+*   **始终保持维度**（对应轴的大小变为1）。
+*   支持单轴和多轴归约。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**: 求和结果，**对应轴的大小变为1**
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::ones({3, 4, 5}, "float32");
+    
+    // 沿轴 0 求和
+    YTensorBase s0 = tensor.sum(0);
+    // s0.shape() -> {1, 4, 5}
+    // 每个元素是原张量沿轴0的3个元素之和
+    
+    // 沿最后一轴求和
+    YTensorBase s1 = tensor.sum(-1);
+    // s1.shape() -> {3, 4, 1}
+    
+    // 沿多个轴求和
+    YTensorBase s2 = tensor.sum({0, 2});
+    // s2.shape() -> {1, 4, 1}
+}
+```
+
+### 多轴求和实现
+
+多轴版本内部逐个轴调用单轴版本，轴按从大到小排序以避免索引变化：
+
+```cpp
+YTensorBase sum(const std::vector<int>& axes) const {
+    YTensorBase result = *this;
+    std::vector<int> sortedAxes = axes;
+    std::sort(sortedAxes.begin(), sortedAxes.end(), std::greater<int>());
+    for (int ax : sortedAxes) {
+        result = result.sum(ax);
+    }
+    return result;
+}
+```
+
+---
+
+## `max()`
+
+### 函数签名
+
+```cpp
+std::pair<YTensorBase, YTensorBase> max(int axis) const;
+std::pair<YTensorBase, YTensorBase> max(const std::vector<int>& axes) const;
+```
+
+### 核心功能描述
+
+对指定轴求最大值。
+*   同时返回最大值和最大值的索引。
+*   **始终保持维度**。
+
+### 返回值
+
+- **类型**: `std::pair<YTensorBase, YTensorBase>`
+- **first**: 最大值张量，dtype 与原张量相同
+- **second**: 最大值索引张量，**dtype = "int32"**
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+// 假设已填充数据...
+
+// 沿轴 1 求最大值
+auto [values, indices] = tensor.max(1);
+// values.shape() -> {3, 1, 5}
+// indices.shape() -> {3, 1, 5}
+// indices.dtype() -> "int32"
+
+// 使用结构化绑定（C++17）
+auto result = tensor.max(-1);
+YTensorBase maxVals = result.first;
+YTensorBase maxIdxs = result.second;
+```
+
+### 多轴求最大值
+
+```cpp
+auto [values, indices] = tensor.max({0, 2});
+// values.shape() -> {1, 4, 1}
+// indices 只保留最后一次调用的索引
+```
+
+---
+
+## 形状行为
+
+归约操作**不会移除**对应的轴，而是将其大小设为 1：
+
+```cpp
+YTensorBase tensor = YTensorBase::ones({3, 4, 5}, "float32");
+
+YTensorBase s = tensor.sum(1);
+// 形状变化：{3, 4, 5} -> {3, 1, 5}（轴1从4变为1）
+
+// 如需移除该维度，可以使用 squeeze
+YTensorBase squeezed = s.squeeze(1);
+// squeezed.shape() -> {3, 5}
+```
+
+---
+
+## 异常情况
+
+| 情况 | 异常类型 |
+| --- | --- |
+| 0维张量调用 sum/max | `std::runtime_error` |
+
+---
+
+## 性能说明
+
+- 使用 `yt::kernel::parallelFor` 自动并行化
+- 并行粒度基于 `axisSize`（归约轴的大小）
+
+---
+
+## 相关内容
+
+- [算术运算](./arithmetic.mdx) - 逐元素运算
+- [广播操作](./broadcast.mdx) - broadcastInplace 方法
+- [矩阵乘法](./matmul.mdx) - matmul 运算
+- [形状操作：维度](../shape/dimension.mdx) - `squeeze()` 移除大小为1的维度

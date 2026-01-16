@@ -1,0 +1,287 @@
+---
+title: 内存管理 (YTensorBase)
+description: YTensorBase 的内存拷贝和管理方法
+---
+
+# 内存管理 (YTensorBase)
+
+YTensorBase 提供多种内存拷贝方法：浅拷贝、深拷贝和原地复制。
+
+## 核心方法
+
+## shallowCopyTo()
+
+### 函数签名
+
+```cpp
+void shallowCopyTo(YTensorBase& other) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `other` | `YTensorBase&` | **必填**。目标张量，将接收浅拷贝的数据。 |
+
+### 核心功能描述
+
+浅拷贝（共享底层数据）到另一个张量。
+*   目标张量将共享源张量的 `_data` 指针。
+*   修改任一张量的数据会影响另一个。
+
+### 返回值
+
+* **类型**: `void`
+* **说明**: 无返回值。
+
+#### 使用示例
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    // 填充数据...
+    
+    YTensorBase b;
+    a.shallowCopyTo(b);  // 浅拷贝
+    
+    // 修改 b 会影响 a
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) 也变为 99.0
+}
+```
+
+#### 注意事项
+
+:::warning
+**共享内存风险**
+`shallowCopyTo` 使两个张量共享同一块内存（`_data` 指针）。修改任一张量的数据都会影响另一个。如需独立副本，请使用 `clone()`。
+:::
+
+---
+
+## clone()
+
+### 函数签名
+
+```cpp
+YTensorBase clone() const;
+```
+
+### 核心功能描述
+
+深拷贝：返回一个独立拥有自己数据的 YTensorBase。
+*   返回的张量是**连续的**（contiguous），`_offset = 0`。
+*   支持**非POD类型**，会调用拷贝构造函数。
+*   对于**POD类型**，使用 `memcpy` 优化。
+
+### 返回值
+
+* **类型**: `YTensorBase`
+* **说明**: 返回一个新张量，拥有独立的内存。
+
+#### 使用示例
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    // 填充数据...
+    
+    YTensorBase b = a.clone();  // 深拷贝
+    
+    // 修改 b 不影响 a
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) 保持不变
+}
+```
+
+#### 实现细节
+
+```cpp
+// 源码摘录（src/ytensor_base.inl:214-297）
+inline YTensorBase YTensorBase::clone() const {
+    YTensorBase op;
+    op._shape = _shape;
+    op._dtype = _dtype;
+    op._element_size = _element_size;
+    op._offset = 0;  // 返回的张量总是连续的
+    
+    // 计算连续排布的stride
+    // ...
+    
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
+        // 非POD类型：使用拷贝构造函数
+        // ...
+    } else {
+        // POD类型：memcpy优化
+        if (isContiguous()) {
+            std::memcpy(/* 连续复制 */);
+        } else {
+            // 非连续：逐元素复制
+            // ...
+        }
+    }
+    return op;
+}
+```
+
+#### 注意事项
+
+:::info
+**连续性保证**
+`clone()` 返回的张量**始终是连续的**（`_offset = 0`，stride按C风格排列），即使源张量是非连续的（如切片、转置后的张量）。
+:::
+
+:::info
+**非POD类型支持**
+对于非POD类型（如自定义类），`clone()` 会调用类型注册时提供的 `copyConstruct` 函数，而不是简单的 `memcpy`。
+:::
+
+---
+
+## copy_()
+
+### 函数签名
+
+```cpp
+YTensorBase& copy_(const YTensorBase& src);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `src` | `const YTensorBase&` | **必填**。源张量，shape 和 dtype 必须与本张量一致。 |
+
+### 核心功能描述
+
+从源张量复制元素到本张量（原地操作，不重新分配内存）。
+*   要求源张量和目标张量的 `shape` 和 `dtype` 完全一致。
+*   如果两者都是连续的，使用 `memcpy` 优化。
+
+### 返回值
+
+* **类型**: `YTensorBase&`
+* **说明**: 返回自身引用（支持链式调用）。
+
+### 异常
+
+* `std::runtime_error`: shape 或 dtype 不匹配时抛出
+
+#### 使用示例
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    YTensorBase b({3, 4}, "float32");
+    
+    // 填充 b...
+    
+    // 将 b 的数据复制到 a（原地操作）
+    a.copy_(b);
+    
+    // 修改 b 不影响 a（数据已独立）
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) 保持为 b 复制时的值
+}
+```
+
+#### 实现细节
+
+```cpp
+// 源码摘录（src/ytensor_base.inl:301-334）
+inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
+    // 验证shape一致
+    if (!this->shapeMatch(src.shape())) {
+        throw std::runtime_error("copy_: source and destination shapes must match");
+    }
+    // 验证dtype一致
+    if (this->_dtype != src._dtype) {
+        throw std::runtime_error("copy_: source and destination dtypes must match");
+    }
+    
+    // 如果两者都是完全连续的，直接memcpy
+    if (this->isContiguous() && src.isContiguous()) {
+        std::memcpy(_data.get() + _offset * elemSize, 
+                    src._data.get() + src._offset * elemSize, 
+                    total * elemSize);
+        return *this;
+    }
+    
+    // 处理非连续情况...
+}
+```
+
+#### 注意事项
+
+:::warning
+**shape 和 dtype 必须匹配**
+`copy_` 要求源张量和目标张量的 `shape` 和 `dtype` 完全一致，否则会抛出异常。
+:::
+
+:::info
+**性能优化**
+- 如果源和目标都是**连续的**，使用 `memcpy` 一次性复制所有数据（最快）
+- 如果任一张量**非连续**，会逐元素复制（较慢）
+:::
+
+:::warning
+**内存重叠未定义**
+目前不支持 `src` 与 `dst` 的内存重叠（如两个视图指向同一数据），若存在重叠则行为未定义。
+:::
+
+---
+
+## 方法对比
+
+| 方法 | 返回值 | 内存分配 | 是否原地 | 连续性 | 典型用途 |
+| --- | --- | --- | --- | --- | --- |
+| `shallowCopyTo` | `void` | ✗（共享） | ✓ | 保持原样 | 创建视图、零拷贝传递 |
+| `clone` | `YTensorBase` | ✓（新分配） | ✗ | ✓（总是连续） | 创建独立副本、持久化数据 |
+| `copy_` | `YTensorBase&` | ✗（就地复制） | ✓ | 保持原样 | 就地更新、批量数据复制 |
+
+## 完整使用示例
+
+```cpp
+#include <ytensor.hpp>
+#include <iostream>
+
+int main() {
+    // 创建源张量
+    YTensorBase src({2, 3}, "float32");
+    for (int i = 0; i < 6; ++i) {
+        src.atData_<float>(i) = static_cast<float>(i);
+    }
+    
+    // 1. 浅拷贝
+    YTensorBase shallow;
+    src.shallowCopyTo(shallow);
+    shallow.at<float>(0, 0) = 99.0f;
+    std::cout << "src after shallow modify: " << src.at<float>(0, 0) << std::endl;  // 99.0（受影响）
+    
+    // 2. 深拷贝
+    YTensorBase deep = src.clone();
+    deep.at<float>(0, 0) = 88.0f;
+    std::cout << "src after deep modify: " << src.at<float>(0, 0) << std::endl;  // 99.0（不受影响）
+    
+    // 3. 原地复制
+    YTensorBase dst({2, 3}, "float32");
+    dst.copy_(src);
+    std::cout << "dst after copy_: " << dst.at<float>(0, 0) << std::endl;  // 99.0
+    
+    return 0;
+}
+```
+
+## 相关文档
+
+- [构造函数 (YTensorBase)](/api/YTensorBase/construction/constructors) - 基本构造方法
+- [工厂函数 (YTensorBase)](/api/YTensorBase/construction/factories) - zeros、ones 等
+- [属性查询](/api/YTensorBase/utilities/properties) - isContiguous、shapeMatch

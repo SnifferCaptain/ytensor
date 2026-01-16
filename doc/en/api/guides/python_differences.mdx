@@ -1,0 +1,164 @@
+# Differences from Python
+
+This guide compares the major differences between YTensor and NumPy/PyTorch.
+
+## 1. Static Typing and Dimensions
+
+### NumPy/PyTorch (Dynamic)
+
+```python
+import numpy as np
+
+arr = np.array([1, 2, 3])  # Automatically infers type as int64
+arr = arr.astype(np.float32)  # Runtime conversion
+```
+
+### YTensor (Static)
+
+```cpp
+// Specify type and dimensions at compile time
+YTensor<float, 2> arr(3, 4);
+
+// YTensorBase provides runtime typing
+YTensorBase arr = YTensorBase::zeros({3, 4}, "float32");
+```
+
+---
+
+## 2. Slicing Syntax
+
+### NumPy
+
+```python
+arr[1:3]      # Normal slice
+arr[::2]      # Strided slice
+arr[::-1]     # Reversed
+arr[4:1:-1]   # Step must be negative when start > end
+```
+
+### YTensor
+
+```cpp
+tensor.slice(0, 1, 3);       // axis, start, end
+tensor.slice(0, 0, 0, 2);    // Strided slice (end=0 means to the end)
+tensor.slice(0, 0, 0, -1);   // Reversed
+
+// Note: The relationship between start and end is independent of step
+// Use autoFix=true for automatic adjustment
+tensor.slice(0, 4, 2, -1, true);
+```
+
+**Key Difference**: In YTensor, `start` should generally be ≤ `end-1`, regardless of whether `step` is positive or negative. Enabling `autoFix` handles this automatically.
+
+---
+
+## 3. Indexing Syntax
+
+### NumPy
+
+```python
+arr[-1]       # Last element
+arr[-1, -2]   # Multi-dimensional negative indexing
+```
+
+### YTensor
+
+```cpp
+tensor.at(-1);              // 1D: Last element
+tensor.at<float>({-1, -2}); // Multi-dimensional negative indexing (YTensorBase)
+
+// Or use operator[] (YTensor only)
+tensor[-1][-2];
+```
+
+---
+
+## 5. Memory Management
+
+### NumPy
+
+- Reference counting + Garbage collection
+- Views manage lifetimes automatically
+
+### YTensor
+
+- Uses `std::shared_ptr` smart pointers
+- Views share the `shared_ptr` with the original tensor
+
+```cpp
+// Explicit deep copy
+auto copy = tensor.clone();
+
+// Assignment is a shallow copy
+auto b = a;  // Shared memory
+```
+
+---
+
+## 6. Shape Operation Return Values
+
+### NumPy
+
+```python
+a = np.zeros((3, 4))
+b = a[1:3]  # View
+c = a.copy()  # Copy
+```
+
+### YTensor
+
+```cpp
+auto a = YTensor<float, 2>::zeros(3, 4);
+
+// View operations
+auto b = a.slice(0, 1, 3);   // View
+auto c = a.transpose();       // View
+
+// Copy operations
+auto d = a.clone();           // Copy
+auto e = a + a;               // New tensor
+```
+
+---
+
+## 7. Reduction Operation Shapes
+
+### NumPy
+
+```python
+a = np.ones((3, 4, 5))
+b = a.sum(axis=1)  # Shape (3, 5), dimension removed
+```
+
+### YTensor
+
+```cpp
+auto a = YTensorBase::ones({3, 4, 5}, "float32");
+auto b = a.sum(1);
+// b.shape() -> {3, 1, 5} (dimension kept, size becomes 1)
+
+// To remove it, use squeeze
+auto c = b.squeeze(1);
+// c.shape() -> {3, 5}
+```
+
+---
+
+## Quick Comparison Table
+
+| Feature | NumPy | YTensor |
+| --- | --- | --- |
+| Create | `np.zeros((3, 4))` | `YTensor<float, 2>::zeros(3, 4)` |
+| Slicing | `arr[1:3]` | `tensor.slice(0, 1, 3)` |
+| Transpose | `arr.T` | `tensor.transpose()` |
+| Reshape | `arr.reshape(6, 2)` | `tensor.reshape(6, 2)` |
+| Clone | `arr.copy()` | `tensor.clone()` |
+| Matrix Mult | `a @ b` | `a.matmul(b)` |
+
+---
+
+## Related Content
+
+- [Slicing Operation](../YTensor/shape/slice.mdx) - Slicing details
+- [Broadcasting Guide](./broadcast_guide.mdx) - Broadcasting rules
+- [Common Pitfalls](./common_pitfalls.mdx) - Avoid common mistakes

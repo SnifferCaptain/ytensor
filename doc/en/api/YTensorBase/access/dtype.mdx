@@ -1,0 +1,170 @@
+# Type Querying
+
+This document describes the data type querying methods for the `YTensorBase` class, specifically the `dtype()` and `elementSize()` methods.
+
+## Overview
+
+`YTensorBase` provides the `dtype()` and `elementSize()` methods to inspect the data type information of a tensor. These methods return the type metadata stored within the object.
+
+## Function Signatures
+
+```cpp
+std::string dtype() const;
+size_t elementSize() const;
+```
+
+---
+
+## `dtype()`
+
+### Core Function Description
+
+Returns the string identifier of the tensor's data type.
+
+### Return Value
+
+- **Type**: `std::string`
+- **Description**: The type string, such as `"float32"`, `"int32"`, `"bfloat16"`, etc.
+
+### Implementation Details
+
+```cpp
+inline std::string YTensorBase::dtype() const { 
+    return _dtype; 
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+    
+    std::cout << "Data type: " << tensor.dtype() << std::endl;
+    // Output: Data type: float32
+}
+```
+
+---
+
+## `elementSize()`
+
+### Core Function Description
+
+Returns the size of a single element in bytes.
+
+### Return Value
+
+- **Type**: `size_t`
+- **Description**: The number of bytes occupied by one element.
+
+### Implementation Details
+
+```cpp
+inline size_t YTensorBase::elementSize() const { 
+    return _element_size; 
+}
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+    
+    std::cout << "Element size: " << tensor.elementSize() << " bytes" << std::endl;
+    // Output: Element size: 4 bytes
+}
+```
+
+---
+
+## Comprehensive Example
+
+### Type Checking
+
+```cpp
+YTensorBase a = YTensorBase::ones({5}, "int32");
+YTensorBase b = YTensorBase::ones({5}, "float32");
+
+if (a.dtype() != b.dtype()) {
+    std::cout << "Type mismatch!" << std::endl;
+    std::cout << "a: " << a.dtype() << ", b: " << b.dtype() << std::endl;
+}
+// Output: Type mismatch!
+// Output: a: int32, b: float32
+```
+
+### Calculating Total Memory Size
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({100}, "int64");
+
+size_t totalBytes = tensor.size() * tensor.elementSize();
+std::cout << "Total memory usage: " << totalBytes << " bytes" << std::endl;
+// Output: Total memory usage: 800 bytes (100 * 8)
+```
+
+### Working with Templated Methods
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+
+// Use dtype() for runtime type checking
+if (tensor.dtype() == "float32") {
+    float* ptr = tensor.data<float>();  // Type-safe pointer access
+    // ... use ptr
+} else if (tensor.dtype() == "int32") {
+    int* ptr = tensor.data<int>();
+    // ... use ptr
+}
+```
+
+---
+
+## Supported Types
+
+Common `dtype()` string values include:
+
+| dtype String | Element Size | C++ Type |
+|-------------|---------|---------|
+| `"float32"` | 4 bytes | `float` |
+| `"float64"` | 8 bytes | `double` |
+| `"int32"`   | 4 bytes | `int32_t` |
+| `"int64"`   | 8 bytes | `int64_t` |
+| `"bfloat16"`| 2 bytes | `bfloat16_t` |
+
+:::tip
+The specific types supported depend on the configuration of the type registry. You can view all registered types via `yt::types::getTypeRegistry()`.
+:::
+
+---
+
+## Notes
+
+1. **Read-only Properties**: `dtype()` and `elementSize()` return type information determined at creation time and cannot be modified at runtime.
+
+2. **Type Matching**: When using templated methods, always ensure the type matches the `dtype()`:
+   ```cpp
+   YTensorBase t = YTensorBase::zeros({10}, "int32");
+   // Incorrect usage:
+   float* ptr = t.data<float>();  // Potential for undefined behavior due to type mismatch!
+   
+   // Correct usage:
+   if (t.dtype() == "int32") {
+       int* ptr = t.data<int>();
+   }
+   ```
+
+3. **Memory Layout**: `elementSize()` only represents the size of a single element. To calculate total memory, consider both `size()` and potential non-contiguous layouts.
+
+---
+
+## Related Methods
+
+- [`data<T>()`](./data_ptr.mdx) - Retrieves a raw pointer (requires a matching `dtype()`).
+- [`at<T>()`](./indexing.mdx) - Element access requiring the correct template type parameter.

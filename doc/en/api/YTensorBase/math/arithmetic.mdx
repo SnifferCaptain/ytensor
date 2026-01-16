@@ -1,0 +1,254 @@
+# Arithmetic Operations
+
+This document describes the arithmetic operator overloads for the `YTensorBase` class.
+
+## Core Function Description
+
+`YTensorBase` supports the following arithmetic operators, which can be used for:
+- **Tensor-to-Tensor** operations (with automatic broadcasting).
+- **Tensor-to-Scalar** operations.
+
+### Supported Operators
+
+| Operator | Description | In-place Version | Type Restrictions |
+|--------|------|---------|---------|
+| `+` | Addition | `+=` | All numeric types |
+| `-` | Subtraction | `-=` | All numeric types |
+| `*` | Element-wise Multiplication | `*=` | All numeric types |
+| `/` | Element-wise Division | `/=` | All numeric types |
+| `%` | Modulo | `%=` | All numeric types (fmod for floats) |
+| `&` | Bitwise AND | `&=` | **Integer types only** |
+| `|` | Bitwise OR | `|=` | **Integer types only** |
+| `^` | Bitwise XOR | `^=` | **Integer types only** |
+| `<<` | Left Shift | `<<=` | **Integer types only** |
+| `>>` | Right Shift | `>>=` | **Integer types only** |
+| `==` | Equal To | - | Returns boolean tensor |
+| `!=` | Not Equal To | - | Returns boolean tensor |
+| `<` | Less Than | - | Returns boolean tensor |
+| `<=` | Less Than Or Equal | - | Returns boolean tensor |
+| `>` | Greater Than | - | Returns boolean tensor |
+| `>=` | Greater Than Or Equal | - | Returns boolean tensor |
+
+---
+
+## Function Signatures
+
+### Tensor-to-Tensor Operations
+
+```cpp
+YTensorBase operator+(const YTensorBase& other) const;
+YTensorBase& operator+=(const YTensorBase& other);
+```
+
+### Tensor-to-Scalar Operations
+
+```cpp
+template<typename T>
+YTensorBase operator+(const T& scalar) const;
+
+template<typename T>
+YTensorBase& operator+=(const T& scalar);
+```
+
+**Note**: Arithmetic and bitwise operators (`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`) follow the same signature pattern. Comparison operators return a new tensor with `dtype="bool"`.
+
+---
+
+## Usage Examples
+
+### Tensor-to-Scalar Operations
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+    
+    // Addition
+    YTensorBase b = a + 2.0f;  // Adds 2.0 to every element
+    
+    // In-place multiplication
+    a *= 3.0f;  // Multiplies every element by 3.0
+    
+    // Chained operations
+    YTensorBase c = (a + 1.0f) * 2.0f - 0.5f;
+}
+```
+
+### Tensor-to-Tensor Operations (Same Shape)
+
+```cpp
+YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+YTensorBase b = YTensorBase::zeros({3, 3}, "float32");
+
+// Element-wise addition
+YTensorBase c = a + b;
+// c[i][j] = a[i][j] + b[i][j]
+
+// Element-wise multiplication
+YTensorBase d = a * b;
+// d[i][j] = a[i][j] * b[i][j]
+```
+
+### Broadcasting Operations
+
+```cpp
+YTensorBase a = YTensorBase::ones({3, 5}, "float32");
+YTensorBase b = YTensorBase::ones({5}, "float32");
+
+// b is automatically broadcast from (5,) to (3, 5)
+YTensorBase c = a + b;
+// c[i][j] = a[i][j] + b[j]
+```
+
+### Bitwise Operations (Integer Types Only)
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 2}, "int32");
+YTensorBase b = YTensorBase::ones({2, 2}, "int32");
+
+// Bitwise AND
+YTensorBase c = a & b;
+
+// Bitwise OR
+YTensorBase d = a | b;
+
+// Bitwise XOR
+YTensorBase e = a ^ b;
+
+// Left Shift
+YTensorBase f = a << 1;
+
+// Comparison
+YTensorBase mask = a > 0; // Returns boolean mask
+```
+
+---
+
+## Broadcasting Rules
+
+Broadcasting follows NumPy conventions, comparing dimensions starting from the **rightmost** side:
+
+### Compatible Shapes
+
+```
+(3, 5) + (5,)         → (3, 5)  ✅
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)  ✅
+(2, 3, 4) + (3, 4)    → (2, 3, 4)  ✅
+```
+
+### Incompatible Shapes
+
+```
+(3, 5) + (3, 4)  → Error! Dims 5 and 4 cannot be broadcast. ❌
+(3, 5) + (4,)    → Error! Dims 5 and 4 cannot be broadcast. ❌
+```
+
+---
+
+## Supported Data Types
+
+### Numeric Types (`+`, `-`, `*`, `/`)
+
+- `float32`, `float64`
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+- `bfloat16`
+- `%` operator uses `fmod` for floating point types
+
+### Integer Types (`&`, `|`, `^`)
+
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+
+### Integer Types (`<<`, `>>`)
+
+- `int8`, `int16`, `int32`, `int64`
+- `uint8`, `uint16`, `uint32`, `uint64`
+
+### Comparison Operators (returns `bool`)
+
+- Supports all types (floating point, integer, boolean)
+
+---
+
+## Internal Implementation
+
+All operators are implemented via a unified `YT_IMPL_BINARY_OP` macro, which internally utilizes `broadcastInplace`:
+
+```cpp
+// Non-inplace version
+YTensorBase operator+(const YTensorBase& other) const {
+    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});
+    YTensorBase result(opShape, _dtype);
+    result.copy_(*this);
+    result.broadcastInplace([](DType& a, const DType& b) { a = a + b; }, other);
+    return result;
+}
+
+// In-place version
+YTensorBase& operator+=(const YTensorBase& other) {
+    this->broadcastInplace([](DType& a, const DType& b) { a = a + b; }, other);
+    return *this;
+}
+```
+
+---
+
+## Notes
+
+:::warning
+**Integer and Floating Point Division**
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 2}, "int32");
+// Suppose values of 'a' are {5, 7, 9, 11}
+YTensorBase b = a / 2;  // Integer division result: {2, 3, 4, 5}
+
+YTensorBase c = YTensorBase::zeros({2, 2}, "float32");
+// Suppose values of 'c' are {5.0, 7.0, 9.0, 11.0}
+YTensorBase d = c / 2.0f;  // Floating point division result: {2.5, 3.5, 4.5, 5.5}
+```
+:::
+
+:::warning
+**Division by Zero**
+Division and modulo operations **do not check for division by zero**; behavior is undefined in such cases.
+:::
+
+:::info
+**In-place Operations and Shared Memory**
+In-place operations modify all views sharing the same underlying memory:
+```cpp
+YTensorBase a = YTensorBase::ones({3, 3}, "float32");
+YTensorBase b = a;  // b and a share the same memory
+
+a += 1.0f;  // Both 'a' and 'b' are modified!
+```
+:::
+
+:::danger
+**Type Mismatch**
+Using bitwise operators (`&`, `|`, `^`) on floating-point tensors will throw a `std::runtime_error`.
+:::
+
+---
+
+## Performance Comparison
+
+| Operation | Time Complexity | Memory Allocation |
+|------|-----------|---------| 
+| `a + b` | O(n) | New tensor allocated |
+| `a += b` | O(n) | None |
+| `a + scalar` | O(n) | New tensor allocated |
+| `a += scalar` | O(n) | None |
+
+**Tip**: Whenever possible, use in-place operators (`+=`, `*=`, etc.) to improve performance and reduce memory overhead.
+
+---
+
+## Related Content
+
+- [Broadcasting Operations](./broadcast.mdx) - Detailed explanation of `broadcastInplace`.
+- [Matrix Multiplication](./matmul.mdx) - Using `matmul`.
+- [Reduction Operations](./reduction.mdx) - Methods like `sum` and `max`.

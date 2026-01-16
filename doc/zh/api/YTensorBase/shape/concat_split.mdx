@@ -1,0 +1,255 @@
+# 形状操作：拼接与分割
+
+本文档介绍 `YTensorBase` 类的拼接和分割方法，包括 `concat()` 和 `split()`。
+
+## 概览
+
+| 方法 | 返回类型 | 内存行为 | 说明 |
+| --- | --- | --- | --- |
+| `concat()` (静态) | `YTensorBase` | **新内存** | 沿指定轴拼接多个张量 |
+| `concat()` (成员) | `YTensorBase` | **新内存** | 沿指定轴拼接两个张量 |
+| `split()` (按大小) | `std::vector<YTensorBase>` | **视图** | 按指定大小列表分割 |
+| `split()` (等分) | `std::vector<YTensorBase>` | **视图** | 平均分割成n份 |
+
+---
+
+## `concat()` - 静态方法
+
+### 函数签名
+
+```cpp
+static YTensorBase concat(const std::vector<YTensorBase>& tensors, int axis = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `tensors` | `const std::vector<YTensorBase>&` | - | **必填**。要拼接的张量列表 |
+| `axis` | `int` | `0` | 拼接的轴索引（支持负数索引） |
+
+### 核心功能描述
+
+沿指定轴拼接多个张量。
+*   静态方法，创建新张量（新内存分配）。
+*   要求所有输入张量的 `ndim` 和 `dtype` 相同。
+*   除拼接轴外，其他维度大小必须相同。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**: 返回拼接后的**新张量**（独立内存，非视图）
+
+### 要求与约束
+
+1. `tensors` 不能为空（否则抛出 `std::invalid_argument`）
+2. 所有张量的 `ndim()` 必须相同
+3. 所有张量的 `dtype()` 必须相同
+4. 除拼接轴外，所有张量在其他维度上的大小必须相同
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+    YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+    YTensorBase c = YTensorBase::zeros({2, 3}, "float32");
+    
+    // 沿轴0拼接
+    YTensorBase result = YTensorBase::concat({a, b, c}, 0);
+    // result.shape() -> {6, 3}
+    
+    // 沿轴1拼接
+    YTensorBase result2 = YTensorBase::concat({a, b}, 1);
+    // result2.shape() -> {2, 6}
+}
+```
+
+---
+
+## `concat()` - 成员方法
+
+### 函数签名
+
+```cpp
+YTensorBase concat(const YTensorBase& other, int axis = 0) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `other` | `const YTensorBase&` | - | **必填**。要拼接的另一个张量 |
+| `axis` | `int` | `0` | 拼接的轴索引（支持负数索引） |
+
+### 核心功能描述
+
+沿指定轴拼接两个张量。
+*   成员方法，便利函数，内部调用静态版本。
+*   返回新张量（新内存分配）。
+
+### 实现
+
+内部调用静态版本：
+```cpp
+YTensorBase concat(const YTensorBase& other, int axis) const {
+    return YTensorBase::concat({*this, other}, axis);
+}
+```
+
+### 使用示例
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+
+YTensorBase result = a.concat(b, 0);
+// result.shape() -> {4, 3}
+```
+
+---
+
+## `split()` - 按大小列表分割
+
+### 函数签名
+
+```cpp
+std::vector<YTensorBase> split(const std::vector<int>& splitSizes, int axis = 0) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `splitSizes` | `const std::vector<int>&` | - | **必填**。每个部分的大小列表，所有值必须为正数 |
+| `axis` | `int` | `0` | 分割的轴索引（支持负数索引） |
+
+### 核心功能描述
+
+按大小列表分割张量。
+*   返回分割后的张量列表（**视图**，共享原始内存）。
+*   `splitSizes` 的总和必须等于指定轴的大小。
+
+### 返回值
+
+- **类型**: `std::vector<YTensorBase>`
+- **说明**: 返回分割后的张量列表（**视图**，共享原始内存）
+
+### 要求与约束
+
+1. `splitSizes` 中的所有值必须为正数
+2. `splitSizes` 的总和必须等于指定轴的大小
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10, 4}, "float32");
+
+// 按指定大小分割
+std::vector<YTensorBase> parts = tensor.split({2, 3, 5}, 0);
+// parts[0].shape() -> {2, 4}
+// parts[1].shape() -> {3, 4}
+// parts[2].shape() -> {5, 4}
+```
+
+---
+
+## `split()` - 平均分割
+
+### 函数签名
+
+```cpp
+std::vector<YTensorBase> split(int n, int axis = 0) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `n` | `int` | - | **必填**。分割的份数，必须为正数 |
+| `axis` | `int` | `0` | 分割的轴索引（支持负数索引） |
+
+### 核心功能描述
+
+将张量平均分割成 n 份。
+*   返回分割后的张量列表（**视图**）。
+*   指定轴的大小必须能被 `n` 整除。
+
+### 返回值
+
+- **类型**: `std::vector<YTensorBase>`
+- **说明**: 返回分割后的张量列表（**视图**）
+
+### 要求与约束
+
+1. `n` 必须为正数
+2. 指定轴的大小必须能被 `n` 整除（否则抛出 `std::invalid_argument`）
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({12, 4}, "float32");
+
+// 平均分成3份
+std::vector<YTensorBase> parts = tensor.split(3, 0);
+// parts[0].shape() -> {4, 4}
+// parts[1].shape() -> {4, 4}
+// parts[2].shape() -> {4, 4}
+```
+
+---
+
+## 内存行为对比
+
+| 方法 | 返回内存 | 共享原数据 |
+| --- | --- | --- |
+| `concat()` | **新分配** | ❌ 否 |
+| `split()` | **视图** | ✅ 是 |
+
+### concat 创建新内存
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+YTensorBase c = YTensorBase::concat({a, b}, 0);
+
+// 修改 c 不会影响 a 和 b
+c.at<float>({0, 0}) = 99.0f;
+// a.at<float>({0, 0}) 仍为 0.0
+```
+
+### split 返回视图（共享内存）
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10, 4}, "float32");
+std::vector<YTensorBase> parts = tensor.split(2, 0);
+
+// 修改 parts[0] 会影响 tensor
+parts[0].at<float>({0, 0}) = 99.0f;
+// tensor.at<float>({0, 0}) 也变成 99.0
+```
+
+---
+
+## 异常情况
+
+| 情况 | 异常类型 |
+| --- | --- |
+| `concat` 空列表 | `std::invalid_argument` |
+| `concat` 维度不匹配 | `std::invalid_argument` |
+| `concat` dtype不匹配 | `std::invalid_argument` |
+| `concat` 非拼接轴形状不匹配 | `std::invalid_argument` |
+| `split` 大小非正数 | `std::invalid_argument` |
+| `split` 大小总和不匹配 | `std::invalid_argument` |
+| `split` n非正数 | `std::invalid_argument` |
+| `split` 不能整除 | `std::invalid_argument` |
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`ndim()` 方法
+- [形状操作：切片](./slice.mdx) - `slice()` 方法（split 内部使用）
+- [形状操作：维度](./dimension.mdx) - `unsqueeze()`、`squeeze()` 方法

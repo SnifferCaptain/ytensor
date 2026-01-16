@@ -1,0 +1,186 @@
+# 工厂方法
+
+本文档介绍 `YTensorBase` 类的静态工厂方法，用于创建具有特定初始值的张量。
+
+## 概览
+
+| 方法 | 说明 | 初始值 |
+| --- | --- | --- |
+| `zeros()` | 创建全0张量 | 所有元素为 0 |
+| `ones()` | 创建全1张量 | 所有元素为 1 |
+| `randn` | 创建正态分布张量 | N(0, 1) 正态分布 |
+| `randu` | 创建均匀分布张量 | U(0, 1) 均匀分布 |
+| `seed()` | 设置随机数种子 | 全局设置 |
+
+---
+
+## zeros()
+
+### 函数签名
+
+```cpp
+static YTensorBase zeros(const std::vector<int>& shape, std::string dtype = "float32");
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `shape` | `const std::vector<int>&` | - | 张量的形状向量 |
+| `dtype` | `std::string` | `"float32"` | 元素数据类型字符串 |
+
+### 核心功能描述
+
+创建一个指定形状和类型的张量，所有元素初始化为 0。
+
+### 返回值
+
+*   **类型**: `YTensorBase`
+*   **说明**: 返回新的全0张量。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建 3x4 的 float32 全0矩阵
+    auto a = yt::YTensorBase::zeros({3, 4});
+    
+    // 创建 int32 类型的全0张量
+    auto b = yt::YTensorBase::zeros({2, 5}, "int32");
+}
+```
+
+---
+
+## ones()
+
+### 函数签名
+
+```cpp
+static YTensorBase ones(const std::vector<int>& shape, std::string dtype = "float32");
+```
+
+### 参数说明
+
+参数与 `zeros()` 相同。
+
+### 核心功能描述
+
+创建一个指定形状和类型的张量，所有元素初始化为 1。
+
+### 返回值
+
+*   **类型**: `YTensorBase`
+*   **说明**: 返回新的全1张量。
+
+### 使用示例
+
+```cpp
+auto a = yt::YTensorBase::ones({3, 4}, "double");
+```
+
+---
+
+## randn（正态分布生成器）
+
+### 类型声明
+
+```cpp
+static _RandnGenerator randn;
+```
+
+### 核心功能描述
+
+`randn` 是一个静态函数对象实例，用于生成标准正态分布 N(0, 1) 的随机张量。
+
+### 调用签名
+
+```cpp
+YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `shape` | `const std::vector<int>&` | - | 张量形状 |
+| `dtype` | `std::string` | `"float32"` | 数据类型 |
+
+### 返回值
+
+*   **类型**: `YTensorBase`
+*   **说明**: 返回填充了随机数的张量。
+
+### 使用示例
+
+```cpp
+// 生成 3x3 的正态分布随机矩阵
+auto t = yt::YTensorBase::randn({3, 3});
+
+// 指定类型为 double
+auto t2 = yt::YTensorBase::randn({3, 3}, "float64");
+```
+
+### 注意事项
+
+*   使用了全局共享的随机数生成器。
+*   多线程环境下内部有互斥锁保护。
+
+---
+
+## randu（均匀分布生成器）
+
+### 类型声明
+
+```cpp
+static _RanduGenerator randu;
+```
+
+### 核心功能描述
+
+`randu` 是一个静态函数对象实例，用于生成均匀分布 U(0, 1) 的随机张量。
+
+### 调用签名
+
+```cpp
+YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
+```
+
+### 参数说明
+
+参数与 `randn` 相同。
+
+### 返回值
+
+*   **类型**: `YTensorBase`
+*   **说明**: 返回填充了随机数的张量，范围 [0, 1)。
+
+### 使用示例
+
+```cpp
+auto t = yt::YTensorBase::randu({3, 4});
+```
+
+---
+
+## seed()
+
+设置全局随机数种子。
+
+### 函数签名
+
+```cpp
+static void seed(unsigned int seed = std::random_device{}());
+```
+
+### 核心功能描述
+
+设置全局随机数生成器 `yt::infos::gen` 的种子。这将影响所有 `YTensor` 和 `YTensorBase` 的随机生成方法。
+
+### 使用示例
+
+```cpp
+yt::YTensorBase::seed(42);
+```

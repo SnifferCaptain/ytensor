@@ -1,0 +1,67 @@
+# 类型注册
+
+本文档介绍 `yt::infos` 命名空间中的类型注册系统。
+
+## TypeRegItem 结构体
+
+```cpp
+struct TypeRegItem {
+    std::string name;                              // 类型名称
+    int32_t size;                                  // 字节大小
+    std::function<std::string(const void*)> toString;  // 转字符串函数
+    bool isPOD = true;                             // 是否为 POD 类型
+    std::function<void(void*)> destructor = nullptr;   // 析构函数
+    std::function<void(void*, const void*)> copyConstruct = nullptr;  // 拷贝构造
+    std::function<void(void*)> defaultConstruct = nullptr;  // 默认构造
+};
+```
+
+## 类型注册表
+
+```cpp
+auto& getTypeRegistry();
+```
+
+返回全局类型注册表的引用。
+
+:::warning
+修改类型注册表属于高级操作，通常仅在库初始化时进行。
+:::
+
+## 浮点类型规范
+
+YTensor 支持 `float` (fp32), `double` (fp64), 和 `bfloat16` (bf16)。
+特别地，对于 BF16 类型，其舍入模式受全局配置影响（见 [常量](./constants.mdx)）。
+
+## 内置类型
+
+| 类型名 | 字节大小 | C++ 类型 |
+| --- | --- | --- |
+| `"float32"` | 4 | `float` |
+| `"float64"` | 8 | `double` |
+| `"int32"` | 4 | `int32_t` |
+| `"int64"` | 8 | `int64_t` |
+| `"bfloat16"` | 2 | `yt::bfloat16` |
+
+## 非 POD 类型支持
+
+对于非 POD 类型（如 `std::string`、自定义类），需要注册：
+- `destructor`: 析构函数
+- `copyConstruct`: 拷贝构造函数
+- `defaultConstruct`: 默认构造函数
+
+:::danger
+**IO 支持限制**
+
+目前的文件 IO 系统对非 POD 类型的支持**不完善**。
+虽然类型系统允许注册非 POD 类型，但在保存到文件时，可能只会直接写入对象的内存表示（浅拷贝），而非序列化内容。
+
+**请勿依赖 YTensor IO 存储包含指针或动态资源的非 POD 类型（如 `std::vector`, `std::string`）。**
+:::
+
+
+---
+
+## 相关内容
+
+- [类型查询](../YTensorBase/access/dtype.mdx) - `dtype()` 方法

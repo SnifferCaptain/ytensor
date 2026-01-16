@@ -1,0 +1,482 @@
+# Memory Management
+
+This document describes the methods related to memory management for the `YTensor<T, dim>` class, including deep copying, shallow copying, and memory allocation.
+
+## Overview
+
+YTensor provides a flexible memory management mechanism:
+
+| Method | Type | Description |
+| --- | --- | --- |
+| `clone()` | Deep Copy | Creates an independent copy of the data. |
+| `shallowCopyTo()` | Shallow Copy | Shares data with a target tensor. |
+| `shareTo()` | Shallow Copy | Alias for `shallowCopyTo()`. |
+| `shallowCopyFrom()` | Shallow Copy | Shares data from a source tensor. |
+| `shareFrom()` | Shallow Copy | Alias for `shallowCopyFrom()`. |
+| `reserve()` | Reallocation | Allocates new contiguous memory. |
+
+---
+
+## clone()
+
+### Function Signature
+
+```cpp
+YTensor clone() const;
+```
+
+### Core Function Description
+
+Creates a deep copy of the current tensor and returns a new tensor that owns its data independently. Even if the source tensor is non-contiguous (e.g., resulting from slicing, transposing, etc.), the returned tensor is guaranteed to be contiguous.
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: Returns a new tensor with its own memory space.
+- **Memory Behavior**: Performs a deep copy; memory is not shared. Modifying the returned tensor does not affect the original.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create an original tensor
+    yt::YTensor<float, 2> a(3, 4);
+    a.fill(1.0f);
+    
+    // Deep copy
+    auto b = a.clone();
+    
+    // Modifying 'b' does not affect 'a'
+    b.at(0, 0) = 10.0f;
+    std::cout << a.at(0, 0) << std::endl;  // Output: 1.0
+    std::cout << b.at(0, 0) << std::endl;  // Output: 10.0
+    
+    // Deep copying a non-contiguous tensor
+    auto c = a.transpose();  // 'c' is non-contiguous
+    std::cout << c.isContiguous() << std::endl;  // Output: 0 (false)
+    
+    auto d = c.clone();      // 'd' is contiguous
+    std::cout << d.isContiguous() << std::endl;  // Output: 1 (true)
+}
+```
+
+### Implementation Details
+
+The `clone()` method:
+1. Creates a new contiguous tensor.
+2. Copies all elements in logical order (even if the source is non-contiguous).
+3. Ensures the returned tensor is always contiguous.
+
+### Performance Considerations
+
+- Deep copying involves memory allocation and data copying, which can be expensive for large tensors.
+- Uses SIMD optimizations (`#pragma omp simd`) to accelerate the copying process.
+- For non-contiguous tensors, source data is accessed via index calculations.
+
+---
+
+## shallowCopyTo()
+
+### Function Signature
+
+```cpp
+void shallowCopyTo(YTensor& other) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `other` | `YTensor&` | The target tensor that will share data with the current tensor. |
+
+### Core Function Description
+
+Shares the data of the current tensor with the target tensor. The target tensor will share the same memory, shape, strides, and all other properties with the current tensor.
+
+### Return Value
+
+- **Type**: `void`
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    a.fill(1.0f);
+    
+    yt::YTensor<float, 2> b;
+    
+    // Shallow copy: 'a' shares data with 'b'
+    a.shallowCopyTo(b);
+    
+    // Verify shape
+    std::cout << b.shape(0) << ", " << b.shape(1) << std::endl;  // Output: 3, 4
+    
+    // Modifying 'b' affects 'a'
+    b.at(1, 2) = 5.0f;
+    std::cout << a.at(1, 2) << std::endl;  // Output: 5.0
+}
+```
+
+### Notes
+
+:::warning
+**Shared Memory**
+
+After a shallow copy, both tensors share the same underlying data. Any modification to one tensor affects the other.
+:::
+
+---
+
+## shareTo()
+
+### Function Signature
+
+```cpp
+void shareTo(YTensor& other) const;
+```
+
+### Core Function Description
+
+An alias for `shallowCopyTo()`. It functions identically but provides a more intuitive name.
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `other` | `YTensor&` | The target tensor. |
+
+### Return Value
+
+- **Type**: `void`
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    yt::YTensor<float, 2> b;
+    
+    // Identical to shallowCopyTo
+    a.shareTo(b);
+    
+    // 'b' now shares data with 'a'
+}
+```
+
+---
+
+## shallowCopyFrom()
+
+### Function Signature
+
+```cpp
+YTensor& shallowCopyFrom(const YTensor& src);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `src` | `const YTensor&` | The source tensor. |
+
+### Core Function Description
+
+Performs a shallow copy from a source tensor to the current tensor. The current tensor will then share the same memory as the source tensor.
+
+### Return Value
+
+- **Type**: `YTensor&`
+- **Description**: Returns a reference to the current tensor, supporting method chaining.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    a.fill(2.0f);
+    
+    yt::YTensor<float, 2> b;
+    
+    // Shallow copy from 'a' to 'b'
+    b.shallowCopyFrom(a);
+    
+    // Verify sharing
+    std::cout << b.at(0, 0) << std::endl;  // Output: 2.0
+    
+    // Modifying 'b' affects 'a'
+    b.at(0, 0) = 10.0f;
+    std::cout << a.at(0, 0) << std::endl;  // Output: 10.0
+}
+```
+
+### Method Chaining
+
+```cpp
+yt::YTensor<float, 2> a(3, 4);
+yt::YTensor<float, 2> b;
+
+b.shallowCopyFrom(a).fill(5.0f);  // Chained call
+```
+
+---
+
+## shareFrom()
+
+### Function Signature
+
+```cpp
+YTensor& shareFrom(const YTensor& src);
+```
+
+### Core Function Description
+
+An alias for `shallowCopyFrom()`. It functions identically.
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `src` | `const YTensor&` | The source tensor. |
+
+### Return Value
+
+- **Type**: `YTensor&`
+- **Description**: Returns a reference to the current tensor.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    yt::YTensor<float, 2> b;
+    
+    // Identical to shallowCopyFrom
+    b.shareFrom(a);
+}
+```
+
+---
+
+## reserve()
+
+### Function Signature
+
+```cpp
+// vector version
+YTensor& reserve(const std::vector<int>& shape);
+
+// variadic version
+template<typename... Args>
+YTensor& reserve(Args... args);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | The new shape of the tensor. |
+| `args` | `Args...` | Variadic arguments, each representing a dimension size. |
+
+### Core Function Description
+
+Reallocates contiguous memory and sets a new shape. **The original data is discarded**; this behavior is similar to re-constructing the tensor.
+
+### Return Value
+
+- **Type**: `YTensor&`
+- **Description**: Returns a reference to the current tensor, supporting method chaining.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Option 1: Create an empty tensor, then reserve
+    yt::YTensor<float, 3> a;
+    a.reserve(2, 3, 4);
+    std::cout << a.size() << std::endl;  // Output: 24
+    
+    // Option 2: Reallocate an existing tensor
+    yt::YTensor<float, 3> b(5, 5, 5);
+    b.fill(1.0f);
+    
+    b.reserve(2, 3, 4);  // Old data is lost
+    std::cout << b.size() << std::endl;  // Output: 24
+    
+    // Option 3: Use a vector
+    std::vector<int> shape = {3, 4, 5};
+    yt::YTensor<float, 3> c;
+    c.reserve(shape);
+    
+    // Option 4: Method chaining
+    auto d = yt::YTensor<float, 2>().reserve(10, 20).fill(0.5f);
+}
+```
+
+### Exceptions
+
+- For the vector version: If the number of elements in `shape` doesn't match `dim`, a `std::invalid_argument` is thrown.
+- For the variadic version: The number of arguments is checked at compile-time.
+
+### Notes
+
+:::danger
+**Data Loss**
+
+`reserve()` **discards** existing data! This is not a resize operation but a complete reallocation of memory.
+
+If you need to keep your data, use other methods (e.g., `clone()` followed by `reshape()`).
+:::
+
+:::info
+**Contiguity Guarantee**
+
+Memory allocated by `reserve()` is always contiguous, matching the behavior of constructors.
+:::
+
+### Relationship to Constructors
+
+```cpp
+// These two are equivalent
+yt::YTensor<float, 2> a(3, 4);
+
+yt::YTensor<float, 2> b;
+b.reserve(3, 4);
+```
+
+---
+
+## Shallow vs. Deep Copy Comparison
+
+| Operation | Method | Memory Sharing | Performance | Use Case |
+| --- | --- | --- | --- | --- |
+| Deep Copy | `clone()` | No | Slow | When independent copy is needed |
+| Shallow Copy | `shallowCopyTo()` / `shareTo()` | Yes | Fast | Passing tensor references |
+| Shallow Copy | `shallowCopyFrom()` / `shareFrom()` | Yes | Fast | Receiving tensor references |
+| Construct/Assign | `YTensor(other)` / `operator=` | Yes | Fast | Default behavior |
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 1. Create original tensor
+    yt::YTensor<float, 2> original(3, 4);
+    original.fill(1.0f);
+    original.at(0, 0) = 99.0f;
+    
+    std::cout << "=== Deep Copy ===" << std::endl;
+    // 2. Deep copy
+    auto deep = original.clone();
+    deep.at(1, 1) = 10.0f;
+    
+    std::cout << "Original[0,0]: " << original.at(0, 0) << std::endl;  // 99.0
+    std::cout << "Original[1,1]: " << original.at(1, 1) << std::endl;  // 1.0
+    std::cout << "Deep[1,1]: " << deep.at(1, 1) << std::endl;          // 10.0
+    
+    std::cout << "\n=== Shallow Copy ===" << std::endl;
+    // 3. Shallow copy
+    yt::YTensor<float, 2> shallow;
+    original.shallowCopyTo(shallow);
+    shallow.at(2, 2) = 20.0f;
+    
+    std::cout << "Original[2,2]: " << original.at(2, 2) << std::endl;  // 20.0
+    std::cout << "Shallow[2,2]: " << shallow.at(2, 2) << std::endl;     // 20.0
+    
+    std::cout << "\n=== reserve ===" << std::endl;
+    // 4. reserve
+    yt::YTensor<float, 2> tensor;
+    tensor.reserve(2, 3).fill(5.0f);
+    
+    std::cout << "Tensor size: " << tensor.size() << std::endl;        // 6
+    std::cout << "Tensor[0,0]: " << tensor.at(0, 0) << std::endl;      // 5.0
+    
+    // 5. Verifying clone on non-contiguous tensors
+    std::cout << "\n=== Cloning Non-contiguous Tensor ===" << std::endl;
+    auto sliced = original.slice(0, 0, 2);  // Non-contiguous
+    std::cout << "Sliced contiguous: " << sliced.isContiguous() << std::endl;  // 0
+    
+    auto cloned_sliced = sliced.clone();
+    std::cout << "Cloned contiguous: " << cloned_sliced.isContiguous() << std::endl;  // 1
+    
+    return 0;
+}
+```
+
+---
+
+## Memory Management Best Practices
+
+### When to use Deep Copy
+
+```cpp
+// ✅ When an independent copy is required
+auto backup = tensor.clone();
+
+// ✅ When needing to save a non-contiguous tensor as contiguous
+auto continuous = non_continuous_tensor.clone();
+
+// ✅ When needing to return data out of a function
+YTensor<float, 2> getData() {
+    YTensor<float, 2> temp(3, 4);
+    // ... Fill data ...
+    return temp.clone();  // Return independent copy
+}
+```
+
+### When to use Shallow Copy
+
+```cpp
+// ✅ Passing to functions (avoid unnecessary copying)
+void process(const YTensor<float, 2>& tensor) {
+    YTensor<float, 2> local;
+    local.shareFrom(tensor);  // Share data to avoid copy
+    // ... Process ...
+}
+
+// ✅ Creating an alias
+auto alias = tensor;      // Default is shallow copy
+
+// ✅ View operations (already a shallow copy)
+auto view = tensor.slice(0, 1, 3);  // Returns a view
+```
+
+### When to use reserve
+
+```cpp
+// ✅ Deferred initialization
+YTensor<float, 2> tensor;
+// ... Some logic ...
+tensor.reserve(rows, cols);
+
+// ✅ Reusing tensor objects (avoid frequent allocations)
+for (int i = 0; i < iterations; ++i) {
+    tensor.reserve(sizes[i], sizes[i]);
+    // ... Use tensor ...
+}
+```
+
+---
+
+## Related Content
+
+- [Constructors](./constructors.mdx) - Learn how to create tensors.
+- [Memory Model Guide](../../guides/memory_model.mdx) - Deep dive into views, shallow copies, and deep copies.
+- [Performance Tips](../../guides/performance_tips.mdx) - Tips on avoiding unnecessary copying.
+- [YTensorBase Memory Management](../../YTensorBase/construction/memory.mdx) - Memory operations for the base class.

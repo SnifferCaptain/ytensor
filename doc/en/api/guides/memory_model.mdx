@@ -1,0 +1,140 @@
+# Memory Model
+
+This guide provides an in-depth look at YTensor's memory model, including views, shallow copies, and deep copies.
+
+## Core Concepts
+
+### 1. Shared Memory (Views)
+
+Most shape operations return a **view**, sharing the underlying memory with the original tensor:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+
+// The following operations return views (shared memory)
+auto b = a.slice(0, 0, 2);       // Slice
+auto c = a.transpose();           // Transpose
+auto d = a.permute({1, 0});       // Permute dimensions
+auto e = a.view(12);              // Reshape (requires contiguity)
+auto f = a.unsqueeze(0);          // Add dimension
+
+// Modifying a view affects the original tensor
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // Output: 99.0
+```
+
+### 2. Shallow Copy
+
+Assignment and copy constructors are **shallow copies** by default:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a;  // Shallow copy, shared memory
+
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // Output: 99.0
+```
+
+### 3. Deep Copy
+
+Use `clone()` to create an **independent copy**:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a.clone();  // Deep copy, independent memory
+
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // Output: 1.0 (unaffected)
+```
+
+---
+
+## Contiguity
+
+### What is Contiguity?
+
+A contiguous tensor's memory layout follows row-major (C-style) order, where the logical stride matches the actual physical stride.
+
+### Detecting Contiguity
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+std::cout << a.isContiguous();  // true
+
+auto t = a.transpose();
+std::cout << t.isContiguous();  // false (transposing breaks contiguity)
+```
+
+### Converting to Contiguous
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4).transpose();
+
+// Returns a contiguous copy (returns a view if already contiguous)
+auto b = a.contiguous();
+
+// In-place conversion
+a.contiguous_();
+```
+
+### Contiguity and view()
+
+`view()` requires the tensor to be contiguous; otherwise, it throws an exception:
+
+```cpp
+auto t = tensor.transpose();
+// auto v = t.view(new_shape);  // ❌ Error!
+
+// ✅ Correct approach
+auto v = t.contiguous().view(new_shape);
+// Or use reshape() (handles contiguity automatically)
+auto v = t.reshape(new_shape);
+```
+
+---
+
+## Memory Layout
+
+```
+YTensorBase internal structure:
++------------------+
+|  _data           | → shared_ptr pointing to actual data block
++------------------+
+|  _offset         |   Start offset of the view in the data block
++------------------+
+|  _shape[]        |   Size of each dimension
++------------------+
+|  _stride[]       |   Stride of each dimension (physical memory stride)
++------------------+
+|  _element_size   |   Bytes per single element
++------------------+
+|  _dtype          |   Type name string
++------------------+
+```
+
+---
+
+## Summary of Memory Behavior by Operation
+
+| Operation | Returns | Shared Memory |
+| --- | --- | --- |
+| `slice()` | View | ✅ Yes |
+| `transpose()` | View | ✅ Yes |
+| `permute()` | View | ✅ Yes |
+| `view()` | View | ✅ Yes |
+| `unsqueeze()` | View | ✅ Yes |
+| `squeeze()` | View | ✅ Yes |
+| `split()` | List of Views | ✅ Yes |
+| `clone()` | New Tensor | ❌ No |
+| `contiguous()` | View or New Tensor | Depends on contiguity |
+| `concat()` | New Tensor | ❌ No |
+| Arithmetic `+`,`-`,`*`,`/` | New Tensor | ❌ No |
+| In-place `+=`,`-=` etc. | Self Reference | ✅ Yes (modifies original) |
+
+---
+
+## Related Content
+
+- [Shape Operation: Reshape](../YTensor/shape/reshape.mdx) - contiguous, view details
+- [Shape Operation: Slicing](../YTensor/shape/slice.mdx) - slice view behavior
+- [Common Pitfalls](./common_pitfalls.mdx) - Avoid memory-related errors

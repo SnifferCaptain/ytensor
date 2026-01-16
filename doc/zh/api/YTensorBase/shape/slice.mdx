@@ -1,0 +1,148 @@
+# 形状操作：切片
+
+本文档介绍 `YTensorBase` 类的切片方法 `slice()` 和 `slice_()`。
+
+## 概览
+
+切片操作用于获取张量在指定维度上的子集：
+
+| 方法 | 返回类型 | 原地操作 | 说明 |
+| --- | --- | --- | --- |
+| `slice()` | `YTensorBase` | ❌ | 返回新的视图 |
+| `slice_()` | `YTensorBase&` | ✅ | 原地修改当前对象 |
+
+---
+
+## `slice()`
+
+对张量的指定维度进行切片操作，返回一个新的张量视图（View）。
+
+### 函数签名
+
+```cpp
+YTensorBase slice(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `atDim` | `int` | - | **必填**。指定要进行切片的维度索引（从 0 开始）。支持负数索引。 |
+| `start` | `int` | `0` | 切片的起始位置（**包含**）。支持负数索引（循环索引）。 |
+| `end` | `int` | `0` | 切片的结束位置（**不包含**）。若设为 `0`，则表示切片至该维度的最后一个元素（包含）。支持负数索引。 |
+| `step` | `int` | `1` | 切片的步长。可以为正数或负数，但**不能为 0**。 |
+| `autoFix` | `bool` | `true` | 是否自动修正切片范围。若开启，当 `start > end` 时会自动交换。 |
+
+### 核心功能描述
+
+对张量的指定维度进行切片操作，返回一个新的张量视图（View）。
+*   返回的对象是原始数据的**视图（View）**，共享内存指针。
+*   支持负数索引和步长。
+
+### 返回值
+
+* **类型**: `YTensorBase`
+* **说明**: 返回切片后的新张量。
+* **内存行为**: 返回的对象是原始数据的**视图（View）**，共享内存指针。修改返回张量的数据会影响原张量。
+
+### 切片规则
+
+1. **循环索引**：所有索引支持负数和循环，使用模运算映射到有效范围
+2. **范围计算**：`end` 指向"最后一个元素的下一个位置"（不包含）
+3. **autoFix**：当 `last < start` 时自动交换
+4. **步长**：`step > 0` 正向切片，`step < 0` 反向切片，`step = 0` 抛出异常
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+    
+    // 在第 1 维度（大小为 4）进行切片：[1, 3)
+    YTensorBase sliced = tensor.slice(1, 1, 3);
+    // sliced.shape() -> {3, 2, 5}
+    
+    // 步长切片：每隔一个元素
+    YTensorBase vec = YTensorBase::zeros({10}, "float32");
+    YTensorBase even = vec.slice(0, 0, 0, 2);
+    // even.size() -> 5
+}
+```
+
+---
+
+## `slice_()`
+
+对指定维度进行原地切片操作，修改当前张量对象。
+
+### 函数签名
+
+```cpp
+YTensorBase& slice_(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+);
+```
+
+### 核心功能描述
+
+对指定维度进行原地切片操作，修改当前张量对象。
+
+### 返回值
+
+* **类型**: `YTensorBase&`
+* **说明**: 返回自身引用，支持链式调用。
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({5, 10}, "float32");
+
+// 原地切片
+tensor.slice_(0, 1, 4);
+// tensor.shape() -> {3, 10}
+
+// 链式调用
+tensor.slice_(0, 0, 2).slice_(1, 0, 5);
+```
+
+---
+
+## 注意事项
+
+:::info
+**视图共享内存**
+
+`slice()` 返回的张量与原张量共享内存。修改切片会影响原张量。若需独立副本，请使用 `clone()`。
+:::
+
+:::warning
+**与 Python/NumPy 的差异**
+
+在 YTensorBase 中，无论 `step` 是正是负，`start` 必须小于等于 `end-1`（除非启用 `autoFix`）。这与 Python 中 `step < 0` 时 `start > end` 的逻辑不同。
+:::
+
+:::danger
+**步长不能为 0**
+
+`step = 0` 会抛出 `std::invalid_argument` 异常。
+:::
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`size()` 等方法
+- [形状操作：重塑](./reshape.mdx) - `view()`、`reshape()` 方法
+- [内存管理](../construction/memory.mdx) - `clone()` 方法

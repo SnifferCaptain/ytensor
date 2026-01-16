@@ -1,0 +1,186 @@
+# Factory Methods
+
+This document describes the static factory methods of the `YTensorBase` class, used for creating tensors with specific initial values.
+
+## Overview
+
+| Method | Description | Initial Value |
+| --- | --- | --- |
+| `zeros()` | Creates an all-zero tensor | All elements are 0 |
+| `ones()` | Creates an all-one tensor | All elements are 1 |
+| `randn` | Creates a normally distributed tensor | N(0, 1) normal distribution |
+| `randu` | Creates a uniformly distributed tensor | U(0, 1) uniform distribution |
+| `seed()` | Sets the random number seed | Global setting |
+
+---
+
+## zeros()
+
+### Function Signature
+
+```cpp
+static YTensorBase zeros(const std::vector<int>& shape, std::string dtype = "float32");
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `shape` | `const std::vector<int>&` | - | The shape vector of the tensor. |
+| `dtype` | `std::string` | `"float32"` | The element data type string. |
+
+### Core Function Description
+
+Creates a tensor of the specified shape and type, with all elements initialized to 0.
+
+### Return Value
+
+*   **Type**: `YTensorBase`
+*   **Description**: Returns a new all-zero tensor.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // Create a 3x4 float32 all-zero matrix
+    auto a = yt::YTensorBase::zeros({3, 4});
+    
+    // Create an int32 all-zero tensor
+    auto b = yt::YTensorBase::zeros({2, 5}, "int32");
+}
+```
+
+---
+
+## ones()
+
+### Function Signature
+
+```cpp
+static YTensorBase ones(const std::vector<int>& shape, std::string dtype = "float32");
+```
+
+### Parameters
+
+Parameters are the same as `zeros()`.
+
+### Core Function Description
+
+Creates a tensor of the specified shape and type, with all elements initialized to 1.
+
+### Return Value
+
+*   **Type**: `YTensorBase`
+*   **Description**: Returns a new all-one tensor.
+
+### Usage Example
+
+```cpp
+auto a = yt::YTensorBase::ones({3, 4}, "double");
+```
+
+---
+
+## randn (Normal Distribution Generator)
+
+### Type Declaration
+
+```cpp
+static _RandnGenerator randn;
+```
+
+### Core Function Description
+
+`randn` is a static function object instance used to generate random tensors from a standard normal distribution N(0, 1).
+
+### Call Signature
+
+```cpp
+YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `shape` | `const std::vector<int>&` | - | Tensor shape. |
+| `dtype` | `std::string` | `"float32"` | Data type. |
+
+### Return Value
+
+*   **Type**: `YTensorBase`
+*   **Description**: Returns a tensor filled with random numbers.
+
+### Usage Example
+
+```cpp
+// Generate a 3x3 random matrix with normal distribution
+auto t = yt::YTensorBase::randn({3, 3});
+
+// Specify type as double
+auto t2 = yt::YTensorBase::randn({3, 3}, "float64");
+```
+
+### Notes
+
+*   Uses a globally shared random number generator.
+*   Internally protected by a mutex in multi-threaded environments.
+
+---
+
+## randu (Uniform Distribution Generator)
+
+### Type Declaration
+
+```cpp
+static _RanduGenerator randu;
+```
+
+### Core Function Description
+
+`randu` is a static function object instance used to generate random tensors from a uniform distribution U(0, 1).
+
+### Call Signature
+
+```cpp
+YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
+```
+
+### Parameters
+
+Parameters are the same as `randn`.
+
+### Return Value
+
+*   **Type**: `YTensorBase`
+*   **Description**: Returns a tensor filled with random numbers in the range [0, 1).
+
+### Usage Example
+
+```cpp
+auto t = yt::YTensorBase::randu({3, 4});
+```
+
+---
+
+## seed()
+
+Sets the global random number seed.
+
+### Function Signature
+
+```cpp
+static void seed(unsigned int seed = std::random_device{}());
+```
+
+### Core Function Description
+
+Sets the seed for the global random number generator `yt::infos::gen`. This affects all random generation methods in `YTensor` and `YTensorBase`.
+
+### Usage Example
+
+```cpp
+yt::YTensorBase::seed(42);
+```

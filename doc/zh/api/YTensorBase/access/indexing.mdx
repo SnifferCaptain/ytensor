@@ -1,0 +1,234 @@
+---
+title: 索引访问 (YTensorBase)
+description: YTensorBase 的元素索引访问方法
+---
+
+# 索引访问 (YTensorBase)
+
+YTensorBase 提供模板化的元素访问方法，需要显式指定元素类型 `T`。
+
+## 核心方法
+
+## at()
+
+### 函数签名
+
+```cpp
+template <typename T, typename... Args>
+T& at(Args... args);
+
+template <typename T>
+T& at(const std::vector<int>& pos);
+
+template <typename T>
+const T& at(const std::vector<int>& pos) const;
+```
+
+### 模板参数
+
+| 参数名 | 说明 |
+| --- | --- |
+| `T` | **必填**。元素类型，必须与张量的 `dtype` 匹配。 |
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- |
+| `args...` | 可变参数 | 多维坐标（如 `at<float>(1, 2, 3)`）。 |
+| `pos` | `const std::vector<int>&` | 坐标向量。 |
+
+### 核心功能描述
+
+通过多维坐标访问元素（模板版本，返回引用）。
+*   内部调用 `toIndex_()` 计算物理偏移，适用于非连续张量。
+*   模板参数 `T` 必须与张量的 `dtype` 匹配。
+
+### 返回值
+
+* **类型**: `T&` 或 `const T&`
+* **说明**: 返回对应位置元素的引用。
+
+#### 使用示例
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase tensor({3, 4, 5}, "float32");
+    
+    // 方法1：可变参数
+    tensor.at<float>(1, 2, 3) = 99.0f;
+    
+    // 方法2：vector
+    std::vector<int> pos = {1, 2, 3};
+    float val = tensor.at<float>(pos);
+    
+    // const版本
+    const YTensorBase& constTensor = tensor;
+    float val2 = constTensor.at<float>(1, 2, 3);
+}
+```
+
+#### 实现细节
+
+```cpp
+// 源码（src/ytensor_base.inl:513-528）
+template <typename T, typename... Args>
+inline T& YTensorBase::at(Args... args) {
+    std::vector<int> pos = {args...};
+    size_t phys = this->toIndex_(pos);  // 计算物理偏移
+    return this->data<T>()[phys];
+}
+```
+
+#### 注意事项
+
+:::warning
+**类型必须匹配**
+模板参数 `T` 必须与张量的 `dtype` 匹配，否则会导致未定义行为或运行时错误。
+
+```cpp
+YTensorBase tensor({2, 3}, "float32");
+tensor.at<float>(0, 0) = 1.0f;   // ✓ 正确
+tensor.at<double>(0, 0) = 1.0;   // ✗ 错误：类型不匹配
+```
+:::
+
+:::info
+**物理偏移计算**
+`at()` 内部调用 `toIndex_()` 计算物理偏移（考虑 `_offset` 和 `_stride`），因此适用于非连续张量（如切片、转置后的张量）。
+:::
+
+---
+
+## atData()
+
+### 函数签名
+
+```cpp
+template <typename T>
+T& atData(int index);
+
+template <typename T>
+const T& atData(int index) const;
+```
+
+### 模板参数
+
+| 参数名 | 说明 |
+| --- | --- |
+| `T` | **必填**。元素类型。 |
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- |
+| `index` | `int` | **必填**。逻辑线性索引（从0开始）。 |
+
+### 核心功能描述
+
+按逻辑下标访问元素（将线性索引转换为多维坐标）。
+*   内部调用 `toCoord()` 将线性索引转换为坐标，再调用 `at()`。
+*   性能较低，仅用于需要逻辑索引的场景。
+
+### 返回值
+
+* **类型**: `T&` 或 `const T&`
+* **说明**: 返回对应位置元素的引用。
+
+#### 使用示例
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase tensor({2, 3}, "int32");
+    // shape: {2, 3}，逻辑索引 0-5
+    
+    // 逻辑索引5对应坐标(1, 2)
+    tensor.atData<int>(5) = 99;
+    
+    // 等价于
+    tensor.at<int>(1, 2) = 99;
+}
+```
+
+#### 实现细节
+
+```cpp
+// 源码（src/ytensor_base.inl:530-538）
+template <typename T>
+inline T& YTensorBase::atData(int index) {
+    auto coord = toCoord(index);  // 逻辑索引 → 坐标
+    return at<T>(coord);          // 坐标 → 物理偏移
+}
+```
+
+#### 注意事项
+
+:::warning
+**低效警告**
+`atData()` 内部需要调用 `toCoord()` 将线性索引转换为坐标，再调用 `at()`。相比直接使用 `at()`，性能较低。仅用于需要逻辑索引的场景。
+:::
+
+---
+
+## 与 YTensor 的区别
+
+| 特性 | YTensor | YTensorBase |
+| --- | --- | --- |
+| 类型参数 | 编译时（模板参数） | 运行时（`dtype`字符串） |
+| 索引语法 | `tensor(i, j)` | `tensor.at<T>(i, j)` |
+| 类型检查 | 编译时 | 运行时（需手动指定`T`） |
+
+```cpp
+// YTensor：编译时类型安全
+YTensor<float, 2> yt({2, 3});
+yt(0, 1) = 1.5f;  // 无需模板参数
+
+// YTensorBase：运行时类型
+YTensorBase ytb({2, 3}, "float32");
+ytb.at<float>(0, 1) = 1.5f;  // 必须指定<float>
+```
+
+## 完整示例
+
+```cpp
+#include <ytensor.hpp>
+#include <iostream>
+
+int main() {
+    YTensorBase tensor({2, 3, 4}, "float32");
+    
+    // 1. 填充数据（使用 at）
+    int counter = 0;
+    for (int i = 0; i < 2; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            for (int k = 0; k < 4; ++k) {
+                tensor.at<float>(i, j, k) = static_cast<float>(counter++);
+            }
+        }
+    }
+    
+    // 2. 读取数据（使用 atData）
+    for (int idx = 0; idx < 24; ++idx) {
+        float val = tensor.atData<float>(idx);
+        std::cout << "Index " << idx << ": " << val << std::endl;
+    }
+    
+    // 3. 非连续张量（切片）
+    YTensorBase sliced = tensor.slice(0, 0, 1);  // 第一层，形状 {1, 3, 4}
+    sliced.at<float>(0, 1, 2) = 999.0f;
+    
+    // 原张量也被修改（共享内存）
+    std::cout << "Original: " << tensor.at<float>(0, 1, 2) << std::endl;  // 999.0
+    
+    return 0;
+}
+```
+
+## 相关文档
+
+- [数据指针访问](/api/YTensorBase/access/data_ptr) - `data<T>()`、`atData_<T>()` 方法
+- [索引访问 (YTensor)](/api/YTensor/access/indexing) - YTensor 的 `operator()` 重载
+- [坐标转换](/api/YTensorBase/utilities/conversion) - `toIndex()`、`toCoord()` 方法

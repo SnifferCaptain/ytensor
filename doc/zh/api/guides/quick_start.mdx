@@ -1,0 +1,121 @@
+# 快速入门
+
+本指南帮助你快速开始使用 YTensor 库。
+
+## 引入头文件
+
+```cpp
+// 单头文件版本（推荐快速开始，简单易用，无链接烦恼）
+#include "ytensor_single.hpp"
+
+// 或模块化版本
+#include "ytensor.hpp"
+```
+
+## 创建张量
+
+### YTensor（编译期类型和维度）
+
+```cpp
+
+
+// 通过构造函数
+YTensor<float, 2> a(3, 4);  // 3x4 未初始化矩阵
+
+// 通过工厂方法
+auto zeros = YTensor<float, 2>::zeros(3, 4);   // 全零
+auto ones = YTensor<float, 2>::ones(3, 4);     // 全一
+auto randn = YTensor<float, 2>::randn(3, 4);  // 标准正态分布
+```
+
+### YTensorBase（运行时类型）
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase randn = YTensorBase::randn({3, 4}, "float32");
+```
+
+## 元素访问
+
+```cpp
+auto tensor = YTensor<float, 2>::ones(3, 4);
+
+// 使用 at()
+tensor.at(0, 0) = 1.0f;
+float val = tensor.at(1, 2);
+
+// 使用 operator[]（仅 YTensor）
+tensor[0][0] = 1.0f;
+```
+
+## 形状操作
+
+```cpp
+auto tensor = YTensor<float, 2>::ones(3, 4);
+
+// 切片（返回视图）
+auto sliced = tensor.slice(0, 0, 2);  // 前2行
+
+// 重塑
+auto reshaped = tensor.reshape(6, 2);
+
+// 转置
+auto transposed = tensor.transpose();
+```
+
+## 数学运算
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = YTensor<float, 2>::ones(3, 4);
+
+// 算术运算（支持广播）
+auto c = a + b;
+auto d = a * 2.0f;
+
+// 矩阵乘法
+auto e = a.matmul(b.transpose());
+// e.shape() -> {3, 3}
+```
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+
+
+    
+    // 创建张量
+    auto a = YTensor<float, 2>::randn(3, 4);
+    auto b = YTensor<float, 2>::randn(4, 5);
+    
+    // 矩阵乘法
+    auto c = a.matmul(b);
+    
+    std::cout << "a shape: [" << a.shape()[0] << ", " << a.shape()[1] << "]" << std::endl;
+    std::cout << "b shape: [" << b.shape()[0] << ", " << b.shape()[1] << "]" << std::endl;
+    std::cout << "c shape: [" << c.shape()[0] << ", " << c.shape()[1] << "]" << std::endl;
+    
+    // 输出张量
+    std::cout << c << std::endl;
+    
+    return 0;
+}
+```
+
+## 编译
+
+```bash
+g++ -std=c++20 -O3 -I/path/to/ytensor main.cpp -o main
+```
+
+---
+
+## 相关内容
+
+- [内存模型](./memory_model.mdx) - 理解视图和拷贝
+- [广播指南](./broadcast_guide.mdx) - 广播规则详解
+- [性能优化](./performance_tips.mdx) - 性能最佳实践

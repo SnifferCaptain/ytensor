@@ -1,0 +1,165 @@
+# 矩阵乘法
+
+本文档介绍 `YTensorBase` 类的矩阵乘法相关方法。
+
+## 概述
+
+| 方法 | 返回类型 | 说明 |
+| --- | --- | --- |
+| `matmul()` | `YTensorBase` | 批量矩阵乘法 |
+| `matView()` | `YTensorBase` | 获取矩阵视图（每个"元素"是2D子张量） |
+
+---
+
+## `matmul()`
+
+### 函数签名
+
+```cpp
+YTensorBase matmul(const YTensorBase& other) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `other` | `const YTensorBase&` | 右矩阵，最后两维必须满足矩阵乘法规则 |
+
+### 核心功能描述
+
+执行矩阵乘法。
+*   支持 2D 矩阵乘法和高维批量矩阵乘法。
+*   最后两维必须满足矩阵乘法规则 (M x K) * (K x N) -> (M x N)。
+*   其他维度遵循广播规则。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**: 矩阵乘法结果（新分配的张量）
+
+### 要求与约束
+
+1. 两个张量的 `ndim() >= 1`
+2. 两个张量的 `dtype()` 必须相同
+3. `this` 的最后一维大小 == `other` 的倒数第二维大小（内维匹配）
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 2D 矩阵乘法
+    YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+    YTensorBase b = YTensorBase::zeros({4, 5}, "float32");
+    YTensorBase c = a.matmul(b);
+    // c.shape() -> {3, 5}
+    
+    // 批量矩阵乘法
+    YTensorBase d = YTensorBase::zeros({2, 3, 4}, "float32");
+    YTensorBase e = YTensorBase::zeros({2, 4, 5}, "float32");
+    YTensorBase f = d.matmul(e);
+    // f.shape() -> {2, 3, 5}
+}
+```
+
+### 广播规则
+
+除最后两维外，其他维度遵循广播规则：
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 1, 3, 4}, "float32");
+YTensorBase b = YTensorBase::zeros({1, 5, 4, 6}, "float32");
+YTensorBase c = a.matmul(b);
+// c.shape() -> {2, 5, 3, 6}
+```
+
+### 1D 张量处理
+
+1D 张量在 matmul 中会被视为行向量（1×N）或列向量（N×1）：
+- 左操作数 1D: 视为 `{1, N}` 的行向量
+- 右操作数 1D: 视为 `{N, 1}` 的列向量
+
+---
+
+## `matView()`
+
+### 函数签名
+
+```cpp
+YTensorBase matView() const;
+```
+
+### 核心功能描述
+
+将张量的最后两个维度视为 2D 矩阵，返回一个特殊的 YTensorBase。
+*   每个"元素"是一个 2D 子张量视图。
+*   `dtype()` 返回 "YTensorBase"。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**:
+  - 返回的 `dtype() == "YTensorBase"`
+  - 每个"元素"是一个 2D 子张量视图
+  - `element_size == sizeof(YTensorBase)`
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5, 6}, "float32");
+
+YTensorBase mv = tensor.matView();
+// mv.shape() -> {3, 4}
+// mv.dtype() -> "YTensorBase"
+// 每个"元素"是 [5, 6] 的 2D 张量视图
+
+// 特殊情况
+YTensorBase vec = YTensorBase::zeros({10}, "float32");
+YTensorBase mv_1d = vec.matView();
+// mv_1d.shape() -> {1}
+// 元素是 [1, 10] 的 2D 视图
+
+YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase mv_2d = mat.matView();
+// mv_2d.shape() -> {1}
+// 元素是 [3, 4] 的 2D 视图
+```
+
+---
+
+## 后端选择
+
+矩阵乘法支持多个后端，根据编译选项自动选择：
+
+| 后端 | 宏 | 优先级 | 说明 |
+| --- | --- | --- | --- |
+| Eigen | `YT_USE_EIGEN=1` | 高 | 使用 Eigen 库实现 |
+| Naive | 默认 | 低 | 朴素三重循环实现 |
+
+```cpp
+// 编译时选择后端
+#if YT_USE_EIGEN
+    return matmul_eigen_backend(other);
+#else
+    return matmul_naive_impl<DType>(*this, other);
+#endif
+```
+
+---
+
+## 异常情况
+
+| 情况 | 异常类型 |
+| --- | --- |
+| ndim < 1 | `std::runtime_error` |
+| dtype 不匹配 | `std::runtime_error` |
+| 内维不匹配 | `std::runtime_error` |
+
+---
+
+## 相关内容
+
+- [算术运算](./arithmetic.mdx) - 逐元素运算
+- [广播操作](./broadcast.mdx) - broadcastInplace 方法
+- [归约操作](./reduction.mdx) - sum、max 运算

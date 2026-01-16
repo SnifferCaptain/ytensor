@@ -1,0 +1,389 @@
+# Build Options
+
+YTensor provides several compile-time macro definitions to control the library's functionality and performance characteristics. This document details all available build options and their usage.
+
+## Macro Overview
+
+| Macro | Default Value | Description |
+| --- | --- | --- |
+| `YT_USE_EIGEN` | Auto-detected | Whether to enable the Eigen library as a GEMM backend |
+| `YT_USE_AVX2` | Auto-detected | Whether to enable AVX2+FMA SIMD optimizations |
+| `YT_PREINSTANTIATE_TEMPLATES` | `1` | Whether to pre-instantiate common type templates |
+
+## YT_USE_EIGEN
+
+### Description
+
+Controls whether to enable the Eigen library as a high-performance backend for matrix multiplication.
+
+### Default Behavior
+
+YTensor automatically detects if the Eigen library is available:
+
+```cpp
+#ifndef YT_USE_EIGEN
+    #if __has_include(<Eigen/Core>)
+        #define YT_USE_EIGEN 1
+    #else
+        #define YT_USE_EIGEN 0
+    #endif
+#endif
+```
+
+- If the compiler can find the `<Eigen/Core>` header, it is automatically enabled (`YT_USE_EIGEN = 1`).
+- Otherwise, it is disabled (`YT_USE_EIGEN = 0`).
+
+### Manual Setup
+
+If you want to manually enable or disable the Eigen backend, define the macro **before** including the YTensor header:
+
+**Enable Eigen**:
+```cpp
+#define YT_USE_EIGEN 1
+#include "ytensor_single.hpp"
+```
+
+**Disable Eigen**:
+```cpp
+#define YT_USE_EIGEN 0
+#include "ytensor_single.hpp"
+```
+
+### Compilation-time Setup
+
+This can also be set via compiler flags:
+
+```bash
+# GCC/Clang: Enable Eigen
+g++ -std=c++20 -DYT_USE_EIGEN=1 -I/usr/include/eigen3 main.cpp -o main
+
+# GCC/Clang: Disable Eigen
+g++ -std=c++20 -DYT_USE_EIGEN=0 main.cpp -o main
+```
+
+**CMake Configuration**:
+```cmake
+# Enable Eigen
+target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=1)
+
+# Disable Eigen
+target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
+```
+
+### Impact
+
+- **When enabled**: The `yt::infos::MatmulBackend::Eigen` backend becomes available, significantly improving GEMM performance.
+- **When disabled**: Only the `Naive` and `AVX2` backends can be used.
+
+:::info
+Enabling Eigen requires ensuring that the compiler can find the Eigen headers. Eigen is a header-only library and does not require linking.
+:::
+
+---
+
+## YT_USE_AVX2
+
+### Description
+
+Controls whether to enable custom AVX2+FMA SIMD optimized code used to accelerate GEMM and other operations.
+
+### Default Behavior
+
+YTensor automatically detects this based on compiler-defined macros:
+
+```cpp
+#ifndef YT_USE_AVX2
+    #if defined(__AVX2__) && defined(__FMA__)
+        #define YT_USE_AVX2 1
+    #else
+        #define YT_USE_AVX2 0
+    #endif
+#endif
+```
+
+- If the compiler defines both `__AVX2__` and `__FMA__` (typically via the `-mavx2 -mfma` flags), it is automatically enabled.
+- Otherwise, it is disabled.
+
+### Manual Setup
+
+**Force Enable**:
+```cpp
+#define YT_USE_AVX2 1
+#include "ytensor_single.hpp"
+```
+
+**Force Disable**:
+```cpp
+#define YT_USE_AVX2 0
+#include "ytensor_single.hpp"
+```
+
+### Compilation-time Setup
+
+AVX2 optimization requires CPU and compiler support. Add architecture options during compilation:
+
+```bash
+# GCC/Clang: Enable AVX2+FMA
+g++ -std=c++20 -O2 -mavx2 -mfma main.cpp -o main
+
+# MSVC: Enable AVX2
+cl /std:c++20 /O2 /arch:AVX2 main.cpp
+```
+
+:::warning
+**Important Note**:
+
+1. You must ensure the target CPU supports AVX2 and FMA instructions, otherwise the program will crash.
+2. Most Intel CPUs (Haswell and newer) and AMD CPUs (Excavator and newer) support these instructions.
+3. If unsure, it is recommended not to force-enable this.
+:::
+
+### Impact
+
+- **When enabled**: The `yt::infos::MatmulBackend::AVX2` backend becomes available, providing high-performance SIMD acceleration.
+- **When disabled**: Only the `Naive` and `Eigen` backends can be used.
+
+### Performance Comparison
+
+On supported hardware, the AVX2 backend is typically 4–8 times faster than the Naive backend and is comparable to or slightly better than the Eigen backend.
+
+---
+
+## YT_PREINSTANTIATE_TEMPLATES
+
+### Description
+
+Controls whether to pre-instantiate common type templates for the `YTensorBase` class to reduce compilation time and potentially improve runtime performance.
+
+:::info
+In the current version (0.3), this setting is not effective because the project is not packaged as a library.
+:::
+
+### Default Behavior
+
+Enabled by default (`YT_PREINSTANTIATE_TEMPLATES = 1`):
+
+```cpp
+#ifndef YT_PREINSTANTIATE_TEMPLATES
+    #define YT_PREINSTANTIATE_TEMPLATES 1
+#endif
+```
+
+### Manual Setup
+
+**Disable Pre-instantiation**:
+```cpp
+#define YT_PREINSTANTIATE_TEMPLATES 0
+#include "ytensor_single.hpp"
+```
+
+Or via compiler flag:
+```bash
+g++ -std=c++20 -DYT_PREINSTANTIATE_TEMPLATES=0 main.cpp -o main
+```
+
+### Impact
+
+**When Enabled (Default)**:
+- The library will pre-instantiate `YTensorBase` templates for the following types:
+  - `float` (float32)
+  - `double` (float64)
+  - `int32_t` (int32)
+  - `int64_t` (int64)
+  - Other common types (e.g., float16, bfloat16, etc.)
+- **Pros**: Reduces compilation time on first use; the linker may generate more efficient code.
+- **Cons**: Increases binary size.
+
+**When Disabled**:
+- All templates are instantiated on-demand.
+- **Pros**: Reduces binary size; may speed up compilation for small projects.
+- **Cons**: Compiling templates on first use may increase overall compilation time.
+
+:::tip
+**Recommendation**:
+
+- For large projects or those frequently using multiple data types: Keep it enabled (default).
+- For small projects or those using only a single data type: Consider disabling it to reduce binary size.
+:::
+
+---
+
+## Backend Priority
+
+At runtime, YTensor automatically selects a GEMM backend according to the compilation options. The priority is as follows:
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2     // Highest priority
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen    // Second priority
+#else
+    MatmulBackend::Naive    // Fallback option
+#endif
+;
+```
+
+Check [Backend Selection Strategy](../api/guides/backend_selection.mdx) to learn how to switch backends at runtime.
+
+---
+
+## Full Compilation Examples
+
+### Minimal Configuration (No Dependencies)
+
+```bash
+g++ -std=c++20 -O2 main.cpp -o main
+```
+
+This configuration uses only the Naive backend and requires no third-party libraries.
+
+### Recommended Configuration (OpenMP + Auto-detection)
+
+```bash
+g++ -std=c++20 -O2 -fopenmp -mavx2 -mfma main.cpp -o main
+```
+
+This configuration enables:
+- OpenMP parallel computing
+- AVX2+FMA optimization (if supported by CPU)
+- Auto-detection of Eigen (if installed)
+
+### Full Configuration (All Features)
+
+```bash
+g++ -std=c++20 -O2 -fopenmp -mavx2 -mfma -I/usr/include/eigen3 main.cpp -o main -lz
+```
+
+This configuration enables:
+- OpenMP parallel computing
+- AVX2+FMA optimization
+- Eigen backend
+- zlib compression support
+
+### Full CMake Example
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(MyYTensorProject)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find dependencies
+find_package(OpenMP)
+find_package(ZLIB)
+
+add_executable(my_app main.cpp)
+
+# Include YTensor (if using modular headers)
+target_include_directories(my_app PRIVATE /path/to/ytensor)
+
+# Link libraries
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(my_app OpenMP::OpenMP_CXX)
+endif()
+
+if(ZLIB_FOUND)
+    target_link_libraries(my_app ZLIB::ZLIB)
+endif()
+
+# Compilation flags
+if(NOT MSVC)
+    target_compile_options(my_app PRIVATE -O2 -mavx2 -mfma)
+else()
+    target_compile_options(my_app PRIVATE /O2 /arch:AVX2)
+endif()
+
+# Optional: Manual macro control
+# target_compile_definitions(my_app PRIVATE YT_USE_EIGEN=1)
+# target_compile_definitions(my_target PRIVATE YT_USE_AVX2=1)
+# target_compile_definitions(my_target PRIVATE YT_PREINSTANTIATE_TEMPLATES=1)
+```
+
+---
+
+## Verifying Current Configuration
+
+You can check which features are enabled at runtime:
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    std::cout << "YTensor Build Configuration:" << std::endl;
+    
+    #if YT_USE_EIGEN
+        std::cout << "  Eigen Backend: Enabled" << std::endl;
+    #else
+        std::cout << "  Eigen Backend: Disabled" << std::endl;
+    #endif
+    
+    #if YT_USE_AVX2
+        std::cout << "  AVX2 Backend: Enabled" << std::endl;
+    #else
+        std::cout << "  AVX2 Backend: Disabled" << std::endl;
+    #endif
+    
+    #if YT_PREINSTANTIATE_TEMPLATES
+        std::cout << "  Template Pre-instantiation: Enabled" << std::endl;
+    #else
+        std::cout << "  Template Pre-instantiation: Disabled" << std::endl;
+    #endif
+    
+    // Check default backend
+    std::cout << "  Default GEMM Backend: ";
+    switch(yt::infos::defaultMatmulBackend) {
+        case yt::infos::MatmulBackend::Naive:
+            std::cout << "Naive" << std::endl;
+            break;
+        case yt::infos::MatmulBackend::Eigen:
+            std::cout << "Eigen" << std::endl;
+            break;
+        case yt::infos::MatmulBackend::AVX2:
+            std::cout << "AVX2" << std::endl;
+            break;
+    }
+    
+    return 0;
+}
+```
+
+---
+
+## FAQ
+
+### Q: How do I know if my CPU supports AVX2?
+
+**A**: On Linux, run:
+```bash
+grep -o 'avx2\|fma' /proc/cpuinfo | sort -u
+```
+
+If the output contains `avx2` and `fma`, it is supported.
+
+### Q: Can Eigen and AVX2 be enabled simultaneously?
+
+**A**: Yes. YTensor prefers the AVX2 backend (higher priority), but you can still manually specify the Eigen backend.
+
+### Q: How much does disabling YT_PREINSTANTIATE_TEMPLATES reduce binary size?
+
+**A**: In the current version, disabling this option does not reduce the size of the compiled binary because this feature is not yet enabled.
+
+### Q: What should I do if Clang encounters linking errors with OpenMP?
+
+**A**: Clang requires manual linking of `libgomp`:
+```bash
+clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+```
+
+---
+
+## Next Steps
+
+- Return to [Installation Guide](./installation.mdx) for basic installation steps.
+- Check [Backend Selection Strategy](../api/guides/backend_selection.mdx) for performance comparisons.
+- Read [Performance Optimization Tips](../api/guides/performance_tips.mdx) to improve code efficiency.
+
+

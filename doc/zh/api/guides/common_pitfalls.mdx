@@ -1,0 +1,201 @@
+# 常见陷阱
+
+本指南列出 YTensor 使用中的常见问题和解决方案。
+
+## 1. 忘记视图共享内存
+
+**问题**: 修改视图意外影响原张量
+
+```cpp
+auto tensor = YTensor<float, 2>::ones(10, 10);
+auto sub = tensor.slice(0, 0, 5);  // 前 5 行
+
+sub.fill(0);  // 原张量的前 5 行也变成 0！
+```
+
+**解决**: 需要独立副本时使用 `clone()`
+
+```cpp
+auto sub = tensor.slice(0, 0, 5).clone();
+sub.fill(0);  // 不影响原张量
+```
+
+---
+
+## 2. 非连续张量使用 view()
+
+**问题**: 对非连续张量调用 `view()` 抛出异常
+
+```cpp
+auto t = tensor.transpose();
+auto v = t.view({new_shape});  // ❌ 抛出异常！
+```
+
+**解决**: 使用 `reshape()` 或先 `contiguous()`
+
+```cpp
+// 方法 1：使用 reshape（自动处理）
+auto v = t.reshape({new_shape});
+
+// 方法 2：先连续化
+auto v = t.contiguous().view({new_shape});
+```
+
+---
+
+## 3. 类型不匹配的数据访问
+
+**问题**: 使用错误的模板类型访问数据
+
+```cpp
+YTensorBase t = YTensorBase::zeros({10}, "int32");
+float* ptr = t.data<float>();  // ❌ 类型重解释错误！
+```
+
+**解决**: 检查 dtype 后再访问
+
+```cpp
+if (t.dtype() == "int32") {
+    int32_t* ptr = t.data<int32_t>();
+    // ...
+} else if (t.dtype() == "float32") {
+    float* ptr = t.data<float>();
+    // ...
+}
+```
+
+---
+
+## 4. 原地操作影响共享视图
+
+**问题**: 原地操作修改了意外的张量
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a;  // 浅拷贝，共享内存
+
+a += 1.0f;   // b 也变了！
+```
+
+**解决**: 了解内存模型，必要时使用 `clone()`
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a.clone();  // 深拷贝
+
+a += 1.0f;   // b 不受影响
+```
+
+---
+
+## 5. slice 步长规则与 Python 不同
+
+**问题**: 反向切片结果不符预期
+
+```cpp
+// Python: arr[5:2:-1] 返回 [5, 4, 3]
+// YTensor: start=5, end=2, step=-1 可能不符预期
+auto result = vec.slice(0, 5, 2, -1);
+```
+
+**解决**: 使用 `autoFix=true` 或理解规则
+
+```cpp
+// autoFix 会自动处理 start > end 的情况
+auto result = vec.slice(0, 5, 2, -1, true);
+```
+
+---
+
+## 6. 除零未检查
+
+**问题**: 除法产生 inf 或 nan
+
+```cpp
+auto result = tensor / 0.0f;  // 产生 inf
+auto mod = int_tensor % 0;     // ❌ 未定义行为（可能崩溃）
+```
+
+**解决**: 自行检查分母
+
+```cpp
+if (denominator != 0) {
+    result = tensor / denominator;
+}
+```
+
+---
+
+## 7. atData_() 越界访问
+
+**问题**: `atData_()` 不进行边界检查
+
+```cpp
+auto tensor = YTensor<float, 1>::zeros(10);
+tensor.atData_(100) = 1.0f;  // ❌ 越界！未定义行为
+```
+
+**解决**: 确保索引在有效范围内
+
+```cpp
+if (index >= 0 && index < tensor.size()) {
+    tensor.atData_(index) = 1.0f;
+}
+```
+
+---
+
+## 8. 忘记连续化后使用 atData_()
+
+**问题**: 对非连续张量使用 `atData_()` 得到错误结果
+
+```cpp
+auto t = tensor.transpose();
+// t 非连续，atData_() 按物理索引访问，结果错误
+float val = t.atData_(0);
+```
+
+**解决**: 先连续化或使用 `atData()`
+
+```cpp
+// 方法 1：连续化后使用
+t.contiguous_();
+float val = t.atData_(0);
+
+// 方法 2：使用 atData()（自动坐标转换，较慢）
+float val = t.atData(0);
+```
+
+---
+
+## 9. 浮点类型使用位运算
+
+**问题**: 一般认为 `%` 不支持浮点数
+
+**事实**: YTensor 对 `%` 进行了扩展支持，内部使用 `fabs` 和 `fmod` 实现。
+
+**注意**: 虽然支持，但仍需注意浮点数精度问题。
+
+```cpp
+auto t = YTensorBase::zeros({10}, "int32");
+auto result = t % 2;  // ✅ 正确
+```
+
+---
+
+## 检查清单
+
+- [ ] 视图修改是否有副作用？
+- [ ] 非连续张量是否需要 `contiguous()`？
+- [ ] 数据类型是否匹配？
+- [ ] 分母是否可能为零？
+- [ ] `atData_()` 索引是否有效？
+- [ ] 整数/浮点运算符是否正确？
+
+---
+
+## 相关内容
+
+- [内存模型](./memory_model.mdx) - 理解视图和拷贝
+- [与 Python 差异](./python_differences.mdx) - API 差异
+- [性能优化](./performance_tips.mdx) - 最佳实践

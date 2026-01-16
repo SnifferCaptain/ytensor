@@ -1,0 +1,213 @@
+# 激活函数
+
+本文档介绍 `yt::function` 命名空间中的激活函数。
+
+## 概述
+
+| 函数 | 说明 | 原地版本 |
+| --- | --- | --- |
+| `relu()` | ReLU 激活函数 | `relu_()` |
+| `exp()` | 指数函数 | - |
+| `sigmoid()` | Sigmoid 激活函数 | - |
+
+| `softmax()` | Softmax 归一化函数 | `softmax_()` |
+
+---
+
+## `relu()`
+
+对输入张量进行整流线性单元（Rectified Linear Unit）激活操作。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> relu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& relu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 导数阶数（0=函数值，1=一阶导数，-n=n次积分） |
+
+### 核心功能描述
+
+该函数对输入张量的每个元素应用 ReLU 函数。
+*   `order = 0`: 计算 $f(x) = \max(0, x)$
+*   `order = 1`: 计算导数 $f'(x) = 1 \text{ if } x > 0 \text{ else } 0$
+*   `order < 0`: 计算 n 次积分 $\frac{x^n}{n!} (x > 0)$
+
+### 返回值
+
+*   **类型**: `YTensor<T, dim>`
+*   **说明**: 返回计算结果。非原地版本返回新张量，原地版本返回自身引用。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    auto x = yt::YTensor<float, 2>({2, 3}, {-1, 0, 1, -2, 2, 3});
+    
+    // ReLU
+    auto y = yt::function::relu(x);
+    // y = {0, 0, 1, 0, 2, 3}
+    
+    // 原地操作
+    yt::function::relu_(x);
+    
+    // 一阶导数
+    auto dy = yt::function::relu(x, 1);
+    // dy = {0, 0, 1, 0, 1, 1}
+}
+```
+
+---
+
+## `exp()`
+
+对输入张量进行指数运算。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 导数阶数（保留参数，目前仅支持 0） |
+
+### 核心功能描述
+
+计算 $e^x$。
+
+### 返回值
+
+*   **类型**: `YTensor<T, dim>`
+*   **说明**: 返回指数运算后的新张量。
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 2.0f});
+auto y = yt::function::exp(x);
+// y ≈ {1.0, 2.718, 7.389}
+```
+
+---
+
+## `sigmoid()`
+
+对输入张量进行 Sigmoid 激活操作。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 导数阶数 |
+
+### 核心功能描述
+
+该函数对每个元素应用 Sigmoid 函数：
+*   `order = 0`: $\sigma(x) = \frac{1}{1 + e^{-x}}$
+*   `order = 1`: $\sigma'(x) = \sigma(x)(1 - \sigma(x))$
+*   `order = -1`: $\log(1 + e^x)$ (SoftPlus)
+
+### 返回值
+
+*   **类型**: `YTensor<T, dim>`
+*   **说明**: 返回计算结果的新张量。
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1.0f, 0.0f, 1.0f});
+
+auto y = yt::function::sigmoid(x);
+// y ≈ {0.269, 0.5, 0.731}
+
+auto dy = yt::function::sigmoid(x, 1);
+// dy ≈ {0.197, 0.25, 0.197}
+```
+
+```
+
+---
+
+## `softmax()`
+
+### 核心功能描述
+
+该函数对指定轴进行 Softmax 归一化操作。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
+| `axis` | `int` | `-1` | 计算 softmax 的轴（支持负数索引） |
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 沿指定轴归一化后的张量
+
+### 使用示例
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example() {
+    auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
+    
+    // 沿最后一轴计算 softmax
+    auto y = yt::function::softmax(x, -1);
+    // 每行和为 1
+    
+    // 原地操作
+    yt::function::softmax_(x, -1);
+}
+```
+
+### 实现细节
+
+采用数值稳定的实现（减去最大值）：
+
+1. 找到沿轴的最大值
+2. 计算 exp(x - max)
+3. 除以 sum(exp(x - max))
+
+---
+
+## 相关内容
+
+- [注意力机制](./attention.mdx) - Scaled Dot-Product Attention

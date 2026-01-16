@@ -1,0 +1,381 @@
+# 元素访问：索引
+
+本文档介绍 `YTensor<T, dim>` 类的元素访问方法，包括 `at()` 方法和 `operator[]` 下标访问。
+
+## 概览
+
+YTensor 提供两种主要的元素访问方式：
+
+| 方法 | 语法 | 性能 | 安全性 | 推荐场景 |
+| --- | --- | --- | --- | --- |
+| `at()` | `tensor.at(i, j, k)` | 高 | 有边界检查 | 一般访问（推荐） |
+| `operator[]` | `tensor[i][j][k]` | 较低 | 有边界检查 | 需要子张量或Python风格 |
+
+---
+
+## at() 方法
+
+### 函数签名
+
+```cpp
+// 可变参数版本（推荐）
+template <typename... Args> 
+T& at(const Args... args);
+
+template <typename... Args> 
+const T& at(const Args... args) const;
+
+// vector 版本
+T& at(const std::vector<int>& pos);
+const T& at(const std::vector<int>& pos) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的索引 |
+| `pos` | `const std::vector<int>&` | 索引向量 |
+
+### 核心功能描述
+
+通过多维坐标访问张量元素。这是**推荐的访问方式**，性能优于 `operator[]`。
+
+### 返回值
+
+- **类型**: `T&` 或 `const T&`
+- **说明**: 返回指定位置元素的引用
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建 3x4x5 的三维张量
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    
+    // 方法1：可变参数访问（推荐）
+    tensor.at(1, 2, 3) = 10.0f;
+    float value = tensor.at(1, 2, 3);
+    std::cout << value << std::endl;  // 输出: 10.0
+    
+    // 方法2：使用 vector
+    std::vector<int> pos = {1, 2, 3};
+    tensor.at(pos) = 20.0f;
+    std::cout << tensor.at(pos) << std::endl;  // 输出: 20.0
+    
+    // 方法3：const 访问
+    const auto& const_tensor = tensor;
+    float readonly = const_tensor.at(1, 2, 3);
+}
+```
+
+### 循环访问
+
+```cpp
+yt::YTensor<float, 2> matrix(3, 4);
+
+// 使用 at() 遍历所有元素
+for (int i = 0; i < matrix.shape(0); ++i) {
+    for (int j = 0; j < matrix.shape(1); ++j) {
+        matrix.at(i, j) = static_cast<float>(i * 4 + j);
+    }
+}
+```
+
+### 异常
+
+- 如果参数个数与 `dim` 不匹配，抛出 `std::invalid_argument` 异常（vector版本）
+- 可变参数版本在编译时检查参数个数
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+
+// 编译错误：参数个数不匹配
+// tensor.at(1, 2);  // 编译失败！需要3个参数
+
+// 运行时错误：vector 大小不匹配
+std::vector<int> wrong_pos = {1, 2};
+// tensor.at(wrong_pos);  // 抛出异常！
+```
+
+### 性能特点
+
+`at()` 方法直接计算内存偏移量，避免了创建中间对象：
+
+```cpp
+// 实现伪代码
+T& at(i, j, k) {
+    size_t index = i * stride[0] + j * stride[1] + k * stride[2];
+    return data[offset + index];
+}
+```
+
+---
+
+## operator[] 下标访问
+
+### 函数签名
+
+```cpp
+// 多维张量（dim > 1）：返回子张量
+YTensor<T, dim - 1> operator[](int index) requires(dim > 1);
+const YTensor<T, dim - 1> operator[](int index) const requires(dim > 1);
+
+// 一维张量（dim == 1）：返回元素
+T& operator[](int index) requires(dim == 1);
+const T& operator[](int index) const requires(dim == 1);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `index` | `int` | 第一维度的索引（支持负索引） |
+
+### 核心功能描述
+
+使用方括号访问张量元素或子张量。行为类似 NumPy/PyTorch 的下标访问。
+
+### 返回值
+
+- **多维张量（dim > 1）**: 返回降维后的子张量 `YTensor<T, dim-1>`
+- **一维张量（dim == 1）**: 返回元素引用 `T&`
+
+### 负索引支持
+
+`operator[]` 支持负索引（循环索引）：
+
+```cpp
+tensor[-1]  // 等价于 tensor[shape[0] - 1]
+tensor[-2]  // 等价于 tensor[shape[0] - 2]
+```
+
+实现使用模运算：`index = (index % shape[0] + shape[0]) % shape[0]`
+
+### 使用示例
+
+#### 多维张量
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example_multidim() {
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    
+    // 一级索引：返回 YTensor<float, 2>，形状为 [4, 5]
+    auto slice1 = tensor[0];
+    std::cout << slice1.shape(0) << ", " << slice1.shape(1) << std::endl;  // 4, 5
+    
+    // 二级索引：返回 YTensor<float, 1>，形状为 [5]
+    auto slice2 = tensor[0][1];
+    std::cout << slice2.shape(0) << std::endl;  // 5
+    
+    // 三级索引：返回元素
+    float& elem = tensor[0][1][2];
+    elem = 10.0f;
+    
+    // 链式赋值
+    tensor[1][2][3] = 20.0f;
+    
+    // 负索引
+    tensor[-1][0][0] = 30.0f;  // 等价于 tensor[2][0][0]
+}
+```
+
+#### 一维张量
+
+```cpp
+void example_1d() {
+    yt::YTensor<float, 1> vector(10);
+    
+    // 直接访问元素
+    vector[0] = 1.0f;
+    vector[5] = 5.0f;
+    vector[-1] = 10.0f;  // 最后一个元素
+    
+    std::cout << vector[0] << std::endl;   // 输出: 1.0
+    std::cout << vector[-1] << std::endl;  // 输出: 10.0
+}
+```
+
+### 与 Python/NumPy 的相似性
+
+```cpp
+// C++ YTensor
+YTensor<float, 3> a(3, 4, 5);
+auto sub = a[1][2];
+float val = a[1][2][3];
+
+// Python NumPy（相似）
+# a = np.zeros((3, 4, 5))
+# sub = a[1][2]
+# val = a[1][2][3]
+```
+
+### 性能考虑
+
+:::warning
+**性能警告**
+
+`operator[]` 每次调用都会创建一个新的子张量对象，涉及形状、步长等元数据的复制。对于频繁访问，**推荐使用 `at()` 方法**。
+
+```cpp
+// ❌ 较慢：多次创建临时对象
+for (int i = 0; i < 1000; ++i) {
+    tensor[1][2][3] = i;
+}
+
+// ✅ 更快：直接访问
+for (int i = 0; i < 1000; ++i) {
+    tensor.at(1, 2, 3) = i;
+}
+```
+:::
+
+### 子张量的内存行为
+
+`operator[]` 返回的子张量是原张量的**视图（View）**，共享内存：
+
+```cpp
+yt::YTensor<float, 3> a(3, 4, 5);
+a.fill(0.0f);
+
+auto sub = a[1];  // sub 是 a 的视图
+sub.fill(10.0f);  // 修改 sub 会影响 a
+
+std::cout << a.at(1, 0, 0) << std::endl;  // 输出: 10.0
+```
+
+---
+
+## at() vs operator[] 对比
+
+| 特性 | at() | operator[] |
+| --- | --- | --- |
+| **语法** | `tensor.at(i, j, k)` | `tensor[i][j][k]` |
+| **性能** | ✅ 高（直接计算偏移） | ⚠️ 较低（创建临时对象） |
+| **返回类型** | 元素引用 `T&` | 子张量或元素 |
+| **负索引** | ❌ 不支持 | ✅ 支持 |
+| **编译时检查** | ✅ 参数个数 | ❌ 无 |
+| **获取子张量** | ❌ 不支持 | ✅ 支持 |
+| **推荐场景** | 频繁元素访问 | 需要子张量或负索引 |
+
+---
+
+## 最佳实践
+
+### 推荐用法
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+
+// ✅ 使用 at() 进行元素访问（高性能）
+for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 4; ++j) {
+        for (int k = 0; k < 5; ++k) {
+            tensor.at(i, j, k) = i + j + k;
+        }
+    }
+}
+
+// ✅ 使用 operator[] 获取子张量
+auto slice = tensor[1];  // 获取第1个切片
+slice.fill(10.0f);
+
+// ✅ 使用负索引访问末尾
+float last = tensor[-1][-1][-1];
+```
+
+### 避免的用法
+
+```cpp
+// ❌ 避免：在循环中使用多级 operator[]
+for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 4; ++j) {
+        for (int k = 0; k < 5; ++k) {
+            tensor[i][j][k] = i + j + k;  // 每次创建2个临时对象！
+        }
+    }
+}
+
+// ❌ 避免：使用 at() 尝试负索引
+// tensor.at(-1, -1, -1);  // 行为未定义！
+```
+
+### 获取子张量的正确方式
+
+```cpp
+// 需要操作整个切片时，使用 operator[]
+auto slice = tensor[0];
+slice.fill(5.0f);  // 填充整个切片
+
+// 需要访问单个元素时，使用 at()
+tensor.at(0, 1, 2) = 10.0f;
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 创建 3x4x5 的张量
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    
+    std::cout << "=== 使用 at() 填充 ===" << std::endl;
+    // 使用 at() 填充数据
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            for (int k = 0; k < 5; ++k) {
+                tensor.at(i, j, k) = static_cast<float>(i * 100 + j * 10 + k);
+            }
+        }
+    }
+    
+    // 读取元素
+    std::cout << "tensor.at(1, 2, 3) = " << tensor.at(1, 2, 3) << std::endl;  // 123.0
+    
+    std::cout << "\n=== 使用 operator[] 访问 ===" << std::endl;
+    // 获取子张量
+    auto slice = tensor[1];
+    std::cout << "slice shape: [" << slice.shape(0) << ", " 
+              << slice.shape(1) << "]" << std::endl;  // [4, 5]
+    
+    // 多级索引
+    std::cout << "tensor[1][2][3] = " << tensor[1][2][3] << std::endl;  // 123.0
+    
+    // 负索引
+    std::cout << "tensor[-1][0][0] = " << tensor[-1][0][0] << std::endl;  // 200.0
+    
+    std::cout << "\n=== 修改子张量 ===" << std::endl;
+    // 修改整个切片
+    auto slice2 = tensor[2];
+    slice2.fill(999.0f);
+    std::cout << "tensor.at(2, 0, 0) = " << tensor.at(2, 0, 0) << std::endl;  // 999.0
+    
+    std::cout << "\n=== 一维张量 ===" << std::endl;
+    yt::YTensor<float, 1> vector(10);
+    vector[0] = 1.0f;
+    vector[9] = 10.0f;
+    vector[-1] = 100.0f;  // 覆盖最后一个元素
+    
+    std::cout << "vector[0] = " << vector[0] << std::endl;    // 1.0
+    std::cout << "vector[-1] = " << vector[-1] << std::endl;  // 100.0
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [数据指针访问](./data_ptr.mdx) - `data()`、`atData()` 等直接指针访问
+- [迭代操作](./iteration.mdx) - `foreach()`、`fill()` 等批量操作
+- [切片操作](../shape/slice.mdx) - 高级切片和子张量提取
+- [性能优化](../../guides/performance_tips.mdx) - 访问模式优化建议

@@ -1,0 +1,386 @@
+# 构建选项
+
+YTensor 提供了多个编译时宏定义，用于控制库的功能和性能特性。本文档详细介绍所有可用的构建选项及其使用方法。
+
+## 宏定义概览
+
+| 宏定义 | 默认值 | 说明 |
+| --- | --- | --- |
+| `YT_USE_EIGEN` | 自动检测 | 是否启用 Eigen 库作为矩阵乘法后端 |
+| `YT_USE_AVX2` | 自动检测 | 是否启用 AVX2+FMA SIMD 优化 |
+| `YT_PREINSTANTIATE_TEMPLATES` | `1` | 是否预实例化常用类型模板 |
+
+## YT_USE_EIGEN
+
+### 说明
+
+控制是否启用 Eigen 库作为矩阵乘法的高性能后端。
+
+### 默认行为
+
+YTensor 会自动检测 Eigen 库是否可用：
+
+```cpp
+#ifndef YT_USE_EIGEN
+    #if __has_include(<Eigen/Core>)
+        #define YT_USE_EIGEN 1
+    #else
+        #define YT_USE_EIGEN 0
+    #endif
+#endif
+```
+
+- 如果编译器能找到 `<Eigen/Core>` 头文件，则自动启用（`YT_USE_EIGEN = 1`）
+- 否则禁用（`YT_USE_EIGEN = 0`）
+
+### 手动设置
+
+如果您想强制启用或禁用 Eigen 后端，可以在包含 YTensor 头文件**之前**定义宏：
+
+**启用 Eigen**:
+```cpp
+#define YT_USE_EIGEN 1
+#include "ytensor_single.hpp"
+```
+
+**禁用 Eigen**:
+```cpp
+#define YT_USE_EIGEN 0
+#include "ytensor_single.hpp"
+```
+
+### 编译时设置
+
+也可以通过编译器参数设置：
+
+```bash
+# GCC/Clang：启用 Eigen
+g++ -std=c++20 -DYT_USE_EIGEN=1 -I/usr/include/eigen3 main.cpp -o main
+
+# GCC/Clang：禁用 Eigen
+g++ -std=c++20 -DYT_USE_EIGEN=0 main.cpp -o main
+```
+
+**CMake 配置**:
+```cmake
+# 启用 Eigen
+target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=1)
+
+# 禁用 Eigen
+target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
+```
+
+### 影响
+
+- **启用时**：`yt::infos::MatmulBackend::Eigen` 后端可用，矩阵乘法性能显著提升
+- **禁用时**：仅能使用 `Naive` 和 `AVX2` 后端
+
+:::info
+启用 Eigen 需要确保编译器能找到 Eigen 头文件。Eigen 是纯头文件库，无需链接。
+:::
+
+---
+
+## YT_USE_AVX2
+
+### 说明
+
+控制是否启用自定义的 AVX2+FMA SIMD 优化代码，用于加速矩阵乘法和其他运算。
+
+### 默认行为
+
+YTensor 会根据编译器定义的宏自动检测：
+
+```cpp
+#ifndef YT_USE_AVX2
+    #if defined(__AVX2__) && defined(__FMA__)
+        #define YT_USE_AVX2 1
+    #else
+        #define YT_USE_AVX2 0
+    #endif
+#endif
+```
+
+- 如果编译器同时定义了 `__AVX2__` 和 `__FMA__`（通常通过 `-mavx2 -mfma` 编译选项），则自动启用
+- 否则禁用
+
+### 手动设置
+
+**强制启用**:
+```cpp
+#define YT_USE_AVX2 1
+#include "ytensor_single.hpp"
+```
+
+**强制禁用**:
+```cpp
+#define YT_USE_AVX2 0
+#include "ytensor_single.hpp"
+```
+
+### 编译时设置
+
+AVX2 优化需要 CPU 和编译器支持。在编译时添加架构选项：
+
+```bash
+# GCC/Clang：启用 AVX2+FMA
+g++ -std=c++20 -O2 -mavx2 -mfma main.cpp -o main
+
+# MSVC：启用 AVX2
+cl /std:c++20 /O2 /arch:AVX2 main.cpp
+```
+
+:::warning
+**重要提示**：
+
+1. 必须确保目标 CPU 支持 AVX2 和 FMA 指令集，否则程序会崩溃
+2. 大多数 Intel CPU（Haswell 及更新）和 AMD CPU（Excavator 及更新）支持这些指令
+3. 如果不确定，建议不要强制启用
+:::
+
+### 影响
+
+- **启用时**：`yt::infos::MatmulBackend::AVX2` 后端可用，提供高性能的 SIMD 加速
+- **禁用时**：仅能使用 `Naive` 和 `Eigen` 后端
+
+### 性能对比
+
+在支持的硬件上，AVX2 后端通常比 Naive 后端快 4-8 倍，与 Eigen 后端性能相当或略优。
+
+---
+
+## YT_PREINSTANTIATE_TEMPLATES
+
+### 说明
+
+控制是否预先实例化 `YTensorBase` 类的常用类型模板，以减少编译时间并可能提升运行时性能。
+:::info
+目前版本(0.3)此设置由于不打包为库，因此不生效
+:::
+
+### 默认行为
+
+默认启用（`YT_PREINSTANTIATE_TEMPLATES = 1`）：
+
+```cpp
+#ifndef YT_PREINSTANTIATE_TEMPLATES
+    #define YT_PREINSTANTIATE_TEMPLATES 1
+#endif
+```
+
+### 手动设置
+
+**禁用预实例化**:
+```cpp
+#define YT_PREINSTANTIATE_TEMPLATES 0
+#include "ytensor_single.hpp"
+```
+
+或通过编译器参数：
+```bash
+g++ -std=c++20 -DYT_PREINSTANTIATE_TEMPLATES=0 main.cpp -o main
+```
+
+### 影响
+
+**启用时（默认）**:
+- 库会预先实例化以下类型的 `YTensorBase` 模板：
+  - `float` (float32)
+  - `double` (float64)
+  - `int32_t` (int32)
+  - `int64_t` (int64)
+  - 其他常用类型（如 float16、bfloat16 等）
+- **优点**：减少首次使用时的编译时间，链接器可能生成更高效的代码
+- **缺点**：增加编译产物的大小
+
+**禁用时**:
+- 所有模板按需实例化
+- **优点**：减小编译产物大小，编译速度可能更快（对于小型项目）
+- **缺点**：首次使用某类型时需要完整编译该模板，可能增加整体编译时间
+
+:::tip
+**建议**：
+
+- 对于大型项目或频繁使用多种数据类型：保持默认启用
+- 对于小型项目或只使用单一数据类型：可以考虑禁用
+:::
+
+---
+
+## 后端优先级
+
+YTensor 在运行时会根据编译选项自动选择矩阵乘法后端。优先级如下：
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2     // 最高优先级
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen    // 次优先级
+#else
+    MatmulBackend::Naive    // 回退选项
+#endif
+;
+```
+
+查看 [后端选择策略](../api/guides/backend_selection.mdx) 了解如何在运行时切换后端。
+
+---
+
+## 完整编译示例
+
+### 最小配置（无依赖）
+
+```bash
+g++ -std=c++20 -O2 main.cpp -o main
+```
+
+此配置仅使用 Naive 后端，无需任何第三方库。
+
+### 推荐配置（OpenMP + 自动检测）
+
+```bash
+g++ -std=c++20 -O2 -fopenmp -mavx2 -mfma main.cpp -o main
+```
+
+此配置启用：
+- OpenMP 并行计算
+- AVX2+FMA 优化（如果 CPU 支持）
+- 自动检测 Eigen（如果已安装）
+
+### 完整配置（所有功能）
+
+```bash
+g++ -std=c++20 -O2 -fopenmp -mavx2 -mfma -I/usr/include/eigen3 main.cpp -o main -lz
+```
+
+此配置启用：
+- OpenMP 并行计算
+- AVX2+FMA 优化
+- Eigen 后端
+- zlib 压缩支持
+
+### CMake 完整示例
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(MyYTensorProject)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 查找依赖
+find_package(OpenMP)
+find_package(ZLIB)
+
+add_executable(my_app main.cpp)
+
+# 包含 YTensor（如果使用多头文件版本）
+target_include_directories(my_app PRIVATE /path/to/ytensor)
+
+# 链接库
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(my_app OpenMP::OpenMP_CXX)
+endif()
+
+if(ZLIB_FOUND)
+    target_link_libraries(my_app ZLIB::ZLIB)
+endif()
+
+# 编译选项
+if(NOT MSVC)
+    target_compile_options(my_app PRIVATE -O2 -mavx2 -mfma)
+else()
+    target_compile_options(my_app PRIVATE /O2 /arch:AVX2)
+endif()
+
+# 可选：手动控制宏定义
+# target_compile_definitions(my_app PRIVATE YT_USE_EIGEN=1)
+# target_compile_definitions(my_app PRIVATE YT_USE_AVX2=1)
+# target_compile_definitions(my_app PRIVATE YT_PREINSTANTIATE_TEMPLATES=1)
+```
+
+---
+
+## 验证当前配置
+
+可以在运行时检查哪些功能已启用：
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    std::cout << "YTensor 构建配置：" << std::endl;
+    
+    #if YT_USE_EIGEN
+        std::cout << "  Eigen 后端: 已启用" << std::endl;
+    #else
+        std::cout << "  Eigen 后端: 未启用" << std::endl;
+    #endif
+    
+    #if YT_USE_AVX2
+        std::cout << "  AVX2 后端: 已启用" << std::endl;
+    #else
+        std::cout << "  AVX2 后端: 未启用" << std::endl;
+    #endif
+    
+    #if YT_PREINSTANTIATE_TEMPLATES
+        std::cout << "  模板预实例化: 已启用" << std::endl;
+    #else
+        std::cout << "  模板预实例化: 未启用" << std::endl;
+    #endif
+    
+    // 检查默认后端
+    std::cout << "  默认矩阵乘法后端: ";
+    switch(yt::infos::defaultMatmulBackend) {
+        case yt::infos::MatmulBackend::Naive:
+            std::cout << "Naive" << std::endl;
+            break;
+        case yt::infos::MatmulBackend::Eigen:
+            std::cout << "Eigen" << std::endl;
+            break;
+        case yt::infos::MatmulBackend::AVX2:
+            std::cout << "AVX2" << std::endl;
+            break;
+    }
+    
+    return 0;
+}
+```
+
+---
+
+## 常见问题
+
+### Q: 如何知道我的 CPU 是否支持 AVX2？
+
+**A**: 在 Linux 上运行：
+```bash
+grep -o 'avx2\|fma' /proc/cpuinfo | sort -u
+```
+
+如果输出包含 `avx2` 和 `fma`，则支持。
+
+### Q: Eigen 和 AVX2 可以同时启用吗？
+
+**A**: 可以。YTensor 会优先使用 AVX2 后端（优先级更高），但您仍然可以手动指定使用 Eigen 后端。
+
+### Q: 禁用 YT_PREINSTANTIATE_TEMPLATES 能减少多少编译大小？
+
+**A**: 在当前版本中，禁用此选项不会减小编译产物的大小，因为该功能尚未启用。
+
+### Q: Clang 编译器使用 OpenMP 时遇到链接错误怎么办？
+
+**A**: Clang 需要手动链接 `libgomp`：
+```bash
+clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+```
+
+---
+
+## 下一步
+
+- 返回 [安装指南](./installation.mdx) 查看基本安装步骤
+- 查看 [后端选择策略](../api/guides/backend_selection.mdx) 了解后端性能对比
+- 阅读 [性能优化建议](../api/guides/performance_tips.mdx) 提升代码效率

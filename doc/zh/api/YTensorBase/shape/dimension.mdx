@@ -1,0 +1,222 @@
+# 形状操作：维度
+
+本文档介绍 `YTensorBase` 类的维度操作方法，包括 `unsqueeze()`、`squeeze()`、`repeat()` 和 `unfold()`。
+
+## 概览
+
+| 方法 | 返回类型 | 原地版本 | 说明 |
+| --- | --- | --- | --- |
+| `unsqueeze()` | `YTensorBase` | `unsqueeze_()` | 插入大小为1的维度 |
+| `squeeze()` | `YTensorBase` | `squeeze_()` | 移除大小为1的维度 |
+| `repeat()` | `YTensorBase` | `repeat_()` | 沿维度重复（仅大小为1的维度） |
+| `unfold()` | `YTensorBase` | `unfold_()` | 滑动窗口展开 |
+
+所有操作都是**零拷贝**的，返回的张量与原张量共享内存。
+
+---
+
+## `unsqueeze()`
+
+### 函数签名
+
+```cpp
+YTensorBase unsqueeze(int dim) const;
+YTensorBase& unsqueeze_(int dim);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `dim` | `int` | 插入位置（支持负数索引，范围是 `[0, ndim()]`） |
+
+### 核心功能描述
+
+在指定位置插入一个大小为1的维度。
+*   零拷贝操作，返回视图。
+*   支持负数索引。
+
+
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+    // tensor.shape() -> {3, 4}
+    
+    // 在位置 0 插入
+    YTensorBase a = tensor.unsqueeze(0);
+    // a.shape() -> {1, 3, 4}
+    
+    // 在位置 1 插入
+    YTensorBase b = tensor.unsqueeze(1);
+    // b.shape() -> {3, 1, 4}
+    
+    // 在最后插入
+    YTensorBase c = tensor.unsqueeze(-1);
+    // c.shape() -> {3, 4, 1}
+}
+```
+
+---
+
+## `squeeze()`
+
+### 函数签名
+
+```cpp
+YTensorBase squeeze(int dim = -1) const;
+YTensorBase& squeeze_(int dim = -1);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dim` | `int` | `-1` | 要移除的维度。若 `dim >= 0`，移除指定维度（必须大小为1）；若 `dim < 0`，移除所有大小为1的维度。 |
+
+### 核心功能描述
+
+移除大小为1的维度。
+*   若 `dim >= 0`，移除指定维度（必须大小为1）。
+*   若 `dim < 0`，移除所有大小为1的维度。
+*   零拷贝操作。
+
+
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({1, 3, 1, 4, 1}, "float32");
+
+// 移除指定维度
+YTensorBase a = tensor.squeeze(0);
+// a.shape() -> {3, 1, 4, 1}
+
+// 移除所有大小为1的维度
+YTensorBase b = tensor.squeeze();  // dim < 0
+// b.shape() -> {3, 4}
+```
+
+:::warning
+如果指定维度的大小不为1，会抛出 `std::runtime_error` 异常。
+:::
+
+---
+
+## `repeat()`
+
+### 函数签名
+
+```cpp
+YTensorBase repeat(const std::vector<int>& times) const;
+
+template<typename... Args>
+YTensorBase repeat(const Args... times) const;
+
+YTensorBase& repeat_(const std::vector<int>& times);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `times` | `std::vector<int>` 或 `Args...` | 每个维度重复的次数。长度必须等于 `ndim()`。 |
+
+### 核心功能描述
+
+沿指定维度重复张量。
+*   **只能在大小为1的维度上重复**。
+*   通过将步长设为0实现的零拷贝操作。
+
+
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({1, 3, 1}, "float32");
+// tensor.shape() -> {1, 3, 1}
+
+// 在大小为1的维度上重复
+YTensorBase repeated = tensor.repeat({4, 1, 2});
+// repeated.shape() -> {4, 3, 2}
+```
+
+:::caution
+尝试在大小不为1的维度上重复会抛出 `std::runtime_error` 异常。
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3}, "float32");
+// tensor.repeat({2, 1});  // ❌ 错误：维度0的大小为2，不是1
+```
+:::
+
+---
+
+## `unfold()`
+
+### 函数签名
+
+```cpp
+YTensorBase unfold(int atDim, int kernel, int stride = 1, int dilation = 1) const;
+YTensorBase& unfold_(int atDim, int kernel, int stride = 1, int dilation = 1);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `atDim` | `int` | - | **必填**。展开的维度索引 |
+| `kernel` | `int` | - | **必填**。滑动窗口大小 |
+| `stride` | `int` | `1` | 滑动步长 |
+| `dilation` | `int` | `1` | 膨胀系数 |
+
+### 核心功能描述
+
+沿指定维度进行滑动窗口展开。
+*   在 `atDim` 后插入一个新维度，表示窗口内的元素。
+*   返回视图，共享内存。
+
+
+
+新形状计算：
+- 原维度 `atDim` 的大小变为：`nums = (shape[atDim] - (kernel - 1) * dilation - 1) / stride + 1`
+- 新插入的维度大小为 `kernel`
+
+### 使用示例
+
+```cpp
+YTensorBase vec = YTensorBase::zeros({10}, "float32");
+
+// 窗口大小3，步长1
+YTensorBase unfolded = vec.unfold(0, 3, 1);
+// unfolded.shape() -> {8, 3}
+// 8 = (10 - 3) / 1 + 1
+
+// 窗口大小3，步长2
+YTensorBase unfolded2 = vec.unfold(0, 3, 2);
+// unfolded2.shape() -> {4, 3}
+// 4 = (10 - 3) / 2 + 1
+```
+
+---
+
+## 原地版本
+
+所有方法都有对应的原地版本（带下划线后缀）：
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+// 原地修改
+tensor.unsqueeze_(0);   // tensor.shape() -> {1, 3, 4}
+tensor.squeeze_(0);     // tensor.shape() -> {3, 4}
+
+YTensorBase t2 = YTensorBase::zeros({1, 3, 1}, "float32");
+t2.repeat_({4, 1, 2});  // t2.shape() -> {4, 3, 2}
+```
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`ndim()` 方法
+- [形状操作：切片](./slice.mdx) - `slice()` 方法
+- [形状操作：转置](./transpose.mdx) - `permute()` 方法
+- [形状操作：拼接分割](./concat_split.mdx) - `concat()`、`split()` 方法

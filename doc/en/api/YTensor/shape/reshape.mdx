@@ -1,0 +1,383 @@
+# Shape Operations: Reshaping
+
+This document describes the reshaping methods for the `YTensor<T, dim>` class, including `view()`, `reshape()`, `contiguous()`, `contiguous_()`, and `mostContinuousView()`.
+
+## Overview
+
+| Method | Contiguity Required | Return Type | Potential Copy | Description |
+| --- | --- | --- | --- | --- |
+| `view()` | ✅ Yes | New view | ❌ No | Zero-copy reshaping (contiguous only) |
+| `reshape()` | ❌ No | New tensor | ✅ Yes | Handles contiguity automatically |
+| `contiguous()` | ❌ No | New tensor | ✅ Yes | Returns a contiguous copy |
+| `contiguous_()` | ❌ No | Reference to self | ✅ Yes | Converst to contiguous in-place |
+| `mostContinuousView()` | ❌ No | New view | ❌ No | Returns a view with the most contiguous ordering |
+
+---
+
+## view()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> view(const std::vector<int>& newShape) const;
+
+template<typename... Args>
+YTensor<T, dim> view(const Args... newShape) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `newShape` | `std::vector<int>` or `Args...` | The new shape. Supports `-1` for automatic dimension inference. |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: Returns a view with the new shape (zero-copy).
+- **Requirement**: **The tensor must be contiguous**; otherwise, an exception is thrown.
+
+### Core Function Description
+
+Changes the shape of the tensor without copying data. The total number of elements in the new shape must match the original tensor.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);  // shape: [3, 4]
+    mat.fill(1.0f);
+    
+    // Reshape to [2, 6]
+    auto reshaped = mat.view(2, 6);
+    std::cout << "Shape: [" << reshaped.shape()[0] << ", " << reshaped.shape()[1] << "]" << std::endl;
+    // Output: Shape: [2, 6]
+    
+    // Automatic inference with -1
+    auto auto_shape = mat.view(-1, 2);  // -1 is automatically calculated as 6
+    std::cout << "Auto shape: [" << auto_shape.shape()[0] << ", " << auto_shape.shape()[1] << "]" << std::endl;
+    // Output: Auto shape: [6, 2]
+}
+```
+
+### Contiguity Requirement
+
+```cpp
+yt::YTensor<float, 2> mat(3, 4);
+auto transposed = mat.transpose();  // Now non-contiguous
+
+// ❌ Error: Cannot 'view' a non-contiguous tensor
+try {
+    auto bad = transposed.view(4, 3);
+} catch (const std::exception& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+}
+
+// ✅ Correct: Convert to contiguous first
+auto good = transposed.contiguous().view(4, 3);
+```
+
+---
+
+## reshape()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> reshape(const std::vector<int>& newShape) const;
+
+template<typename... Args>
+YTensor<T, dim> reshape(const Args... newShape) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `newShape` | `std::vector<int>` or `Args...` | The new shape. Supports `-1` for automatic inference. |
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: A tensor with the new shape (could be a view or a copy).
+
+### Core Function Description
+
+Automatically handles contiguity during a reshape operation. Effectively equivalent to `contiguous().view(newShape)`.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    
+    // Contiguous tensor: zero-copy
+    auto r1 = mat.reshape(2, 6);
+    std::cout << "r1 shares memory: " << (r1.data_() == mat.data_()) << std::endl;
+    // Output: true
+    
+    // Non-contiguous tensor: automatic copy
+    auto transposed = mat.transpose();
+    auto r2 = transposed.reshape(2, 6);
+    std::cout << "r2 shares memory: " << (r2.data_() == transposed.data_()) << std::endl;
+    // Output: false (a copy was created)
+}
+```
+
+### view() vs reshape()
+
+| Feature | view() | reshape() |
+| --- | --- | --- |
+| **Contiguity Requirement** | ✅ Must be contiguous | ❌ No requirement |
+| **Potential Copy** | ❌ Never copies | ✅ May copy |
+| **Performance** | ⚡️⚡️⚡️ Fastest | ⚡️⚡️ Fast |
+| **Use Case** | When contiguity is certain | When contiguity is uncertain |
+
+```cpp
+// ✅ Contiguity is certain: use view() (faster)
+yt::YTensor<float, 2> mat(3, 4);
+auto v = mat.view(2, 6);
+
+// ✅ Contiguity is uncertain: use reshape() (safer)
+auto r = some_tensor.reshape(2, 6);  // Automatically handles copy if needed
+```
+
+---
+
+## contiguous()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> contiguous() const;
+```
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: A contiguous tensor.
+
+### Core Function Description
+
+Returns a contiguous version of the tensor. If already contiguous, it returns a shallow copy (shared memory); otherwise, it creates a deep copy.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.fill(1.0f);
+    
+    // Already contiguous: shallow copy
+    auto c1 = mat.contiguous();
+    std::cout << "c1 shares memory: " << (c1.data_() == mat.data_()) << std::endl;
+    // Output: true
+    
+    // Non-contiguous: deep copy
+    auto transposed = mat.transpose();
+    auto c2 = transposed.contiguous();
+    std::cout << "c2 shares memory: " << (c2.data_() == transposed.data_()) << std::endl;
+    // Output: false
+    
+    // Verify contiguity
+    std::cout << "c2 is contiguous: " << c2.isContiguous() << std::endl;
+    // Output: true
+}
+```
+
+---
+
+## contiguous_()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim>& contiguous_();
+```
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>&`
+- **Description**: Reference to self.
+
+### Core Function Description
+
+Converts the tensor to a contiguous layout in-place. If already contiguous, nothing happens; otherwise, a new contiguous copy is created and replaces the current object's data.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    auto transposed = mat.transpose();
+    
+    std::cout << "Before: " << transposed.isContiguous() << std::endl;  // false
+    
+    // Convert in-place
+    transposed.contiguous_();
+    
+    std::cout << "After: " << transposed.isContiguous() << std::endl;   // true
+}
+```
+
+### contiguous() vs contiguous_()
+
+| Feature | contiguous() | contiguous_() |
+| --- | --- | --- |
+| **Return Value** | New object | Reference to self |
+| **Original Object** | Unchanged | May be updated |
+| **Purpose** | Get a contiguous version | Make the current object contiguous in-place |
+
+---
+
+## mostContinuousView()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> mostContinuousView() const;
+```
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: A view with the most contiguous dimension ordering.
+
+### Core Function Description
+
+Returns the most contiguous view possible by reordering dimensions. This can be used to optimize performance-sensitive operations.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    auto sliced = tensor.slice(0, 0, 2).slice(1, 1, 3);
+    
+    // Get the most contiguous view
+    auto mcv = sliced.mostContinuousView();
+    
+    int cFrom = mcv.isContiguousFrom();
+    std::cout << "Contiguous from dim: " << cFrom << std::endl;
+}
+```
+
+---
+
+## -1 Automatic Inference
+
+Both `view()` and `reshape()` support using `-1` to automatically infer one dimension:
+
+```cpp
+yt::YTensor<float, 2> mat(3, 4);  // size = 12
+
+// -1 is automatically inferred as 6
+auto a = mat.reshape(-1, 2);  // [6, 2]
+auto b = mat.reshape(2, -1);  // [2, 6]
+auto c = mat.reshape(3, -1);  // [3, 4]
+
+// ❌ Error: Only one dimension can be -1
+// auto bad = mat.reshape(-1, -1);
+```
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 10 + coord[1];
+    });
+    
+    std::cout << "=== view() ===" << std::endl;
+    auto v = mat.view(2, 6);
+    std::cout << "Shape: [" << v.shape()[0] << ", " << v.shape()[1] << "]" << std::endl;
+    std::cout << "v[0][0] = " << v.at(0, 0) << std::endl;  // 0
+    std::cout << "v[0][5] = " << v.at(0, 5) << std::endl;  // 11
+    
+    std::cout << "\n=== reshape() ===" << std::endl;
+    auto transposed = mat.transpose();
+    std::cout << "Transposed contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    auto r = transposed.reshape(2, 6);
+    std::cout << "Reshaped shape: [" << r.shape()[0] << ", " << r.shape()[1] << "]" << std::endl;
+    
+    std::cout << "\n=== contiguous() ===" << std::endl;
+    auto c = transposed.contiguous();
+    std::cout << "c is contiguous: " << c.isContiguous() << std::endl;  // true
+    
+    std::cout << "\n=== -1 Auto Inference ===" << std::endl;
+    auto auto1 = mat.reshape(-1, 2);
+    auto auto2 = mat.reshape(2, -1);
+    std::cout << "auto1: [" << auto1.shape()[0] << ", " << auto1.shape()[1] << "]" << std::endl;  // [6, 2]
+    std::cout << "auto2: [" << auto2.shape()[0] << ", " << auto2.shape()[1] << "]" << std::endl;  // [2, 6]
+    
+    return 0;
+}
+```
+
+---
+
+## Best Practices
+
+### ✅ Recommended
+
+```cpp
+// 1. Use view() when contiguity is certain
+if (tensor.isContiguous()) {
+    auto v = tensor.view(new_shape);
+}
+
+// 2. Use reshape() when contiguity is uncertain
+auto r = tensor.reshape(new_shape);
+
+// 3. Convert to contiguous first for performance-critical paths
+tensor.contiguous_();
+// Subsequent operations will be faster
+
+// 4. Leverage -1 for automatic inference
+auto reshaped = tensor.reshape(-1, feature_dim);
+```
+
+### ❌ Avoid
+
+```cpp
+// 1. Using view() on non-contiguous tensors
+// auto bad = transposed.view(new_shape);  // ❌ Will throw an exception
+
+// 2. Repeated calls to contiguous()
+for (int i = 0; i < N; ++i) {
+    auto c = tensor.contiguous();  // ❌ Checks contiguity every time
+}
+
+// Instead, convert beforehand:
+tensor.contiguous_();
+for (int i = 0; i < N; ++i) {
+    // Operations here are now optimized
+}
+```
+
+---
+
+## Related Content
+
+- [Shape Querying](./query.mdx) - Using `shape()`, `size()`, and `isContiguous()` methods.
+- [Shape Operations: Slicing](./slice.mdx) - Using the `slice()` method.
+- [Shape Operations: Transposing](./transpose.mdx) - Using `transpose()` and `permute()`.
+- [Utility Properties](../utilities/properties.mdx) - Detailed explanation of `isContiguous()`.
+- [Guide: Memory Model](../../guides/memory_model.mdx) - Deep dive into tensor contiguity.

@@ -1,0 +1,284 @@
+---
+title: Memory Management (YTensorBase)
+description: Methods for memory copying and management in YTensorBase.
+---
+
+# Memory Management (YTensorBase)
+
+`YTensorBase` provides several methods for memory operations: shallow copying, deep copying, and in-place copying.
+
+## Core Methods
+
+### `shallowCopyTo`
+
+### Core Function Description
+
+Performs a shallow copy (shared underlying data) to another tensor.
+
+#### Function Signature
+
+```cpp
+void shallowCopyTo(YTensorBase& other) const;
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `other` | `YTensorBase&` | **Required**. The target tensor that will receive the shallow copy. |
+
+#### Return Value
+
+* **Type**: `void`
+* **Memory Behavior**: The target tensor will share the `_data` pointer of the source tensor. Modifying data in either tensor will affect the other.
+
+#### Usage Example
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    // Fill data...
+    
+    YTensorBase b;
+    a.shallowCopyTo(b);  // Performs a shallow copy
+    
+    // Modifying b affects a
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) is now also 99.0
+}
+```
+
+#### Notes
+
+:::warning
+**Shared Memory Risk**
+`shallowCopyTo` causes two tensors to share the same underlying memory (the `_data` pointer). Any changes to the data of one tensor will be reflected in the other. If you need a completely independent copy, use `clone()` instead.
+:::
+
+---
+
+### `clone`
+
+### Core Function Description
+
+Performs a deep copy: returns a new `YTensorBase` that independently owns its own data.
+
+#### Function Signature
+
+```cpp
+YTensorBase clone() const;
+```
+
+#### Return Value
+
+* **Type**: `YTensorBase`
+* **Description**: Returns a new tensor with independent memory.
+* **Memory Behavior**: 
+  - The returned tensor is always **contiguous** (`_offset = 0`).
+  - Supports **non-POD types** (calls the appropriate copy constructor).
+  - For **POD types**, uses optimized `memcpy`.
+
+#### Usage Example
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    // Fill data...
+    
+    YTensorBase b = a.clone();  // Performs a deep copy
+    
+    // Modifying b DOES NOT affect a
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) remains unchanged
+}
+```
+
+#### Implementation Details
+
+```cpp
+// Source Extract (src/ytensor_base.inl:214-297)
+inline YTensorBase YTensorBase::clone() const {
+    YTensorBase op;
+    op._shape = _shape;
+    op._dtype = _dtype;
+    op._element_size = _element_size;
+    op._offset = 0;  // The returned tensor is always contiguous
+    
+    // Calculate strides for contiguous layout
+    // ...
+    
+    // Check for non-POD types
+    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
+        // Non-POD type: use copy constructor logic
+        // ...
+    } else {
+        // POD type: optimized with memcpy
+        if (isContiguous()) {
+            std::memcpy(/* contiguous copy */);
+        } else {
+            // Non-contiguous: element-wise copy
+            // ...
+        }
+    }
+    return op;
+}
+```
+
+#### Notes
+
+:::info
+**Contiguity Guarantee**
+The tensor returned by `clone()` is **always contiguous** (`_offset = 0`, strides in C-style row-major order), even if the original tensor was non-contiguous (e.g., a slice or a transposed view).
+:::
+
+:::info
+**Non-POD Type Support**
+For non-POD types (such as custom classes), `clone()` calls the `copyConstruct` function provided during type registration rather than performing a simple `memcpy`.
+:::
+
+---
+
+### `copy_`
+
+### Core Function Description
+
+Copies elements from a source tensor into this tensor (in-place operation; does not reallocate memory).
+
+#### Function Signature
+
+```cpp
+YTensorBase& copy_(const YTensorBase& src);
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `src` | `const YTensorBase&` | **Required**. The source tensor. Its shape and `dtype` must match this tensor exactly. |
+
+#### Return Value
+
+* **Type**: `YTensorBase&`
+* **Description**: Returns a reference to the current object (enabling method chaining).
+
+#### Exceptions
+
+* `std::runtime_error`: Thrown if the shapes or `dtype` do not match.
+
+#### Usage Example
+
+```cpp
+#include <ytensor.hpp>
+
+void example() {
+    YTensorBase a({3, 4}, "float32");
+    YTensorBase b({3, 4}, "float32");
+    
+    // Fill b...
+    
+    // Copy data from b into a (in-place)
+    a.copy_(b);
+    
+    // Modifying b DOES NOT affect a (data is now independent)
+    b.at<float>(0, 0) = 99.0f;
+    // a.at<float>(0, 0) retains the value from when it was copied
+}
+```
+
+#### Implementation Details
+
+```cpp
+// Source Extract (src/ytensor_base.inl:301-334)
+inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
+    // Validate that shapes match
+    if (!this->shapeMatch(src.shape())) {
+        throw std::runtime_error("copy_: source and destination shapes must match");
+    }
+    // Validate that dtypes match
+    if (this->_dtype != src._dtype) {
+        throw std::runtime_error("copy_: source and destination dtypes must match");
+    }
+    
+    // If both are fully contiguous, use a direct memcpy
+    if (this->isContiguous() && src.isContiguous()) {
+        std::memcpy(_data.get() + _offset * elemSize, 
+                    src._data.get() + src._offset * elemSize, 
+                    total * elemSize);
+        return *this;
+    }
+    
+    // Handle non-contiguous cases...
+}
+```
+
+#### Notes
+
+:::warning
+**Shape and DType Requirements**
+`copy_` requires that the source and destination tensors have identical `shape` and `dtype`. If they differ, an exception is thrown.
+:::
+
+:::info
+**Performance Optimization**
+- If both tensors are **contiguous**, `memcpy` is used to copy the whole block at once (fastest).
+- If either tensor is **non-contiguous**, elements are copied one by one (slower).
+:::
+
+:::warning
+**Memory Overlap**
+Memory overlap between `src` and `dst` (e.g., if both are views into the same data buffer) is currently not supported; behavior in such cases is undefined.
+:::
+
+---
+
+## Method Comparison
+
+| Method | Return Value | Allocation | In-place | Contiguity | Typical Use Case |
+| --- | --- | --- | --- | --- | --- |
+| `shallowCopyTo` | `void` | ✗ (Shared) | ✓ | Preserved | Creating views, zero-copy passing |
+| `clone` | `YTensorBase` | ✓ (New allocation) | ✗ | ✓ (Always contiguous) | Creating independent copies, persisting views |
+| `copy_` | `YTensorBase&` | ✗ (In-place copy) | ✓ | Preserved | Updating values in-place, batch data transfer |
+
+## Full Usage Example
+
+```cpp
+#include <ytensor.hpp>
+#include <iostream>
+
+int main() {
+    // Create source tensor
+    YTensorBase src({2, 3}, "float32");
+    for (int i = 0; i < 6; ++i) {
+        src.atData_<float>(i) = static_cast<float>(i);
+    }
+    
+    // 1. Shallow Copy
+    YTensorBase shallow;
+    src.shallowCopyTo(shallow);
+    shallow.at<float>(0, 0) = 99.0f;
+    std::cout << "src after shallow modify: " << src.at<float>(0, 0) << std::endl;  // Output: 99.0 (Affected)
+    
+    // 2. Deep Copy
+    YTensorBase deep = src.clone();
+    deep.at<float>(0, 0) = 88.0f;
+    std::cout << "src after deep modify: " << src.at<float>(0, 0) << std::endl;  // Output: 99.0 (NOT affected)
+    
+    // 3. In-place Copy
+    YTensorBase dst({2, 3}, "float32");
+    dst.copy_(src);
+    std::cout << "dst after copy_: " << dst.at<float>(0, 0) << std::endl;  // Output: 99.0
+    
+    return 0;
+}
+```
+
+## Related Documents
+
+- [Constructors (YTensorBase)](/api/YTensorBase/construction/constructors) - Basic creation methods.
+- [Factory Methods (YTensorBase)](/api/YTensorBase/construction/factories) - Conveniences like `zeros`, `ones`.
+- [Property Queries](/api/YTensorBase/utilities/properties) - `isContiguous`, `shapeMatch`.

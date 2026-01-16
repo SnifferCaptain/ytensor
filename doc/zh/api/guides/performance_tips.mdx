@@ -1,0 +1,169 @@
+# 性能优化
+
+本指南提供 YTensor 性能优化的最佳实践。
+
+## 1. 使用原地操作
+
+原地操作避免内存分配，显著提升性能：
+
+```cpp
+// ❌ 慢：每次创建新张量
+a = a + b;
+a = a * 2.0f;
+
+// ✅ 快：原地修改
+a += b;
+a *= 2.0f;
+```
+
+---
+
+## 2. 保持连续性
+
+非连续张量的操作需要额外的坐标计算：
+
+```cpp
+// ❌ 慢：contiguous() + atData_()
+// 虽然比直接遍历快，但产生了额外的内存拷贝
+t.contiguous_();
+for (int i = 0; i < t.size(); ++i) {
+    t.atData_(i) += 1;
+}
+
+// ✅ 推荐：使用 foreach 或 broadcastInplace
+// 内部会自动处理连续性，并在必要时优化
+t.broadcastInplace([](float& val) {
+    val += 1;
+});
+```
+
+## 3. 元素访问顺序推荐
+
+对于单个元素的访问，推荐顺序如下：
+
+**`at()` > `atData_()` > `atData()`**
+
+1.  **`at()` (首选)**: 
+    *   **理由**: 使用 stride 直接计算偏移，速度很快。提供边界检查（Debug模式），支持多维逻辑坐标，易用性最好。
+    *   **适用**: 绝大多数随机访问场景。
+
+2.  **`atData_()` (高性能)**: 
+    *   **理由**: 直接操作底层内存指针，无额外开销，速度最快。
+    *   **缺点**: 需要手动计算物理索引（flat index），不进行安全性检查，且要求张量连续（contiguous）。
+    *   **适用**: 极致性能要求的内部循环（需确保索引有效）。
+
+3.  **`atData()` (不推荐)**: 
+    *   **理由**: 需要进行完整的逻辑坐标到物理坐标的转换，开销较大。
+    *   **适用**: 仅用于兼容性代码。
+
+```cpp
+// ✅ 推荐：使用 at()
+tensor.at(i, j) = 1.0f;
+
+// ⚡ 高性能：确保连续后使用 atData_()
+if (tensor.isContiguous()) {
+    tensor.atData_(offset) = 1.0f;
+}
+
+// ❌ 避免：使用 atData()
+// tensor.atData(offset) = 1.0f;
+```
+
+
+## 4. 批量操作优于循环
+
+利用内置的向量化和并行化：
+
+```cpp
+// ❌ 慢：手动循环
+for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < m; ++j) {
+        c.at(i, j) = a.at(i, j) + b.at(i, j);
+    }
+}
+
+// ✅ 快：使用运算符（自动并行化）
+c = a + b;
+```
+
+---
+
+## 5. 善用视图
+
+视图是零拷贝操作，比创建副本快得多：
+
+```cpp
+// ✅ 快：使用视图
+auto sub = tensor.slice(0, 0, 100);
+process(sub);
+
+// 只在需要独立副本时才 clone
+auto copy = tensor.slice(0, 0, 100).clone();
+```
+
+---
+
+## 6. 预分配内存
+
+避免在循环中重复分配：
+
+```cpp
+// ❌ 慢：每次迭代都分配
+for (int i = 0; i < N; ++i) {
+    auto result = a + b;  // 每次分配新内存
+    process(result);
+}
+
+// ✅ 快：预分配并重用
+auto result = YTensor<float, 2>::zeros(shape);
+for (int i = 0; i < N; ++i) {
+    result.copy_(a);
+    result += b;
+    process(result);
+}
+```
+
+---
+
+## 7. 使用正确的后端
+
+选择适合的矩阵乘法后端（参见 [后端选择](./backend_selection.mdx)）：
+
+```cmake
+# 启用 Eigen 或 AVX2
+target_compile_options(your_target PRIVATE -mavx2 -mfma)
+```
+
+---
+
+## 8. 编译优化
+
+无需过分激进的优化选项，推荐使用以下组合即可获得极佳性能：
+
+**Release + O2 + AVX2 + FMA**
+
+```bash
+# CMake
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -mavx2 -mfma")
+
+# 手动编译
+g++ -O2 -mavx2 -mfma -DNDEBUG ...
+```
+
+
+## 性能检查清单
+
+- [ ] 使用原地操作 (`+=`, `*=` 等)
+- [ ] 关键路径上的张量是连续的
+- [ ] 使用 `atData_()` 而非 `atData()`（连续张量）
+- [ ] 避免循环中的重复分配
+- [ ] 启用了适当的后端（Eigen/AVX2）
+- [ ] 使用 Release 模式编译
+
+---
+
+## 相关内容
+
+- [后端选择](./backend_selection.mdx) - 选择最佳后端
+- [内存模型](./memory_model.mdx) - 理解视图和拷贝
+- [常见陷阱](./common_pitfalls.mdx) - 避免性能陷阱

@@ -1,0 +1,82 @@
+# 压缩方法
+
+本文档介绍 `yt::io` 命名空间中的压缩配置选项。
+
+## 全局配置
+
+```cpp
+namespace yt::io {
+    static int8_t compressLevel = Z_DEFAULT_COMPRESSION;
+    static std::string compressMethod = "";
+    static bool verbose = false;
+}
+```
+
+## 压缩级别
+
+```cpp
+yt::io::compressLevel = Z_DEFAULT_COMPRESSION;  // 默认级别
+yt::io::compressLevel = Z_BEST_SPEED;           // 最快速度
+yt::io::compressLevel = Z_BEST_COMPRESSION;     // 最高压缩率
+```
+
+## 压缩方法
+
+| 方法 | 说明 |
+| --- | --- |
+| `""` | 不压缩 |
+| `"zlib"` | 使用 zlib 压缩 |
+| `"zlibfloat"` | 浮点数优化压缩 |
+
+:::warning
+**zlib 对浮点数的支持**
+
+标准的 `zlib` 压缩算法对浮点数数据的压缩效果通常较差（甚至可能导致体积增大），因为浮点数的二进制表示具有高熵特性。
+对于浮点数张量，建议使用 `"zlibfloat"` 方法，或保留为空（不压缩）。
+:::
+
+```cpp
+yt::io::compressMethod = "zlib";  // 启用压缩
+```
+
+## 辅助函数
+
+```cpp
+// 检查并修正压缩方法
+std::string checkCompressMethod(const std::string& method);
+
+// 压缩数据
+template<typename T>
+std::vector<char> compressData(const std::vector<T>& input);
+
+// 解压数据
+std::vector<char> decompressData(const std::vector<char>& input, 
+                                  size_t decompressedSize = 0,
+                                  const std::string& method = "");
+```
+
+## 使用示例
+
+```cpp
+#include "ytensor_io.hpp"
+
+void save_compressed() {
+    // 设置压缩
+    yt::io::compressMethod = "zlib";
+    yt::io::compressLevel = 6;
+    
+    auto tensor = yt::YTensor<float, 2>::randn({100, 100});
+    
+    yt::io::YTensorIO writer;
+    writer.open("compressed.yt", yt::io::Write);
+    writer.save(tensor, "data");
+    writer.close();
+}
+```
+
+---
+
+## 相关内容
+
+- [YTensorIO](./YTensorIO.mdx) - IO 类
+- [文件格式](./file_format.mdx) - .yt 文件规范

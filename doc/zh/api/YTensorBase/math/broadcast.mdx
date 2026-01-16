@@ -1,0 +1,180 @@
+# 广播操作
+
+本文档介绍 `YTensorBase` 类的广播机制，特别是 `broadcastInplace` 方法。
+
+## 概述
+
+`broadcastInplace` 是 YTensorBase 的核心广播函数模板，支持 N 元张量/标量操作。
+
+---
+
+## 常量
+
+```cpp
+static constexpr double MAX_SUBELEMENT_RATIO = 2.5;
+```
+
+当子元素比率超过此阈值时，使用 stride 遍历法而非布尔掩码遍历。
+
+---
+
+## 函数签名
+
+```cpp
+template<typename Func, typename... Args>
+YTensorBase& broadcastInplace(Func&& func, Args&&... tensors);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `func` | `Func&&` | 操作函数，签名为 `void func(DType&, const DType&, ...)` 或返回值被忽略 |
+| `tensors` | `Args&&...` | 输入的张量（`YTensorBase`）或标量 |
+
+### 核心功能描述
+
+YTensorBase 的核心广播函数模板，支持 N 元张量/标量操作。
+*   原地修改当前张量 `*this`。
+*   自动将输入参数广播到 `*this` 的形状。
+*   `func` 会被逐元素调用。
+
+### 返回值
+
+- **类型**: `YTensorBase&`
+- **说明**: 返回自身引用（`*this`），支持链式调用
+
+### 类型推断
+
+`DType` 从 `func` 的第一个参数类型自动推断（去掉引用和 const）。
+
+---
+
+## 使用示例
+
+### 基本用法
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+    YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+    
+    // 自定义广播操作：a = a + b * 2
+    a.broadcastInplace([](float& dst, float src) {
+        dst = dst + src * 2.0f;
+    }, b);
+}
+```
+
+### 多元操作
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+YTensorBase c = YTensorBase::ones({4}, "float32");
+
+// 三元操作：a = a + b * c（c 会被广播）
+a.broadcastInplace([](float& dst, float b_val, float c_val) {
+    dst = dst + b_val * c_val;
+}, b, c);
+```
+
+### 混合张量和标量
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+float scale = 2.5f;
+
+// 混合操作：a = a + b * scale
+a.broadcastInplace([](float& dst, float b_val, float s) {
+    dst = dst + b_val * s;
+}, b, scale);
+```
+
+---
+
+## 内部实现
+
+### 快速路径
+
+当所有张量都是**连续的**且**形状相同**时，使用优化的线性遍历：
+
+```cpp
+if (allContiguous && allEqualShape) {
+    // 直接使用指针访问，无坐标转换开销
+    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+        func(thisDataPtr[index], getValue(tensors, index)...);
+    });
+}
+```
+
+### 慢速路径
+
+当张量不连续或形状不同时，使用广播索引计算：
+
+```cpp
+else {
+    // 计算广播stride和索引
+    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+        auto indices = yt::kernel::computeBroadcastIndices(...);
+        func(thisDataPtr[indices[0]], getValue(tensors)...);
+    });
+}
+```
+
+---
+
+## 广播规则
+
+广播遵循 NumPy 规则，从最右侧维度开始比较：
+
+1. 维度匹配条件：相等 或 其中一个为 1
+2. 不存在的维度视为 1
+3. `this` 的形状必须与广播后的结果形状相同（原地操作不能扩展 `this`）
+
+### 验证要求
+
+```cpp
+// 验证this的shape与广播shape兼容
+if (broadcastShape.size() != thisDim ||
+    thisShape != broadcastShape) {
+    throw std::runtime_error("broadcastInplace: shape mismatch");
+}
+```
+
+---
+
+## 性能优化
+
+- **OpenMP 并行化**: 使用 `yt::kernel::parallelFor` 自动并行
+- **连续张量优化**: 跳过坐标计算，直接线性遍历
+- **编译期优化**: 使用 `std::array` 避免堆分配
+
+---
+
+## 注意事项
+
+:::warning
+**原地操作限制**
+
+`broadcastInplace` 是原地操作，`this` 张量的形状**不会改变**。如果其他张量广播后的形状大于 `this`，会抛出异常。
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3}, "float32");
+YTensorBase b = YTensorBase::ones({3, 4}, "float32");
+
+// ❌ 错误：a 的形状 {3} 无法容纳广播结果 {3, 4}
+// a.broadcastInplace([](float& a, float b) { a += b; }, b);
+```
+:::
+
+---
+
+## 相关内容
+
+- [算术运算](./arithmetic.mdx) - 运算符重载（基于 broadcastInplace 实现）
+- [矩阵乘法](./matmul.mdx) - matmul 运算
+- [归约操作](./reduction.mdx) - sum、max 运算

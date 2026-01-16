@@ -1,0 +1,61 @@
+# Matrix Multiplication Function
+
+This document describes the matrix multiplication wrapper functions in the `yt::function` namespace.
+
+## `matmul()`
+
+Performs matrix multiplication of two tensors.
+
+### Core Function Description
+
+Performs matrix multiplication on two tensors. Supports broadcasting mechanism.
+*   If the dimensions indicate a vector dot product, a scalar is returned (wrapped in a 0D tensor).
+*   If it is a matrix multiplication, standard matrix multiplication is performed.
+*   If dimensions > 2, batch matrix multiplication is performed.
+
+### Function Signature
+
+```cpp
+template<typename T, int dim0, int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> 
+matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `a` | `const YTensor<T, dim0>&` | - | Left operand |
+| `b` | `const YTensor<T, dim1>&` | - | Right operand |
+
+### Return Value
+
+*   **Type**: `YTensor<T, max(dim0, dim1, 2)>`
+*   **Description**: Returns the result tensor of the matrix multiplication.
+*   **Shape**: Follows matrix multiplication and broadcasting rules. For example, `(m, k) @ (k, n) -> (m, n)`.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    auto a = yt::YTensor<float, 2>::ones(3, 4);
+    auto b = yt::YTensor<float, 2>::ones(4, 5);
+    
+    auto c = yt::function::matmul(a, b);
+    // c.shape() -> {3, 5}
+}
+```
+
+### Notes
+
+:::info
+**Backend Selection**
+`matmul` automatically selects the best backend (AVX2, Eigen, or Naive) based on global configuration. See [Backend Selection](../infos/backend.mdx) for details.
+:::
+
+## Related Content
+
+- [YTensor::matmul](../YTensor/math/matmul.mdx) - Member method version
+- [YTensorBase::matmul](../YTensorBase/math/matmul.mdx) - Base class version

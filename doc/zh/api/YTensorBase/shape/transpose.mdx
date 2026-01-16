@@ -1,0 +1,195 @@
+# 形状操作：转置
+
+本文档介绍 `YTensorBase` 类的转置方法，包括 `permute()`、`permute_()` 和 `transpose()`。
+
+## 概览
+
+| 方法 | 返回类型 | 原地操作 | 说明 |
+| --- | --- | --- | --- |
+| `permute()` | `YTensorBase` | ❌ | 按指定顺序重排维度 |
+| `permute_()` | `YTensorBase&` | ✅ | 原地重排维度 |
+| `transpose()` | `YTensorBase` | ❌ | 交换两个维度 |
+
+所有操作都是**零拷贝**的，返回的张量与原张量共享内存。
+
+---
+
+## `permute()`
+
+### 函数签名
+
+```cpp
+YTensorBase permute(const std::vector<int>& newOrder) const;
+
+template<typename... Args>
+YTensorBase permute(const Args... newOrder) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` 或 `Args...` | 新的维度顺序。长度必须等于 `ndim()`。支持负数索引。 |
+
+### 核心功能描述
+
+按指定顺序重排维度。
+*   返回新的视图（零拷贝）。
+*   支持负数索引。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**: 返回重排维度后的新张量视图
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+    // tensor.shape() -> {2, 3, 4}
+    
+    // 重排维度顺序
+    YTensorBase permuted = tensor.permute({2, 0, 1});
+    // permuted.shape() -> {4, 2, 3}
+    
+    // 使用可变参数
+    YTensorBase permuted2 = tensor.permute(1, 2, 0);
+    // permuted2.shape() -> {3, 4, 2}
+}
+```
+
+---
+
+## `permute_()`
+
+### 函数签名
+
+```cpp
+YTensorBase& permute_(const std::vector<int>& newOrder);
+```
+
+### 核心功能描述
+
+原地重排维度。
+*   修改当前张量对象。
+*   零拷贝操作。
+
+### 返回值
+
+- **类型**: `YTensorBase&`
+- **说明**: 返回自身引用，支持链式调用
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+
+// 原地重排
+tensor.permute_({2, 0, 1});
+// tensor.shape() -> {4, 2, 3}
+```
+
+---
+
+## `transpose()`
+
+### 函数签名
+
+```cpp
+YTensorBase transpose(int dim0 = -2, int dim1 = -1) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dim0` | `int` | `-2` | 第一个要交换的维度（支持负数索引） |
+| `dim1` | `int` | `-1` | 第二个要交换的维度（支持负数索引） |
+
+### 核心功能描述
+
+交换两个维度。
+*   等价于 `permute` 的一个特例。
+*   返回新的视图（零拷贝）。
+
+### 返回值
+
+- **类型**: `YTensorBase`
+- **说明**: 返回交换两个维度后的新张量视图
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+    
+    // 默认参数：交换最后两个维度
+    YTensorBase transposed = mat.transpose();
+    // transposed.shape() -> {4, 3}
+    
+    // 指定维度
+    YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+    YTensorBase t = tensor.transpose(0, 2);
+    // t.shape() -> {4, 3, 2}
+}
+```
+
+---
+
+## permute() vs transpose()
+
+| 特性 | permute() | transpose() |
+| --- | --- | --- |
+| **功能** | 任意重排所有维度 | 交换两个维度 |
+| **参数** | 完整的维度顺序 | 两个维度索引 |
+| **默认值** | 无 | 最后两个维度 |
+| **使用场景** | 复杂维度变换 | 简单矩阵转置 |
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3, 4}, "float32");
+
+// 等价操作
+YTensorBase a = tensor.transpose(0, 2);     // 交换 dim0 和 dim2
+YTensorBase b = tensor.permute({2, 1, 0});  // 同样效果
+```
+
+---
+
+## 注意事项
+
+:::info
+**零拷贝视图**
+
+所有转置操作都返回视图（共享内存）。修改转置后的张量会影响原张量。
+```cpp
+YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase t = mat.transpose();
+t.at<float>({0, 0}) = 1.0f;  // mat.at<float>({0, 0}) 也变成 1.0
+```
+:::
+
+:::warning
+**转置后通常非连续**
+
+转置后的张量通常不是连续的，使用 `view()` 前需要先调用 `contiguous()`。
+```cpp
+YTensorBase t = mat.transpose();
+std::cout << t.isContiguous() << std::endl;  // false（通常）
+
+// 需要先连续化
+YTensorBase c = t.contiguous().view({12});
+```
+:::
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`ndim()` 方法
+- [形状操作：重塑](./reshape.mdx) - `view()`、`reshape()` 方法
+- [形状操作：维度](./dimension.mdx) - `unsqueeze()`、`squeeze()` 方法

@@ -1,0 +1,31 @@
+# YTensorBase 形状查询
+
+YTensorBase 的形状查询方法与 YTensor 完全相同。
+
+详见 [YTensor 形状查询](../../YTensor/shape/query.mdx)。
+
+## 快速参考
+
+```cpp
+yt::YTensorBase tensor({3, 4, 5}, "float32");
+
+// 形状
+auto shape = tensor.shape();           // {3, 4, 5}
+int d0 = tensor.shape(0);              // 3
+
+// 大小
+size_t n = tensor.size();              // 60
+int ndim = tensor.ndim();              // 3
+
+// 步长
+auto stride = tensor.stride();         // {20, 5, 1}
+auto stride_ = tensor.stride_();       // 物理步长
+
+// 偏移
+int off = tensor.offset(1, 2, 3);      // 逻辑偏移
+int off_ = tensor.offset_(1, 2, 3);    // 物理偏移
+
+// 坐标转换
+auto coord = tensor.toCoord(33);       // {1, 2, 3}
+size_t idx = tensor.toIndex(1, 2, 3);  // 33
+```

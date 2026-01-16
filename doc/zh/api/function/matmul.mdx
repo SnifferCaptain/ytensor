@@ -1,0 +1,63 @@
+# 矩阵乘法函数
+
+本文档介绍 `yt::function` 命名空间中的矩阵乘法包装函数。
+
+## `matmul()`
+
+执行两个张量的矩阵乘法。
+
+### 核心功能描述
+
+对两个张量执行矩阵乘法操作。支持广播机制。
+*   若根据维度判定为向量点积，则返回标量（封装在0维张量中）。
+*   若为矩阵乘法，则执行标准矩阵乘法。
+*   若维度 > 2，则执行批量矩阵乘法（Batch Matmul）。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim0, int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> 
+matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `a` | `const YTensor<T, dim0>&` | - | 左操作数 |
+| `b` | `const YTensor<T, dim1>&` | - | 右操作数 |
+
+### 返回值
+
+*   **类型**: `YTensor<T, max(dim0, dim1, 2)>`
+*   **说明**: 返回矩阵乘法的结果张量。
+*   **形状**: 遵循矩阵乘法和广播规则。例如 `(m, k) @ (k, n) -> (m, n)`。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    auto a = yt::YTensor<float, 2>::ones(3, 4);
+    auto b = yt::YTensor<float, 2>::ones(4, 5);
+    
+    auto c = yt::function::matmul(a, b);
+    // c.shape() -> {3, 5}
+}
+```
+
+### 注意事项
+
+:::info
+**后端选择**
+`matmul` 会根据全局配置自动选择最佳后端（AVX2, Eigen, 或 Naive）。查看 [后端选择](../infos/backend.mdx) 了解详情。
+:::
+
+
+
+## 相关内容
+
+- [YTensor::matmul](../YTensor/math/matmul.mdx) - 成员方法版本
+- [YTensorBase::matmul](../YTensorBase/math/matmul.mdx) - 基类版本

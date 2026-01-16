@@ -1,0 +1,410 @@
+# 矩阵乘法
+
+本文档介绍 YTensor 的矩阵乘法功能。
+
+---
+
+## matmul()
+
+对张量的最后两个维度执行矩阵乘法，支持批量操作和自动广播。
+
+### 函数签名
+
+```cpp
+template <int dim1>
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> matmul(
+    const YTensor<T, dim1>& other,
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `other` | `const YTensor<T, dim1>&` | - | 右操作数张量 |
+| `backend` | `MatmulBackend` | `defaultMatmulBackend` | 矩阵乘法后端 |
+
+### 核心功能描述
+
+对张量的最后两个维度执行矩阵乘法。
+*   支持自动广播：前导维度（batch dimensions）会自动广播。
+*   支持批量操作：一次性计算多个矩阵乘积。
+*   后端优化：自动选择最佳后端（AVX2, Eigen, Naive）。
+
+### 返回值
+
+返回 `YTensor<T, result_dim>`，其中 `result_dim = max(dim, dim1, 2)`。
+
+### 矩阵乘法规则
+
+假设：
+- 左张量形状：`(..., m, k)`
+- 右张量形状：`(..., k, n)`
+- 结果形状：`(..., m, n)`
+
+**要求**：
+- 左张量的最后一个维度大小 (`k`) 必须等于右张量的倒数第二个维度大小 (`k`)
+- 前面的批次维度 `(...)` 会自动广播
+
+### 使用示例
+
+#### 基本矩阵乘法
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    // 2D × 2D
+    auto a = YTensor<float, 2>::randn(3, 4);  // (3, 4)
+    auto b = YTensor<float, 2>::randn(4, 5);  // (4, 5)
+    auto c = a.matmul(b);                      // (3, 5)
+    
+    return 0;
+}
+```
+
+#### 批量矩阵乘法
+
+```cpp
+// 3D × 3D
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+auto b = YTensor<float, 3>::randn(10, 4, 5);  // (10, 4, 5)
+auto c = a.matmul(b);                          // (10, 3, 5)
+
+// 执行10次矩阵乘法：
+// c[i] = a[i] @ b[i]，其中 i = 0, 1, ..., 9
+```
+
+#### 广播矩阵乘法
+
+```cpp
+// 3D × 2D（广播）
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+auto b = YTensor<float, 2>::randn(4, 5);      // (4, 5)
+auto c = a.matmul(b);                          // (10, 3, 5)
+
+// b 被广播到 (10, 4, 5)
+// c[i] = a[i] @ b，其中 i = 0, 1, ..., 9
+```
+
+#### 向量-矩阵乘法
+
+```cpp
+// 1D × 2D（视为行向量）
+auto a = YTensor<float, 1>::randn(4);      // (4,)
+auto b = YTensor<float, 2>::randn(4, 5);   // (4, 5)
+auto c = a.matmul(b);                       // (1, 5)
+
+// a 被视为 (1, 4)，结果是 (1, 5)
+```
+
+#### 矩阵-向量乘法
+
+```cpp
+// 2D × 1D（视为列向量）
+auto a = YTensor<float, 2>::randn(3, 4);   // (3, 4)
+auto b = YTensor<float, 1>::randn(4);      // (4,)
+auto c = a.matmul(b);                       // (3, 1)
+
+// b 被视为 (4, 1)，结果是 (3, 1)
+```
+
+#### 高维广播
+
+```cpp
+// 4D × 3D
+auto a = YTensor<float, 4>::randn(2, 10, 3, 4);  // (2, 10, 3, 4)
+auto b = YTensor<float, 3>::randn(10, 4, 5);     // (10, 4, 5)
+auto c = a.matmul(b);                             // (2, 10, 3, 5)
+
+// b 被广播到 (2, 10, 4, 5)
+```
+
+---
+
+## matView()
+
+将张量的最后两个维度视为矩阵，返回矩阵视图。
+
+### 函数签名
+
+```cpp
+YTensor<YTensor<T, 2>, std::max(1, dim - 2)> matView() const;
+```
+
+### 返回值
+
+返回"张量的张量"，其中：
+- 外层张量的维度：`max(1, dim - 2)`
+- 内层张量的维度：`2`（矩阵）
+
+### 使用场景
+
+当需要将高维张量视为一批矩阵进行处理时：
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+
+// 获取矩阵视图
+auto matView = a.matView();  // YTensor<YTensor<float, 2>, 1>
+
+// matView[i] 是一个 YTensor<float, 2>，形状 (3, 4)
+auto firstMatrix = matView.at(0);  // (3, 4) 矩阵
+```
+
+### 注意事项
+
+:::warning
+**内存共享**
+
+`matView()` 返回的视图与原张量**共享内存**：
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+auto mv = a.matView();
+
+// 修改视图会影响原张量
+mv.at(0).at_(1, 2) = 999.0f;
+std::cout << a.at(0, 1, 2);  // 输出 999.0
+```
+:::
+
+---
+
+## 矩阵乘法后端
+
+YTensor 支持三种矩阵乘法后端，可在编译时或运行时选择。
+
+### MatmulBackend 枚举
+
+```cpp
+enum class MatmulBackend {
+    Naive = 0,  // 朴素三重循环实现
+    Eigen = 1,  // Eigen 库实现
+    AVX2 = 2    // AVX2+FMA 指令优化
+};
+```
+
+### 后端特性对比
+
+| 后端 | 依赖 | 性能 | 支持类型 | 适用场景 |
+|------|------|------|---------|---------|
+| **Naive** | 无 | 最慢 | 所有类型 | 开发调试、非算术类型 |
+| **Eigen** | Eigen 库 | 快 | 算术类型 | 通用场景、跨平台 |
+| **AVX2** | AVX2+FMA CPU | 最快 | `float` | x86_64 生产环境 |
+
+### 默认后端选择
+
+编译时自动选择最优后端：
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+**优先级**：AVX2 > Eigen > Naive
+
+### 手动指定后端
+
+```cpp
+auto a = YTensor<float, 2>::randn(100, 100);
+auto b = YTensor<float, 2>::randn(100, 100);
+
+// 使用 Naive 后端
+auto c1 = a.matmul(b, yt::infos::MatmulBackend::Naive);
+
+// 使用 Eigen 后端
+auto c2 = a.matmul(b, yt::infos::MatmulBackend::Eigen);
+
+// 使用 AVX2 后端
+auto c3 = a.matmul(b, yt::infos::MatmulBackend::AVX2);
+```
+
+---
+
+## 性能考虑
+
+### 后端性能对比
+
+基于 512×512 矩阵乘法的基准测试（Intel i7-10700K）：
+
+| 后端 | 时间 (ms) | 相对性能 | GFLOPS |
+|------|----------|---------|--------|
+| Naive | ~1850 | 1.0x | 0.14 |
+| Eigen | ~12.5 | 148x | 21.5 |
+| AVX2 | ~8.3 | 223x | 32.4 |
+
+### 内存布局
+
+矩阵乘法假设**行主序（Row-major）**：
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 4);  // 行主序，连续存储
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);  // 高效
+
+auto a_t = a.transpose(0, 1);  // 非连续（列主序）
+auto c2 = a_t.matmul(b);  // 较慢
+```
+
+### 推荐做法
+
+```cpp
+// ❌ 低效：转置后非连续
+auto a = YTensor<float, 2>::randn(1000, 1000);
+auto a_t = a.transpose(0, 1);
+auto b = YTensor<float, 2>::randn(1000, 1000);
+auto c = a_t.matmul(b);  // 非连续内存访问
+
+// ✅ 高效：先连续化
+auto a = YTensor<float, 2>::randn(1000, 1000);
+auto a_t = a.transpose(0, 1).contiguous();  // 复制为连续内存
+auto b = YTensor<float, 2>::randn(1000, 1000);
+auto c = a_t.matmul(b);  // 连续内存访问
+```
+
+---
+
+## 类型要求
+
+矩阵乘法要求类型支持加法和乘法：
+
+```cpp
+static_assert(HAVE_ADD<T> && HAVE_MUL<T>, 
+              "Type must have add and mul in matmul");
+```
+
+### 支持的类型
+
+- ✅ 所有算术类型：`float`, `double`, `int`, `int64_t` 等
+- ✅ 自定义类型（如果实现了 `operator+` 和 `operator*`）
+- ❌ 不支持加法或乘法的类型（编译错误）
+
+### 非算术类型
+
+非算术类型只能使用 Naive 后端：
+
+```cpp
+struct Complex {
+    float real, imag;
+    Complex operator+(const Complex& other) const { /*...*/ }
+    Complex operator*(const Complex& other) const { /*...*/ }
+};
+
+auto a = YTensor<Complex, 2>(3, 4);
+auto b = YTensor<Complex, 2>(4, 5);
+
+// 自动使用 Naive 后端（忽略 backend 参数）
+auto c = a.matmul(b);
+```
+
+---
+
+## 错误处理
+
+### 形状不匹配
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 5);  // (3, 5)
+auto b = YTensor<float, 2>::randn(4, 7);  // (4, 7)
+
+try {
+    auto c = a.matmul(b);
+} catch (const std::runtime_error& e) {
+    // 错误：左张量的最后一个维度 (5) != 右张量的倒数第二个维度 (4)
+    std::cout << e.what() << std::endl;
+}
+```
+
+**要求**：`a.shape(-1) == b.shape(-2)`
+
+---
+
+## 与 NumPy/PyTorch 的对比
+
+### 相同点
+
+```python
+# NumPy/PyTorch
+a = np.random.randn(3, 4)
+b = np.random.randn(4, 5)
+c = a @ b  # 或 np.matmul(a, b)
+```
+
+```cpp
+// YTensor
+auto a = YTensor<float, 2>::randn(3, 4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);
+```
+
+### 差异点
+
+| 特性 | NumPy/PyTorch | YTensor |
+|------|--------------|---------|
+| 运算符 | `@` 或 `matmul()` | 仅 `matmul()` |
+| 后端选择 | 自动（BLAS） | 可手动指定 |
+| GPU 支持 | ✅ (PyTorch) | ❌ |
+| 编译时优化 | ❌ | ✅ （维度） |
+
+---
+
+## 最佳实践
+
+### 1. 批量操作优先
+
+```cpp
+// ❌ 低效：循环调用
+std::vector<YTensor<float, 2>> results;
+for (int i = 0; i < 100; ++i) {
+    auto a = getMatrix(i);
+    auto b = getMatrix(i + 1);
+    results.push_back(a.matmul(b));
+}
+
+// ✅ 高效：批量矩阵乘法
+auto a_batch = YTensor<float, 3>::stack(aList);  // (100, m, k)
+auto b_batch = YTensor<float, 3>::stack(bList);  // (100, k, n)
+auto c_batch = a_batch.matmul(b_batch);          // (100, m, n)
+```
+
+### 2. 连续内存
+
+```cpp
+// ✅ 确保矩阵连续存储
+auto a = getTensor().contiguous();
+auto b = getTensor().contiguous();
+auto c = a.matmul(b);  // 最优性能
+```
+
+### 3. 选择合适的后端
+
+```cpp
+// 小矩阵：Naive 已足够
+if (m * n * k < 1000) {
+    c = a.matmul(b, MatmulBackend::Naive);
+}
+// 大矩阵：使用 AVX2 或 Eigen
+else {
+    c = a.matmul(b);  // 使用默认最优后端
+}
+```
+
+---
+
+## 相关内容
+
+- [算术运算](./arithmetic.mdx) - 逐元素运算
+- [广播操作](./broadcast.mdx) - 广播机制
+- [后端选择指南](../../guides/backend_selection.mdx) - 后端对比和选择
+- [性能优化](../../guides/performance_tips.mdx) - 矩阵乘法优化

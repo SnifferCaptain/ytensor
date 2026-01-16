@@ -40,8 +40,25 @@ YT_YTENSORBASE_OPERATOR_DEF(%)
 YT_YTENSORBASE_OPERATOR_DEF(&)
 YT_YTENSORBASE_OPERATOR_DEF(|)
 YT_YTENSORBASE_OPERATOR_DEF(^)
+YT_YTENSORBASE_OPERATOR_DEF(<<)
+YT_YTENSORBASE_OPERATOR_DEF(>>)
 
 #undef YT_YTENSORBASE_OPERATOR_DEF
+
+/// @brief YTensorBase的比较运算符，返回dtype="bool"的YTensorBase
+#define YT_YTENSORBASE_CMP_OPERATOR_DEF(op)                         \
+    YTensorBase operator op(const YTensorBase& other) const;        \
+    template<typename T>                                            \
+    YTensorBase operator op(const T& scalar) const;
+
+YT_YTENSORBASE_CMP_OPERATOR_DEF(<)
+YT_YTENSORBASE_CMP_OPERATOR_DEF(<=)
+YT_YTENSORBASE_CMP_OPERATOR_DEF(>)
+YT_YTENSORBASE_CMP_OPERATOR_DEF(>=)
+YT_YTENSORBASE_CMP_OPERATOR_DEF(==)
+YT_YTENSORBASE_CMP_OPERATOR_DEF(!=)
+
+#undef YT_YTENSORBASE_CMP_OPERATOR_DEF
 
 /// @brief 对张量的最后两个维度进行广播矩阵乘法运算
 /// @param other 右张量输入，最后两个维度的列数必须与this最后两个维度的行数相等
@@ -82,7 +99,7 @@ protected:
 /// @brief 矩阵乘法的无优化后端实现，只保证规则正确
 /// @param other 右张量输入
 /// @return 矩阵乘法结果张量
-YTensorBase matmul_zero_backend(const YTensorBase& other) const;
+YTensorBase matmul_naive_backend(const YTensorBase& other) const;
 
 /// @brief 抛出类型不支持的运算异常
 /// @param typeName 类型名称
@@ -127,8 +144,15 @@ YTensorBase applyEigenOp(Func&& func, const std::string& opName = "") const;
 template<typename Func>
 YTensorBase applyEigenBinaryOp(const YTensorBase& other, Func&& func, const std::string& opName = "") const;
 
-public:
-
 #endif // YT_USE_EIGEN
+
+/////////////// AVX2 support ///////////////
+#if YT_USE_AVX2
+protected:
+/// @brief 矩阵乘法的AVX2后端实现
+/// @param other 右张量输入
+/// @return 矩阵乘法结果张量
+YTensorBase matmul_avx2_backend(const YTensorBase& other) const;
+#endif // YT_USE_AVX2
 
 public: // end of ytensor_base_math.hpp

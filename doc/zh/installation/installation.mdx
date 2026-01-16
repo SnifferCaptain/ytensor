@@ -1,0 +1,283 @@
+# 安装指南
+
+YTensor 是一个纯头文件（header-only）的 C++ 库，这意味着您无需编译或链接任何库文件，只需将头文件包含到您的项目中即可使用。
+
+## 系统要求
+
+### 必需条件
+
+- **C++ 编译器**：支持 C++20 标准的编译器
+  - GCC 10+ 
+  - Clang 10+
+  - MSVC 2019+（Visual Studio 2019 或更高版本）
+
+### 可选依赖
+
+YTensor 的核心功能无需任何第三方库，但以下库可以启用额外功能或提升性能：
+
+| 库名称 | 用途 | 说明 |
+| --- | --- | --- |
+| **OpenMP** | 并行计算 | 启用多线程加速，强烈推荐 |
+| **Eigen** | 矩阵乘法加速 | 提供高性能的矩阵乘法后端 |
+| **zlib** | 文件压缩 | 支持张量文件的压缩存储（I/O功能必需） |
+
+:::info
+即使没有安装可选依赖，YTensor 也能正常工作，但某些功能可能不可用或性能较低。
+:::
+
+## 安装方法
+
+### 方法一：使用单头文件（推荐）
+
+这是最简单的集成方式，适合大多数用户。
+
+1. **下载单头文件**
+
+   从项目根目录的 `single-header/` 文件夹中获取 `ytensor_single.hpp` 文件。
+
+2. **包含头文件**
+
+   将 `ytensor_single.hpp` 复制到您的项目中，然后在代码中包含它：
+
+   ```cpp
+   #include "ytensor_single.hpp"
+   
+   int main() {
+       yt::YTensor<float, 2> tensor(3, 4);
+       // 使用张量...
+       return 0;
+   }
+   ```
+
+3. **编译您的项目**
+
+   使用支持 C++20 的编译器编译：
+
+   ```bash
+   # GCC
+   g++ -std=c++20 -O2 main.cpp -o main
+   
+   # Clang
+   clang++ -std=c++20 -O2 main.cpp -o main
+   
+   # 启用 OpenMP（可选，推荐）
+   g++ -std=c++20 -O2 -fopenmp main.cpp -o main
+   
+   # Clang + OpenMP（可能需要指定库）
+   clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+   ```
+
+### 方法二：使用多头文件（开发者选项）
+
+如果您需要修改源代码或参与开发，可以直接使用多头文件版本。
+
+1. **克隆或下载项目**
+
+   ```bash
+   git clone https://github.com/SnifferCaptain/ytensor.git
+   cd ytensor
+   ```
+
+2. **设置包含路径**
+
+   将项目根目录添加到编译器的包含路径中：
+
+   ```bash
+   g++ -std=c++20 -I/path/to/ytensor -O2 main.cpp -o main
+   ```
+
+3. **在代码中包含主头文件**
+
+   ```cpp
+   #include "ytensor.hpp"
+   
+   int main() {
+       yt::YTensor<float, 2> tensor(3, 4);
+       return 0;
+   }
+   ```
+
+## 启用可选功能
+
+### 启用 OpenMP（并行计算）
+
+OpenMP 用于加速大型张量的计算操作。
+
+**编译时添加 OpenMP 支持**：
+
+```bash
+# GCC
+g++ -std=c++20 -O2 -fopenmp main.cpp -o main
+
+# Clang（需要手动链接 gomp）
+clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+
+# MSVC（Visual Studio）
+cl /std:c++20 /O2 /openmp main.cpp
+```
+
+:::warning
+Clang 编译器使用 OpenMP 时，推荐链接到 `libgomp` 以避免与 Eigen 库的冲突。
+:::
+
+### 启用 Eigen（矩阵乘法加速）
+
+Eigen 是一个高性能的线性代数库，YTensor 可以使用它来加速矩阵乘法。
+
+1. **安装 Eigen**
+
+   **Ubuntu/Debian**:
+   ```bash
+   sudo apt-get install libeigen3-dev
+   ```
+
+   **macOS (Homebrew)**:
+   ```bash
+   brew install eigen
+   ```
+
+   **手动安装**:
+   从 [Eigen 官网](https://eigen.tuxfamily.org/) 下载头文件并解压到系统包含路径。
+
+2. **编译时包含 Eigen 路径**
+
+   YTensor 会自动检测 Eigen 是否可用。确保编译器能找到 Eigen 头文件：
+
+   ```bash
+   # 如果 Eigen 在非标准路径
+   g++ -std=c++20 -O2 -fopenmp -I/usr/include/eigen3 main.cpp -o main
+   ```
+
+3. **验证 Eigen 是否启用**
+
+   编译时，YTensor 会根据 `__has_include(<Eigen/Core>)` 自动启用 Eigen 后端。
+
+### 启用 zlib（文件压缩）
+
+zlib 用于 YTensor 的 I/O 功能，支持压缩张量文件以节省存储空间。
+
+1. **安装 zlib**
+
+   **Ubuntu/Debian**:
+   ```bash
+   sudo apt-get install zlib1g-dev
+   ```
+
+   **macOS (Homebrew)**:
+   ```bash
+   brew install zlib
+   ```
+
+   **Windows**:
+   从 [zlib 官网](https://www.zlib.net/) 下载并安装。
+
+2. **编译时链接 zlib**
+
+   ```bash
+   g++ -std=c++20 -O2 main.cpp -o main -lz
+   ```
+
+### 启用 AVX2 优化（高级）
+
+如果您的 CPU 支持 AVX2 指令集，可以启用自定义的 SIMD 优化。
+
+```bash
+# GCC/Clang
+g++ -std=c++20 -O2 -mavx2 -mfma main.cpp -o main
+
+# MSVC
+cl /std:c++20 /O2 /arch:AVX2 main.cpp
+```
+
+YTensor 会自动检测 `__AVX2__` 和 `__FMA__` 宏并启用相应的优化代码。
+
+## 使用 CMake 构建
+
+如果您的项目使用 CMake，可以参考以下配置：
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(MyProject)
+
+# 设置 C++ 标准
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# 查找可选依赖
+find_package(OpenMP)
+find_package(ZLIB)
+
+# 添加可执行文件
+add_executable(my_app main.cpp)
+
+# 包含 YTensor 头文件路径（如果使用多头文件版本）
+target_include_directories(my_app PRIVATE /path/to/ytensor)
+
+# 链接 OpenMP
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(my_app OpenMP::OpenMP_CXX)
+endif()
+
+# 链接 zlib
+if(ZLIB_FOUND)
+    target_link_libraries(my_app ZLIB::ZLIB)
+endif()
+
+# 启用优化和 AVX2
+if(NOT MSVC)
+    target_compile_options(my_app PRIVATE -O2 -mavx2 -mfma)
+else()
+    target_compile_options(my_app PRIVATE /O2 /arch:AVX2)
+endif()
+```
+
+查看项目根目录的 `CMakeLists.txt` 文件了解完整的配置示例。
+
+## 验证安装
+
+创建一个简单的测试程序来验证 YTensor 是否正确安装：
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 创建一个 2x3 的张量
+    yt::YTensor<float, 2> a(2, 3);
+    a.fill(1.0f);
+    
+    // 输出张量
+    std::cout << "YTensor 安装成功！" << std::endl;
+    std::cout << a << std::endl;
+    
+    // 检查后端
+    #if YT_USE_EIGEN
+        std::cout << "Eigen 后端: 已启用" << std::endl;
+    #else
+        std::cout << "Eigen 后端: 未启用" << std::endl;
+    #endif
+    
+    #if YT_USE_AVX2
+        std::cout << "AVX2 后端: 已启用" << std::endl;
+    #else
+        std::cout << "AVX2 后端: 未启用" << std::endl;
+    #endif
+    
+    return 0;
+}
+```
+
+编译并运行：
+
+```bash
+g++ -std=c++20 -O2 -fopenmp test.cpp -o test
+./test
+```
+
+如果能看到输出，说明 YTensor 已成功安装！
+
+## 下一步
+
+- 查看 [构建选项](./build_options.mdx) 了解更多编译配置
+- 阅读 [快速入门](../api/guides/quick_start.mdx) 开始使用 YTensor
+- 查看 [API 参考](../api/YTensor/overview.mdx) 了解详细功能

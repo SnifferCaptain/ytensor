@@ -1,0 +1,165 @@
+# 与 Python 差异
+
+本指南对比 YTensor 与 NumPy/PyTorch 的主要差异。
+
+## 1. 静态类型和维度
+
+### NumPy/PyTorch（动态）
+
+```python
+import numpy as np
+
+arr = np.array([1, 2, 3])  # 自动推断类型为 int64
+arr = arr.astype(np.float32)  # 运行时转换
+```
+
+### YTensor（静态）
+
+```cpp
+// 编译期指定类型和维度
+YTensor<float, 2> arr(3, 4);
+
+// YTensorBase 提供运行时类型
+YTensorBase arr = YTensorBase::zeros({3, 4}, "float32");
+```
+
+---
+
+## 2. 切片语法
+
+### NumPy
+
+```python
+arr[1:3]      # 普通切片
+arr[::2]      # 步长切片
+arr[::-1]     # 反向
+arr[4:1:-1]   # start > end 时 step 必须为负
+```
+
+### YTensor
+
+```cpp
+tensor.slice(0, 1, 3);       // 维度, 起始, 结束
+tensor.slice(0, 0, 0, 2);    // 步长切片（end=0 表示到末尾）
+tensor.slice(0, 0, 0, -1);   // 反向
+
+// 注意：start 和 end 的关系与 step 无关
+// 使用 autoFix=true 可自动交换
+tensor.slice(0, 4, 2, -1, true);
+```
+
+**关键差异**: YTensor 中 `start` 通常应 ≤ `end-1`，无论 `step` 正负。启用 `autoFix` 可自动处理。
+
+---
+
+## 3. 索引语法
+
+### NumPy
+
+```python
+arr[-1]       # 最后一个元素
+arr[-1, -2]   # 多维负索引
+```
+
+### YTensor
+
+```cpp
+tensor.at(-1);              // 1D：最后一个元素
+tensor.at<float>({-1, -2}); // 多维负索引（YTensorBase）
+
+// 或使用 operator[]（仅 YTensor）
+tensor[-1][-2];
+```
+
+---
+
+
+## 5. 内存管理
+
+### NumPy
+
+- 引用计数 + 垃圾回收
+- 视图自动管理生命周期
+
+### YTensor
+
+- 使用 `std::shared_ptr` 智能指针
+- 视图与原张量共享 `shared_ptr`
+
+```cpp
+// 显式深拷贝
+auto copy = tensor.clone();
+
+// 赋值是浅拷贝
+auto b = a;  // 共享内存
+```
+
+---
+
+## 6. 形状操作返回值
+
+### NumPy
+
+```python
+a = np.zeros((3, 4))
+b = a[1:3]  # 视图
+c = a.copy()  # 副本
+```
+
+### YTensor
+
+```cpp
+auto a = YTensor<float, 2>::zeros(3, 4);
+
+// 视图操作
+auto b = a.slice(0, 1, 3);   // 视图
+auto c = a.transpose();       // 视图
+
+// 副本操作
+auto d = a.clone();           // 副本
+auto e = a + a;               // 新张量
+```
+
+---
+
+## 7. 归约操作形状
+
+### NumPy
+
+```python
+a = np.ones((3, 4, 5))
+b = a.sum(axis=1)  # 形状 (3, 5)，维度被移除
+```
+
+### YTensor
+
+```cpp
+auto a = YTensorBase::ones({3, 4, 5}, "float32");
+auto b = a.sum(1);
+// b.shape() -> {3, 1, 5}（维度保留，大小变为 1）
+
+// 如需移除，使用 squeeze
+auto c = b.squeeze(1);
+// c.shape() -> {3, 5}
+```
+
+---
+
+## 快速对照表
+
+| 功能 | NumPy | YTensor |
+| --- | --- | --- |
+| 创建 | `np.zeros((3, 4))` | `YTensor<float, 2>::zeros(3, 4)` |
+| 切片 | `arr[1:3]` | `tensor.slice(0, 1, 3)` |
+| 转置 | `arr.T` | `tensor.transpose()` |
+| 重塑 | `arr.reshape(6, 2)` | `tensor.reshape(6, 2)` |
+| 克隆 | `arr.copy()` | `tensor.clone()` |
+| 矩阵乘法 | `a @ b` | `a.matmul(b)` |
+
+---
+
+## 相关内容
+
+- [切片操作](../YTensor/shape/slice.mdx) - 切片详解
+- [广播指南](./broadcast_guide.mdx) - 广播规则
+- [常见陷阱](./common_pitfalls.mdx) - 避免常见错误

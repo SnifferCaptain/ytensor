@@ -1,0 +1,78 @@
+# .yt File Format
+
+This document describes the binary file format specification for YTensor.
+
+## File Identifier
+
+```cpp
+static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
+static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
+```
+
+## File Structure
+
+```
++------------------+
+|      Header      |
++------------------+
+|   Metadata (JSON)|
++------------------+
+|   Tensor Index   |
++------------------+
+|   Tensor Data 1  |
++------------------+
+|   Tensor Data 2  |
++------------------+
+|        ...       |
++------------------+
+```
+
+## Header Format
+
+| Offset | Size | Content |
+| --- | --- | --- |
+| 0 | 8 bytes | Magic: "YTENSORF" |
+| 8 | 1 byte | Version number |
+| 9 | ... | Metadata length + JSON |
+
+## Tensor Index
+
+The index for each tensor contains:
+- Tensor name
+- Element type
+- Shape
+- Data offset
+- Compression info
+
+## Usage Example
+
+```cpp
+#include "ytensor_io.hpp"
+
+void verify_file() {
+    yt::io::YTensorIO reader;
+    reader.open("data.yt", yt::io::Read);
+    
+    // Validate file format
+    if (!reader.validateFile()) {
+        std::cerr << "Invalid file format!" << std::endl;
+        return;
+    }
+    
+    // List all tensors
+    auto names = reader.getTensorNames();
+    for (const auto& name : names) {
+        std::cout << "Tensor: " << name << std::endl;
+    }
+    
+    reader.close();
+}
+```
+
+---
+
+## Related Content
+
+- [YTensorIO](./YTensorIO.mdx) - IO class
+- [TensorInfo](./tensor_info.mdx) - Tensor information
+- [Compression Methods](./compression.mdx) - Compression configuration

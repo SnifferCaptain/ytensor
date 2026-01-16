@@ -1,0 +1,108 @@
+# Attention Mechanism
+
+This document describes the attention mechanism functions in the `yt::function` namespace.
+
+## scaledDotProductAttention
+
+### Core Function Description
+
+`scaledDotProductAttention` implements standard Scaled Dot-Product Attention.
+
+This function represents the Scaled Dot-Product Attention operator from the *Attention Is All You Need* paper.
+
+Its standard mathematical formula is:
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
+$$
+
+Here, the `scale` parameter corresponds to $\frac{1}{\sqrt{d_k}}$ in the formula (typically `1 / sqrt(head_dim)`). If a mask is provided, it is applied before softmax (usually by setting mask positions to negative infinity).
+
+It is equivalent to performing the following steps:
+1. Calculate $S = Q \times K^T \times \text{scale}$
+2. If mask is present, $S = S + \text{mask}$
+3. Calculate $P = \text{softmax}(S)$
+4. Output $O = P \times V$
+
+## Function Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> scaledDotProductAttention(
+    YTensor<T, dim>& query,        // [..., n0, c0]
+    YTensor<T, dim>& key,          // [..., n1, c0]
+    YTensor<T, dim>& value,        // [..., n1, c1]
+    T scale = static_cast<T>(0.0),
+    YTensor<T, 2>* mask = nullptr,
+    sdpaBackend backend = sdpaBackend::MATH
+);
+```
+
+## Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `query` | `YTensor<T, dim>&` | - | Query tensor, shape [..., n0, c0] |
+| `key` | `YTensor<T, dim>&` | - | Key tensor, shape [..., n1, c0] |
+| `value` | `YTensor<T, dim>&` | - | Value tensor, shape [..., n1, c1] |
+| `scale` | `T` | `0.0` | Scaling factor. If 0, it's automatically calculated as 1/√c0 |
+| `mask` | `YTensor<T, 2>*` | `nullptr` | Optional attention mask, shape [n0, n1] |
+| `backend` | `sdpaBackend` | `MATH` | Calculation backend |
+
+## sdpaBackend Enum
+
+```cpp
+enum struct sdpaBackend {
+    MATH  // Standard mathematical implementation
+};
+```
+
+## Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Shape**: `[..., n0, c1]`
+
+## Usage Example
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example() {
+    // Batch attention: batch=2, heads=4, seq_len=10, d_k=64
+    auto query = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+    auto key = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+    auto value = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+    
+    // Standard attention
+    auto output = yt::function::scaledDotProductAttention(query, key, value);
+    // output.shape() -> {2, 4, 10, 64}
+    
+    // Masked attention
+    auto mask = yt::YTensor<float, 2>::zeros({10, 10});
+    // Set causal mask (lower triangular)
+    for (int i = 0; i < 10; ++i) {
+        for (int j = i + 1; j < 10; ++j) {
+            mask.at(i, j) = -1e9f;  // Negative infinity
+        }
+    }
+    
+    auto causal_output = yt::function::scaledDotProductAttention(
+        query, key, value, 0.0f, &mask
+    );
+}
+```
+
+## Calculation Process
+
+1. **Score**: `QK^T = matmul(query, key.transpose())`
+2. **Scale**: `QK^T *= scale`
+3. **Mask** (Optional): `QK^T += mask`
+4. **Softmax**: `softmax_(QK^T, -1)`
+5. **Output**: `matmul(softmax_result, value)`
+
+---
+
+## Related Content
+
+- [Matrix Multiplication](./matmul.mdx) - matmul function
+- [Activation Functions](./activation.mdx) - Includes softmax function

@@ -1,0 +1,325 @@
+# Arithmetic Operations
+
+This document describes the arithmetic operator overloading for the `YTensor` class.
+
+---
+
+## Core Function Description
+
+YTensor supports the following arithmetic operators, which can be used for:
+- **Tensor-to-Tensor** operations (with automatic broadcasting)
+- **Tensor-to-Scalar** operations
+
+### Supported Operators
+
+| Operator | Description | In-place Version |
+|----------|-------------|-----------------|
+| `+` | Addition | `+=` |
+| `-` | Subtraction | `-=` |
+| `*` | Element-wise Multiplication | `*=` |
+| `/` | Element-wise Division | `/=` |
+| `%` | Modulo (int) / fmod (float) | `%=` |
+| `&` | Bitwise AND (int) | `&=` |
+| `|` | Bitwise OR (int) | `|=` |
+| `^` | Bitwise XOR (int) | `^=` |
+| `<<` | Left Shift (int) | `<<=` |
+| `>>` | Right Shift (int) | `>>=` |
+| `==` | Equal To | - |
+| `!=` | Not Equal To | - |
+| `<` | Less Than | - |
+| `<=` | Less Than Or Equal | - |
+| `>` | Greater Than | - |
+| `>=` | Greater Than Or Equal | - |
+
+---
+
+## Function Signatures
+
+### Tensor-to-Tensor Operations
+
+```cpp
+template <int dim1>
+YTensor<T, std::max(dim, dim1)> operator+(const YTensor<T, dim1>& other) const;
+
+template <int dim1>
+YTensor<T, std::max(dim, dim1)>& operator+=(const YTensor<T, dim1>& other);
+```
+
+**Note**: Arithmetic and bitwise operators (`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`) follow the same signature pattern. Comparison operators (`==`, `!=`, `<`,...) return `YTensor<bool, dim>`.
+
+### Tensor-to-Scalar Operations
+
+```cpp
+YTensor<T, dim> operator+(const T& other) const;
+YTensor<T, dim>& operator+=(const T& other);
+```
+
+---
+
+## Parameters
+
+| Name | Type | Description |
+|------|------|-------------|
+| `other` | `const YTensor<T, dim1>&` or `const T&` | The right-hand operand (a tensor or a scalar). |
+
+---
+
+## Return Value
+
+- **Non-inplace versions** (`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`): Returns a new tensor containing the result.
+- **In-place versions** (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`): Returns a reference to `*this`.
+
+---
+
+## Usage Examples
+
+### Tensor-to-Scalar Operations
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 3);
+    
+    // Addition
+    auto b = a + 2.0f;  // All elements +2
+    
+    // In-place multiplication
+    a *= 3.0f;  // All elements *3
+    
+    // Method chaining
+    auto c = (a + 1.0f) * 2.0f - 0.5f;
+    
+    return 0;
+}
+```
+
+### Tensor-to-Tensor Operations (Same Shape)
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>({3, 3}, {1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+// Element-wise addition
+auto c = a + b;
+// c[i][j] = a[i][j] + b[i][j]
+
+// Element-wise multiplication
+auto d = a * b;
+// d[i][j] = a[i][j] * b[i][j]
+```
+
+### Broadcasting Operations
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);  // (3, 5)
+auto b = YTensor<float, 1>::ones(5);     // (5,)
+
+// 'b' is automatically broadcast to (3, 5)
+auto c = a + b;
+// c[i][j] = a[i][j] + b[j]
+```
+
+### Operations with Different Dimensions
+
+```cpp
+auto a = YTensor<float, 2>({3, 4});      // 2D
+auto b = YTensor<float, 3>({2, 3, 4});   // 3D
+
+// Return type is automatically deduced as YTensor<float, 3>
+auto c = a + b;  // 'a' is broadcast to (2, 3, 4)
+```
+
+### Modulo Operations
+
+```cpp
+// Integer types: uses operator%
+auto a = YTensor<int, 2>({2, 3}, {10, 15, 20, 25, 30, 35});
+auto b = a % 7;
+// b = {3, 1, 6, 4, 2, 0}
+
+// Floating-point types: uses std::fmod
+auto c = YTensor<float, 2>({2, 3}, {10.5f, 15.3f, 20.7f, 25.2f, 30.8f, 35.1f});
+auto d = c % 7.0f;
+// d = {3.5, 1.3, 6.7, 4.2, 2.8, 0.1}
+```
+
+### Bitwise Operations
+
+```cpp
+auto a = YTensor<int, 2>({2, 2}, {15, 7, 3, 5});  // Binary values
+auto b = YTensor<int, 2>({2, 2}, {9, 12, 6, 10});
+
+// Bitwise AND
+auto c = a & b;  // {9, 4, 2, 0}
+
+// Bitwise OR
+auto d = a | b;  // {15, 15, 7, 15}
+
+// Bitwise XOR
+auto e = a ^ b;  // {6, 11, 5, 15}
+
+// Left Shift
+auto f = a << 1; 
+
+// Comparison
+auto mask = a > 10; // returns boolean tensor
+
+---
+
+## Broadcasting Rules
+
+Broadcasting follows NumPy conventions, comparing dimensions starting from the **rightmost** side:
+
+### Compatible Shapes
+
+```cpp
+(3, 5) + (5,)         → (3, 5)     ✅
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)  ✅
+(2, 3, 4) + (3, 4)     → (2, 3, 4)  ✅
+```
+
+### Incompatible Shapes
+
+```cpp
+(3, 5) + (3, 4)       → Error! Dimensions 5 and 4 cannot broadcast  ❌
+(3, 5) + (4,)         → Error! Dimensions 5 and 4 cannot broadcast  ❌
+```
+
+---
+
+## Type Requirements
+
+Different operators have different requirements for the element type `T`:
+
+| Operator | Type Constraint | Description |
+|----------|-----------------|-------------|
+| `+`, `-`, `*`, `/` | `yt::concepts::HAVE_ADD<T>` etc. | Type must support the corresponding operation. |
+| `%` | Integer or Floating-point | Uses `%` for integers and `fmod` for floats. |
+| `&`, `|`, `^` | Integer types | Bitwise operations are only supported for integers. |
+| `<<`, `>>` | Integer types | Shift operations are only supported for integers. |
+| `==`, `<`, `>`... | All types | Returns boolean tensor. |
+
+### Compile-time Checks
+
+```cpp
+// ✅ Correct: 'float' supports addition
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a + 1.0f;
+
+// ❌ Compile error: 'std::string' does not support standard arithmetic subtraction
+// auto c = YTensor<std::string, 2>(3, 3);
+// auto d = c - std::string("world"); // Compilation fails
+```
+
+---
+
+## Implementation Details
+
+### Internal Mechanism
+
+All operators are implemented using `yt::kernel::broadcast`:
+
+```cpp
+// Non-inplace version
+template <int dim1>
+YTensor<T, std::max(dim, dim1)> operator+(const YTensor<T, dim1>& other) const {
+    return yt::kernel::broadcast([](const T& a, const T& b) {
+        return a + b;
+    }, *this, other);
+}
+
+// In-place version
+template <int dim1>
+YTensor<T, std::max(dim, dim1)>& operator+=(const YTensor<T, dim1>& other) {
+    return this->broadcastInplace([](T& a, const T& b) {
+        return a += b;
+    }, other);
+}
+```
+
+### Performance Optimization
+
+- **In-place operations** (`+=`, `-=`, etc.): No additional memory allocation; the original tensor is modified directly.
+- **Broadcasting optimization**: Internally uses efficient stride calculations to avoid physical data duplication.
+- **Vectorization**: Supports SIMD optimizations (when AVX2 is enabled at compile time).
+
+---
+
+## important Considerations
+
+:::warning
+**Integer vs. Floating-point Division**
+
+```cpp
+auto a = YTensor<int, 2>({2, 2}, {5, 7, 9, 11});
+auto b = a / 2;  // Integer division: {2, 3, 4, 5}
+
+auto c = YTensor<float, 2>({2, 2}, {5.0f, 7.0f, 9.0f, 11.0f});
+auto d = c / 2.0f;  // Floating-point division: {2.5, 3.5, 4.5, 5.5}
+```
+:::
+
+:::warning
+**Division by Zero**
+
+Division and modulo operations **do not check for division by zero**. Behavior is undefined:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a / 0.0f;  // ⚠️ Produces inf or nan
+
+auto c = YTensor<int, 2>::ones(3, 3);
+auto d = c % 0;     // ⚠️ Undefined behavior (may crash)
+```
+:::
+
+:::info
+**In-place Operations and Shared Memory**
+
+In-place operations modify all views that share the same memory:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a;  // 'b' and 'a' share memory
+
+a += 1.0f;   // BOTH 'a' and 'b' change!
+std::cout << b.at(0, 0);  // Output: 2.0
+```
+:::
+
+:::info
+**Dimensions of the Returned Tensor**
+
+When performing operations between two tensors, the returned dimension count is `std::max(dim, dim1)`:
+
+```cpp
+auto a = YTensor<float, 2>(3, 4);    // 2D
+auto b = YTensor<float, 3>(2, 3, 4); // 3D
+auto c = a + b;                     // 'c' is YTensor<float, 3>
+```
+:::
+
+---
+
+## Performance Comparison
+
+| Operation | Complexity | Memory Allocation |
+|-----------|-----------|-------------------|
+| `a + b` | O(n) | New tensor |
+| `a += b` | O(n) | None |
+| `a + scalar` | O(n) | New tensor |
+| `a += scalar` | O(n) | None |
+
+**Recommendation**: Use in-place operations (`+=`, `*=`, etc.) whenever possible to maximize performance.
+
+---
+
+## Related Content
+
+- [Broadcasting Operations](./broadcast.mdx) - Detailed broadcasting mechanism.
+- [Matrix Multiplication](./matmul.mdx) - Matrix multiplication operations.
+- [Broadcasting Guide](../../guides/broadcast_guide.mdx) - In-depth look at broadcasting rules.
+- [Performance Optimization](../../guides/performance_tips.mdx) - Performance optimization techniques for operations.

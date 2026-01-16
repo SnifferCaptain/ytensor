@@ -1,0 +1,165 @@
+# Matrix Multiplication
+
+This document describes the matrix multiplication methods for the `YTensorBase` class.
+
+## Overview
+
+| Method | Return Type | Description |
+| --- | --- | --- |
+| `matmul()` | `YTensorBase` | Batch matrix multiplication. |
+| `matView()` | `YTensorBase` | Returns a matrix view where each "element" is a 2D sub-tensor. |
+
+---
+
+## `matmul()`
+
+### Function Signature
+
+```cpp
+YTensorBase matmul(const YTensorBase& other) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `other` | `const YTensorBase&` | The right-hand matrix. The last two dimensions must satisfy matrix multiplication rules. |
+
+### Core Function Description
+
+Performs matrix multiplication.
+*   Supports 2D matrix multiplication and high-dimensional batch matrix multiplication.
+*   The last two dimensions must satisfy matrix multiplication rules (M x K) * (K x N) -> (M x N).
+*   Other dimensions follow broadcasting rules.
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**: Returns the result of matrix multiplication as a new tensor.
+
+### Requirements and Constraints
+
+1. Both tensors must have `ndim() >= 1`.
+2. Both tensors must have the same `dtype()`.
+3. The last dimension of `this` must match the second-to-last dimension of `other` (inner dimension matching).
+
+### Usage Examples
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 2D Matrix Multiplication
+    YTensorBase a = YTensorBase::zeros({3, 4}, "float32");
+    YTensorBase b = YTensorBase::zeros({4, 5}, "float32");
+    YTensorBase c = a.matmul(b);
+    // c.shape() -> {3, 5}
+    
+    // Batch Matrix Multiplication
+    YTensorBase d = YTensorBase::zeros({2, 3, 4}, "float32");
+    YTensorBase e = YTensorBase::zeros({2, 4, 5}, "float32");
+    YTensorBase f = d.matmul(e);
+    // f.shape() -> {2, 3, 5}
+}
+```
+
+### Broadcasting Rules
+
+Dimensions other than the last two follow standard broadcasting rules:
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 1, 3, 4}, "float32");
+YTensorBase b = YTensorBase::zeros({1, 5, 4, 6}, "float32");
+YTensorBase c = a.matmul(b);
+// c.shape() -> {2, 5, 3, 6}
+```
+
+### 1D Tensor Handling
+
+In `matmul`, 1D tensors are treated as row vectors ($1 \times N$) or column vectors ($N \times 1$):
+- 1D left operand: Treated as a row vector of shape `{1, N}`.
+- 1D right operand: Treated as a column vector of shape `{N, 1}`.
+
+---
+
+## `matView()`
+
+### Function Signature
+
+```cpp
+YTensorBase matView() const;
+```
+
+### Core Function Description
+
+Treats the last two dimensions of the tensor as a 2D matrix and returns a specialized `YTensorBase`.
+*   Each "element" is a 2D sub-tensor view.
+*   `dtype()` returns "YTensorBase".
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**:
+  - The returned tensor has `dtype() == "YTensorBase"`.
+  - Each "element" is a view of a 2D sub-tensor.
+  - `element_size == sizeof(YTensorBase)`.
+
+### Usage Examples
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5, 6}, "float32");
+
+YTensorBase mv = tensor.matView();
+// mv.shape() -> {3, 4}
+// mv.dtype() -> "YTensorBase"
+// Each "element" is a 2D tensor view of shape [5, 6]
+
+// Special cases
+YTensorBase vec = YTensorBase::zeros({10}, "float32");
+YTensorBase mv_1d = vec.matView();
+// mv_1d.shape() -> {1}
+// The single element is a 2D view of shape [1, 10]
+
+YTensorBase mat = YTensorBase::zeros({3, 4}, "float32");
+YTensorBase mv_2d = mat.matView();
+// mv_2d.shape() -> {1}
+// The single element is a 2D view of shape [3, 4]
+```
+
+---
+
+## Backend Selection
+
+Matrix multiplication supports multiple backends, which are selected automatically based on compilation options:
+
+| Backend | Macro | Priority | Description |
+| --- | --- | --- | --- |
+| Eigen | `YT_USE_EIGEN=1` | High | Implemented using the Eigen library. |
+| Naive | Default | Low | Implemented using a standard triple loop. |
+
+```cpp
+// Backend selection at compile-time
+#if YT_USE_EIGEN
+    return matmul_eigen_backend(other);
+#else
+    return matmul_naive_impl<DType>(*this, other);
+#endif
+```
+
+---
+
+## Error Cases
+
+| Case | Exception Type |
+| --- | --- |
+| `ndim < 1` | `std::runtime_error` |
+| `dtype` mismatch | `std::runtime_error` |
+| Inner dimensions mismatch | `std::runtime_error` |
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Element-wise operations.
+- [Broadcasting Operations](./broadcast.mdx) - The `broadcastInplace` method.
+- [Reduction Operations](./reduction.mdx) - Methods like `sum` and `max`.

@@ -1,0 +1,307 @@
+# YTensor 类概览
+
+`YTensor` 是 YTensor 库的核心模板类，提供编译时类型安全的多维数组容器。它继承自 `YTensorBase`，在保留运行时灵活性的同时，提供更好的类型安全性和性能。
+
+## 类定义
+
+```cpp
+template <typename T = float, int dim = 1>
+class YTensor : public YTensorBase
+```
+
+**定义位置**: `include/ytensor_core.hpp`
+
+## 模板参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `T` | `typename` | `float` | 张量元素的数据类型（如 `float`、`double`、`int`） |
+| `dim` | `int` | `1` | 张量的维度数（编译时常量） |
+
+### 支持的数据类型
+
+`T` 参数可以是任何满足以下条件的类型：
+
+**标准数值类型**:
+- `float` (float32)
+- `double` (float64)
+- `int32_t`, `int64_t`
+- `uint32_t`, `uint64_t`
+- `int8_t`, `uint8_t`
+- `int16_t`, `uint16_t`
+
+**扩展类型**:
+- `yt::float16` (半精度浮点)
+- `yt::bfloat16` (脑浮点)
+
+:::info
+自定义类型需要满足相应的运算符要求（参见 `include/ytensor_concepts.hpp` 中定义的 concept）。
+:::
+
+### 维度参数
+
+`dim` 参数是编译时常量，表示张量的维度数：
+
+- `dim = 1`: 一维张量（向量）
+- `dim = 2`: 二维张量（矩阵）
+- `dim = 3`: 三维张量
+- `dim = N`: N维张量（理论上支持任意维度）
+
+## 公有类型别名
+
+```cpp
+using scalarType = T;           // 元素类型别名
+static constexpr int ndim = dim; // 维度数常量
+```
+
+**示例**:
+```cpp
+YTensor<float, 3> tensor(2, 3, 4);
+
+using ElemType = YTensor<float, 3>::scalarType;  // ElemType = float
+constexpr int dims = YTensor<float, 3>::ndim;    // dims = 3
+```
+
+## 与 YTensorBase 的关系
+
+`YTensor<T, dim>` 继承自 `YTensorBase`，两者的关系和适用场景：
+
+| 特性 | YTensor&lt;T, dim&gt; | YTensorBase |
+| --- | --- | --- |
+| **类型安全** | 编译时类型检查 | 运行时类型擦除 |
+| **性能** | 更优（编译器优化） | 略低（虚函数开销） |
+| **灵活性** | 类型和维度固定 | 类型和维度可变 |
+| **适用场景** | 已知类型和维度 | 动态类型或容器存储 |
+
+**继承示意**:
+```cpp
+YTensorBase (基类)
+    ↑
+    |
+YTensor<T, dim> (派生类)
+```
+
+**转换**:
+```cpp
+// YTensor 可以隐式转换为 YTensorBase
+YTensor<float, 2> a(3, 4);
+YTensorBase base = a;  // 向上转型（安全）
+
+// YTensorBase 可以显式转换为 YTensor（需要类型匹配）
+YTensor<float, 2> b(base);  // 显式构造（如果类型不匹配会有未定义行为）
+```
+
+:::warning
+从 `YTensorBase` 构造 `YTensor<T, dim>` 时，必须确保类型 `T` 和维度 `dim` 与源张量匹配，否则行为未定义。
+:::
+
+## 核心概念
+
+### 编译时 vs 运行时
+
+`YTensor` 的主要优势是编译时确定类型和维度：
+
+```cpp
+// 编译时类型检查
+YTensor<float, 2> a(3, 4);
+YTensor<int, 2> b(3, 4);
+// auto c = a + b;  // 编译错误：类型不匹配
+
+// 编译时维度检查
+YTensor<float, 2> x(3, 4);
+YTensor<float, 3> y(3, 4, 5);
+// auto z = x + y;  // 编译错误：维度不匹配
+```
+
+### View 语义
+
+大多数形状操作（`slice`、`permute`、`view` 等）返回的是原数据的**视图（View）**，而非拷贝：
+
+```cpp
+YTensor<float, 2> a(3, 4);
+auto b = a.slice(0, 1, 3);  // b 是 a 的视图，共享内存
+
+b.at(0, 0) = 10.0f;  // 修改 b 也会影响 a
+```
+
+查看 [内存模型](../guides/memory_model.mdx) 了解详细说明。
+
+### Contiguous（连续性）
+
+张量可能是**连续的**或**非连续的**：
+
+- **连续张量**: 元素在内存中按行优先（C风格）顺序存储
+- **非连续张量**: 经过切片、转置等操作后，元素在内存中不连续
+
+某些操作（如 `view`）要求张量必须是连续的。使用 `contiguous()` 可以获取连续版本。
+
+```cpp
+YTensor<float, 2> a(3, 4);
+auto b = a.transpose();     // b 是非连续的
+bool isCont = b.isContiguous();  // false
+
+auto c = b.contiguous();    // c 是连续的新张量
+```
+
+## 基本使用示例
+
+### 创建张量
+
+```cpp
+#include "ytensor_single.hpp"
+
+// 方法1：指定形状（元素未初始化）
+yt::YTensor<float, 2> a(3, 4);
+
+// 方法2：使用向量指定形状
+std::vector<int> shape = {3, 4};
+yt::YTensor<float, 2> b(shape);
+
+// 方法3：初始化列表
+yt::YTensor<float, 2> c = {3, 4};
+
+// 方法4：静态工厂方法
+auto zeros = yt::YTensor<float, 2>::zeros(3, 4);    // 全0
+auto ones = yt::YTensor<float, 2>::ones(3, 4);      // 全1
+auto randn = yt::YTensor<float, 2>::randn(3, 4);    // 正态分布 N(0,1)
+auto randu = yt::YTensor<float, 2>::randu(3, 4);    // 均匀分布 U(0,1)
+```
+
+### 访问元素
+
+```cpp
+yt::YTensor<float, 2> a(3, 4);
+
+// 方法1：at() 方法（推荐，有边界检查）
+a.at(1, 2) = 5.0f;
+float val = a.at(1, 2);
+
+// 方法2：operator[] 多级下标
+a[1][2] = 5.0f;
+
+// 方法3：一维向量访问
+std::vector<int> idx = {1, 2};
+a.at(idx) = 5.0f;
+```
+
+### 形状操作
+
+```cpp
+yt::YTensor<float, 3> a(2, 3, 4);
+
+// 切片
+auto sliced = a.slice(1, 1, 3);  // 在维度1上切片 [1, 3)
+
+// 转置
+auto transposed = a.transpose(0, 2);  // 交换维度0和2
+
+// 重塑
+auto reshaped = a.view(2, 12);  // 改变为 [2, 12] 形状
+
+// 维度操作
+auto squeezed = a.squeeze(0);     // 移除大小为1的维度
+auto unsqueezed = a.unsqueeze(0); // 插入大小为1的维度
+```
+
+### 数学运算
+
+```cpp
+yt::YTensor<float, 2> a(3, 4);
+yt::YTensor<float, 2> b(3, 4);
+
+// 元素级运算
+auto c = a + b;
+auto d = a * 2.0f;
+auto e = a / b;
+
+// 原地运算
+a += b;
+a *= 2.0f;
+
+// 矩阵乘法
+yt::YTensor<float, 2> x(3, 4);
+yt::YTensor<float, 2> y(4, 5);
+auto z = x.matmul(y);  // 结果形状: [3, 5]
+```
+
+## 内存管理
+
+`YTensor` 使用智能指针 (`std::shared_ptr`) 管理内存：
+
+- **自动释放**: 不需要手动释放内存
+- **浅拷贝**: 默认的拷贝构造和赋值是浅拷贝（共享数据）
+- **深拷贝**: 使用 `clone()` 方法创建独立副本
+
+```cpp
+YTensor<float, 2> a(3, 4);
+
+// 浅拷贝（共享内存）
+YTensor<float, 2> b = a;
+b.at(0, 0) = 10.0f;  // a 和 b 都受影响
+
+// 深拷贝（独立内存）
+YTensor<float, 2> c = a.clone();
+c.at(0, 0) = 20.0f;  // 只有 c 受影响
+```
+
+## 性能考虑
+
+### 编译时优化
+
+由于 `T` 和 `dim` 是编译时常量，编译器可以进行更激进的优化：
+
+- 内联更多函数
+- 循环展开
+- 常量传播
+- SIMD 向量化
+
+### 推荐使用模式
+
+1. **明确类型和维度时优先使用 `YTensor<T, dim>`**
+2. **需要容器存储或动态类型时使用 `YTensorBase`**
+3. **频繁访问元素时使用 `at()` 而非 `operator[]`**
+4. **大型张量运算前确保 contiguous**
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 创建一个 3x4 的矩阵
+    yt::YTensor<float, 2> matrix = yt::YTensor<float, 2>::zeros(3, 4);
+    
+    // 填充数据
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            matrix.at(i, j) = static_cast<float>(i * 4 + j);
+        }
+    }
+    
+    // 打印矩阵
+    std::cout << "原始矩阵:\n" << matrix << std::endl;
+    
+    // 切片操作
+    auto subMatrix = matrix.slice(0, 1, 3).slice(1, 1, 3);
+    std::cout << "切片 [1:3, 1:3]:\n" << subMatrix << std::endl;
+    
+    // 转置
+    auto transposed = matrix.transpose();
+    std::cout << "转置矩阵:\n" << transposed << std::endl;
+    
+    // 数学运算
+    auto doubled = matrix * 2.0f;
+    std::cout << "乘以2:\n" << doubled << std::endl;
+    
+    return 0;
+}
+```
+
+## 下一步
+
+- [构造函数详解](./construction/constructors.mdx) - 了解所有创建张量的方式
+- [元素访问](./access/indexing.mdx) - 掌握不同的访问方法
+- [形状操作](./shape/query.mdx) - 学习形状查询和变换
+- [数学运算](./math/arithmetic.mdx) - 探索数学运算符
+- [快速入门指南](../guides/quick_start.mdx) - 完整的使用示例

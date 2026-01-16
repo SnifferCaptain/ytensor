@@ -24,10 +24,10 @@ yt::YTensor<T, dim>& broadcastInplace(Func&& func, Args&&... tensors);
 /// @brief YTensor的算术运算符，一次性支持Tensor op Scalar 或者 Tensor op Tensor 的原地以及非原地操作。
 #define YT_YTENSOR_OPERATOR_DEF(op)                                                   \
     template <int dim1>                                                               \
-    yt::YTensor<T, std::max(dim, dim1)> operator op(const yt::YTensor<T, dim1> &other) const; \
+    auto operator op(const yt::YTensor<T, dim1> &other) const;                        \
     template <int dim1>                                                               \
     yt::YTensor<T, std::max(dim, dim1)>& operator op##=(const yt::YTensor<T, dim1> &other);   \
-    yt::YTensor<T, dim> operator op(const T &other) const;                                \
+    auto operator op(const T &other) const;                                           \
     yt::YTensor<T, dim>& operator op##=(const T &other);
 
 YT_YTENSOR_OPERATOR_DEF(+)
@@ -38,8 +38,25 @@ YT_YTENSOR_OPERATOR_DEF(%)
 YT_YTENSOR_OPERATOR_DEF(&)
 YT_YTENSOR_OPERATOR_DEF(|)
 YT_YTENSOR_OPERATOR_DEF(^)
+YT_YTENSOR_OPERATOR_DEF(<<)
+YT_YTENSOR_OPERATOR_DEF(>>)
 
 #undef YT_YTENSOR_OPERATOR_DEF
+
+/// @brief YTensor的比较运算符，返回YTensor<bool, dim>
+#define YT_YTENSOR_CMP_OPERATOR_DEF(op)                                               \
+    template <int dim1>                                                               \
+    auto operator op(const yt::YTensor<T, dim1> &other) const;                        \
+    auto operator op(const T &other) const;
+
+YT_YTENSOR_CMP_OPERATOR_DEF(<)
+YT_YTENSOR_CMP_OPERATOR_DEF(<=)
+YT_YTENSOR_CMP_OPERATOR_DEF(>)
+YT_YTENSOR_CMP_OPERATOR_DEF(>=)
+YT_YTENSOR_CMP_OPERATOR_DEF(==)
+YT_YTENSOR_CMP_OPERATOR_DEF(!=)
+
+#undef YT_YTENSOR_CMP_OPERATOR_DEF
 
 /// @brief 矩阵视图，将张量的最后两个维度视为YTensor<T, 2>的矩阵作为标量。
 /// @return 矩阵视图
@@ -82,7 +99,7 @@ std::pair<T, int> max(int axis = 0) const requires (dim == 1);
 /// @param other: 右张量输入。
 /// @return 矩阵乘法结果张量。
 template<int dim1>
-yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_zero_backend(const yt::YTensor<T, dim1>& other) const;
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_naive_backend(const yt::YTensor<T, dim1>& other) const;
 
 /////////////// Eigen support ///////////////
 #if YT_USE_EIGEN
@@ -115,4 +132,3 @@ public: // end of ytensor_math.hpp
 // ********************************
 // TODO:
 // 1. <<左右移运算符仍然未支持
-// 2. 返回布尔值的运算符尚未支持

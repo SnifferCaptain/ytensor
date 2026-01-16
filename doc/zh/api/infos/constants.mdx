@@ -1,0 +1,67 @@
+# 全局常量
+
+本文档介绍 `yt::infos` 命名空间中的全局常量和配置。
+
+## 文件格式常量
+
+```cpp
+static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
+static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
+```
+
+## 随机数生成
+
+```cpp
+inline std::mt19937 gen = std::mt19937(std::random_device{}());
+inline std::mutex rngMutex;
+```
+
+使用时需要加锁：
+```cpp
+std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
+// 使用 yt::infos::gen
+```
+
+## 舍入模式
+
+```cpp
+enum class RoundMode {
+    nearest = 0,     // 四舍五入
+    nearestEven = 1, // 银行家舍入（默认）
+    truncate = 2     // 直接截断
+};
+
+static constexpr RoundMode roundMode = RoundMode::nearestEven;
+```
+
+:::note
+此舍入模式主要影响 **BF16 (bfloat16)** 类型的转换和运算精度。
+`nearestEven`（银行家舍入）通常能提供比简单的四舍五入或截断更好的统计无偏性。
+:::
+```
+
+## 并行化阈值
+
+```cpp
+static constexpr double minParOps = 29609.;  // 最小并行操作数
+```
+
+## 操作代价常量
+
+```cpp
+// 浮点运算
+static constexpr double flopAdd = 1.;
+static constexpr double flopMul = 1.;
+static constexpr double flopDiv = 1.;
+
+// 整数运算
+static constexpr double ilopAdd = 3.38;
+static constexpr double ilopMul = 3.38;
+```
+
+---
+
+## 相关内容
+
+- [后端系统](./backend.mdx) - MatmulBackend 配置
+- [类型注册](./types.mdx) - TypeRegItem 结构

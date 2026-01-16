@@ -1,0 +1,473 @@
+# Broadcasting Operations
+
+This document describes the broadcasting functionality in YTensor.
+
+---
+
+## Overview
+
+Broadcasting is a powerful mechanism that allows tensors of different shapes to undergo element-wise operations without physically duplicating data. YTensor provides flexible broadcasting interfaces:
+
+- **Automatic Broadcasting**: Standard operators (`+`, `-`, `*`, etc.) handle broadcasting automatically.
+- **In-place Broadcasting**: The `broadcastInplace()` method modifies the current tensor in place.
+- **Custom Function Broadcasting**: The `yt::kernel::broadcast()` function applies custom operations across tensors.
+
+---
+
+## broadcastInplace()
+
+### Core Function Description
+
+Performs an in-place broadcasting operation, applying a custom function to the current tensor and other tensors/scalars.
+
+### Function Signature
+
+```cpp
+template <typename Func, typename... Args>
+YTensor<T, dim>& broadcastInplace(Func&& func, Args&&... tensors);
+```
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `func` | `Func&&` | The operation function, with a signature like `void func(T&, const T&, ...)` or `T func(T&, const T&, ...)`. |
+| `tensors` | `Args&&...` | A variadic list of input tensors or scalars. |
+
+### Function Signature Requirements
+
+The first parameter of `func` must be `T&` (a reference to an element of the current tensor). Subsequent parameters correspond to the elements of `tensors`:
+
+```cpp
+// Binary operation
+void func(T& a, const T& b);                 // 'a' is from the current tensor, 'b' is from tensors[0]
+
+// Ternary operation
+void func(T& a, const T& b, const T& c);     // 'a' is from the current tensor, 'b' from tensors[0], 'c' from tensors[1]
+
+// N-ary operation
+void func(T& a, const T& arg1, const T& arg2, ..., const T& argN);
+```
+
+### Return Value
+
+Returns `YTensor<T, dim>&`, which is a reference to the current tensor (allowing method chaining).
+
+### Usage Examples
+
+#### Binary In-place Operation
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 5);
+    auto b = YTensor<float, 1>::ones(5);
+    
+    // In-place addition: a[i][j] += b[j]
+    a.broadcastInplace([](float& x, const float& y) {
+        x += y;
+    }, b);
+    
+    // Equivalent to: a += b;
+    
+    return 0;
+}
+```
+
+#### Ternary In-place Operation
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);
+auto b = YTensor<float, 2>::ones(3, 5);
+auto c = YTensor<float, 1>::ones(5);
+
+// a[i][j] = a[i][j] * b[i][j] + c[j]
+a.broadcastInplace([](float& x, const float& y, const float& z) {
+    x = x * y + z;
+}, b, c);
+```
+
+#### Using Scalar Parameters
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);
+
+// a[i][j] = a[i][j] * 2.0f + 1.0f
+a.broadcastInplace([](float& x, const float& scale, const float& bias) {
+    x = x * scale + bias;
+}, 2.0f, 1.0f);
+```
+
+#### Complex Operations
+
+```cpp
+auto a = YTensor<float, 2>::zeros(3, 5);
+auto weights = YTensor<float, 2>::randn(3, 5);
+auto bias = YTensor<float, 1>::ones(5);
+
+// Fused multiply-add: a = weights * input + bias
+float input = 0.5f;
+a.broadcastInplace([input](float& out, const float& w, const float& b) {
+    out = w * input + b;
+}, weights, bias);
+```
+
+---
+
+## yt::kernel::broadcast()
+
+### Core Function Description
+
+A non-inplace broadcasting operation that creates a new tensor to store the results.
+
+### Function Signature
+
+```cpp
+template <typename Func, typename... Args>
+auto broadcast(Func&& func, Args&&... tensors);
+```
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `func` | `Func&&` | The operation function, with a signature like `R func(const T&, const T&, ...)`. |
+| `tensors` | `Args&&...` | A variadic list of input tensors or scalars. |
+
+### Function Signature Requirements
+
+All parameters of `func` are `const T&` (read-only). The return type `R` determines the element type of the resulting tensor:
+
+```cpp
+// Binary operation
+float func(const float& a, const float& b) {
+    return a + b;
+}
+
+// Ternary operation
+double func(const float& a, const float& b, const float& c) {
+    return static_cast<double>(a) * b + c;  // Return type is double
+}
+```
+
+### Return Value
+
+Returns a `YTensor<R, dim>`, where:
+- `R` is the return type of `func`.
+- `dim` is the maximum dimension count among the input tensors.
+
+### Usage Examples
+
+#### Basic Usage
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 5);
+    auto b = YTensor<float, 1>::ones(5);
+    
+    // Non-inplace addition
+    auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+        return x + y;
+    }, a, b);
+    
+    // 'c' is a new tensor; 'a' and 'b' remain unchanged.
+    
+    return 0;
+}
+```
+
+#### Type Conversion
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>::ones(3, 3);
+
+// Returns YTensor<double, 2>
+auto c = yt::kernel::broadcast([](const float& x, const float& y) -> double {
+    return static_cast<double>(x) * y;
+}, a, b);
+```
+
+#### Multi-input Operations
+
+```cpp
+auto a = YTensor<float, 2>(3, 5);
+auto b = YTensor<float, 2>(3, 5);
+auto c = YTensor<float, 1>(5);
+
+// Three-input operation
+auto result = yt::kernel::broadcast(
+    [](const float& x, const float& y, const float& z) {
+        return x * y + z;
+    }, a, b, c);
+```
+
+---
+
+## Broadcasting Rules
+
+Broadcasting follows NumPy conventions, comparing dimensions starting from the **rightmost** ones:
+
+### Compatibility Conditions
+
+Two dimensions are compatible if:
+1. They are equal in size, OR
+2. One of the dimensions is 1, OR
+3. One of the tensors is missing that dimension (it is treated as 1).
+
+### Examples
+
+```cpp
+// ✅ Compatible
+(3, 5) + (5,)         → (3, 5)
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)
+(2, 3, 4) + (3, 4)     → (2, 3, 4)
+(1, 5) + (3, 5)       → (3, 5)
+
+// ❌ Incompatible
+(3, 5) + (3, 4)       → Error: Dimensions 5 and 4 are incompatible
+(3, 5) + (4,)         → Error: Dimensions 5 and 4 are incompatible
+```
+
+---
+
+## Performance Optimization
+
+### Contiguous Memory Optimization
+
+When all tensors are stored contiguously and share the same shape, `broadcast` follows a fast-path:
+
+```cpp
+auto a = YTensor<float, 2>::ones(1000, 1000);  // Contiguous
+auto b = YTensor<float, 2>::ones(1000, 1000);  // Contiguous
+
+// Fast-path: Direct pointer access
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+### Non-contiguous Memory
+
+For non-contiguous tensors (e.g., slices or transposed tensors), `broadcast` uses stride-based calculations:
+
+```cpp
+auto a = YTensor<float, 2>::ones(1000, 1000);
+auto b = a.transpose(0, 1);  // Non-contiguous
+    
+// Slow-path: Stride-indexed access
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+### Parallelization
+
+`broadcast` is automatically parallelized using `yt::kernel::parallelFor`:
+
+```cpp
+// Large tensors are handled in parallel
+auto a = YTensor<float, 2>::randn(10000, 10000);
+auto b = YTensor<float, 2>::randn(10000, 10000);
+
+// Multi-threaded execution
+auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x * y + 0.5f;
+}, a, b);
+```
+
+---
+
+## broadcastInplace Restrictions
+
+### Shape Requirements
+
+`broadcastInplace` requires that the **target tensor's shape must match the final broadcasted shape**:
+
+```cpp
+auto a = YTensor<float, 2>(3, 5);  // Shape: (3, 5)
+auto b = YTensor<float, 1>(5);     // Shape: (5,)
+
+// ✅ Correct: Resulting broadcast shape is (3, 5), which matches 'a'
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ❌ Incorrect: 'b' has shape (5,), but the broadcast shape is (3, 5)
+// b.broadcastInplace([](float& x, const float& y) {
+//     x += y;
+// }, a);  // Runtime Error!
+```
+
+### Error Case
+
+```cpp
+auto a = YTensor<float, 2>(3, 1);  // Shape: (3, 1)
+auto b = YTensor<float, 2>(3, 5);  // Shape: (3, 5)
+
+// ❌ Runtime Error: Shape (3, 1) != Broadcasted shape (3, 5)
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// Error Message: 
+// "broadcastInplace: target tensor shape must match broadcast shape"
+```
+
+---
+
+## Implementation Details
+
+### Maximum Subelement Ratio
+
+```cpp
+static constexpr double MAX_SUBELEMENT_RATIO = 2.5;
+```
+
+When the ratio of "effective elements" to "actually accessed elements" exceeds 2.5 during broadcasting, the traversal strategy changes:
+
+- **Ratio < 2.5**: Traverses the underlying storage using a boolean mask (faster).
+- **Ratio ≥ 2.5**: Uses stride-based traversal (more memory efficient).
+
+### Compile-time Optimization
+
+`broadcast` determines the number of tensors at compile-time and uses template recursion to unroll inner loops:
+
+```cpp
+template<size_t N, size_t I = 0>
+struct IndexAccumulator {
+    // Unrolls accumulation N times at compile-time
+    template<typename StridesArray, typename IndicesArray>
+    static inline void accumulate(/*...*/) {
+        indices[I] += posi * strides[I][dimIdx];
+        if constexpr (I + 1 < N) {
+            IndexAccumulator<N, I + 1>::accumulate(/*...*/);
+        }
+    }
+};
+```
+
+---
+
+## important Considerations
+
+:::warning
+**Memory Sharing Risks**
+
+`broadcastInplace` modifies the original tensor. All views sharing the same memory will be affected:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a;  // 'b' and 'a' share memory
+
+a.broadcastInplace([](float& x, const float& y) {
+    x *= y;
+}, 2.0f);
+
+// Both 'a' and 'b' have changed!
+std::cout << b.at(0, 0);  // Output: 2.0
+```
+:::
+
+:::warning
+**Function Signature Errors**
+
+The function signature must match exactly:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+
+// ❌ Error: The first parameter must be T& (a reference)
+a.broadcastInplace([](float x, const float& y) {  // Missing '&'
+    x += y;
+}, 1.0f);
+// Results in a compilation error or no effect!
+
+// ✅ Correct
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, 1.0f);
+```
+:::
+
+:::info
+**Type Inference**
+
+`broadcast` infers the element type of the result tensor from the return type of `func`:
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>::ones(3, 3);
+
+// Returns YTensor<int, 2>
+auto c = yt::kernel::broadcast([](const float& x, const float& y) -> int {
+    return static_cast<int>(x + y);
+}, a, b);
+```
+:::
+
+---
+
+## Best Practices
+
+### 1. Prefer Operators
+
+For simple operations, using standard operators is more concise:
+
+```cpp
+// ❌ Verbose
+a.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ✅ Concise
+a += b;
+```
+
+### 2. Use `broadcast` for Complex Operations
+
+For complex fused operations, `broadcastInplace` is far more efficient:
+
+```cpp
+// ❌ Inefficient: Multiple traversals
+a = a * weights + bias;
+a = a.relu();
+
+// ✅ Efficient: Single traversal
+a.broadcastInplace([](float& x, const float& w, const float& b) {
+    x = x * w + b;
+    if (x < 0) x = 0;  // relu logic
+}, weights, bias);
+```
+
+### 3. Avoid Unintentional In-place Operations
+
+If you need to preserve the original data, use the non-inplace version:
+
+```cpp
+// ❌ Incorrect: 'a' will be modified
+auto result = a; 
+result.broadcastInplace([](float& x, const float& y) {
+    x += y;
+}, b);
+
+// ✅ Correct: 'a' remains unchanged
+auto result = yt::kernel::broadcast([](const float& x, const float& y) {
+    return x + y;
+}, a, b);
+```
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Broadcasting with operators.
+- [Broadcasting Guide](../../guides/broadcast_guide.mdx) - In-depth look at broadcasting rules.
+- [Performance Optimization](../../guides/performance_tips.mdx) - Optimization tips for broadcasting.

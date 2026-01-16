@@ -1,0 +1,135 @@
+# 广播指南
+
+本指南详解 YTensor 的广播机制。
+
+## 广播规则
+
+YTensor 遵循 **NumPy 广播规则**，从**最右侧维度**开始比较。
+
+### 维度匹配条件
+
+两个维度兼容的条件：
+1. **相等**：维度大小相同
+2. **其中一个为 1**：大小为 1 的维度会被"拉伸"
+
+### 维度对齐
+
+不存在的维度视为 1。比较时从右向左对齐。
+
+---
+
+## 示例
+
+### 兼容的形状
+
+```cpp
+// (3, 4) + (4,) → (3, 4)
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = YTensor<float, 1>::ones(4);
+auto c = a + b;  // ✅ b 广播到每一行
+
+// (3, 1, 5) + (3, 4, 5) → (3, 4, 5)
+auto d = YTensor<float, 3>::ones(3, 1, 5);
+auto e = YTensor<float, 3>::ones(3, 4, 5);
+auto f = d + e;  // ✅ d 的第二维从 1 扩展到 4
+
+// (2, 3, 4) + (3, 4) → (2, 3, 4)
+auto g = YTensor<float, 3>::ones(2, 3, 4);
+auto h = YTensor<float, 2>::ones(3, 4);
+auto i = g + h;  // ✅ h 前面补 1 变成 (1, 3, 4)
+```
+
+### 不兼容的形状
+
+```cpp
+// (3, 5) + (3, 4) → 错误！
+auto a = YTensor<float, 2>::ones(3, 5);
+auto b = YTensor<float, 2>::ones(3, 4);
+// auto c = a + b;  // ❌ 5 和 4 无法广播
+
+// (3, 5) + (4,) → 错误！
+auto d = YTensor<float, 1>::ones(4);
+// auto e = a + d;  // ❌ 5 和 4 无法广播
+```
+
+---
+
+## 广播步骤图解
+
+```
+形状 A: [    3, 1, 5]
+形状 B: [    3, 4, 5]
+        ↓  ↓  ↓  ↓
+结果：  [    3, 4, 5]
+
+解释：
+- 维度 0：3 == 3 ✓
+- 维度 1：1 可广播到 4 ✓
+- 维度 2：5 == 5 ✓
+```
+
+```
+形状 A: [       3, 4]   → 补齐为 [1, 3, 4]
+形状 B: [    2, 3, 4]
+        ↓  ↓  ↓  ↓
+结果：  [    2, 3, 4]
+```
+
+---
+
+## 实际应用
+
+### 逐行操作
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+auto row_values = YTensor<float, 1>::ones(10);
+
+// 每行加上 row_values
+auto result = data + row_values;  // (100, 10) + (10,) → (100, 10)
+```
+
+### 逐列操作
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+auto col_values = YTensor<float, 2>::ones(100, 1);
+
+// 每列加上 col_values
+auto result = data + col_values;  // (100, 10) + (100, 1) → (100, 10)
+```
+
+### 标量广播
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+
+// 标量自动广播
+auto result = data + 5.0f;  // 所有元素 +5
+auto scaled = data * 0.1f;  // 所有元素 ×0.1
+```
+
+---
+
+## broadcastInplace 限制
+
+原地广播操作 `broadcastInplace` 有特殊限制：**`this` 的形状必须与广播结果形状相同**。
+
+```cpp
+auto a = YTensorBase::zeros({3}, "float32");
+auto b = YTensorBase::ones({3, 4}, "float32");
+
+// ❌ 错误：a 的形状 {3} 无法容纳广播结果 {3, 4}
+// a.broadcastInplace([](float& a, float b) { a += b; }, b);
+
+// ✅ 正确：使用非原地操作
+auto c = a.unsqueeze(1) + b;  // {3, 1} + {3, 4} → {3, 4}
+```
+
+---
+
+## 相关内容
+
+- [算术运算](../YTensor/math/arithmetic.mdx) - 运算符广播
+- [broadcastInplace](../YTensorBase/math/broadcast.mdx) - 原地广播详解
+- [常见陷阱](./common_pitfalls.mdx) - 广播相关错误

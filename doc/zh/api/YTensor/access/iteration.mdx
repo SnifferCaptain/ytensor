@@ -1,0 +1,603 @@
+# 迭代操作
+
+本文档介绍 `YTensor<T, dim>` 类的迭代相关方法，包括 `foreach()`、`fill()` 和 `copy_()` 方法。
+
+## 概览
+
+YTensor 提供三种主要的迭代操作：
+
+| 方法 | 功能 | 原地操作 | 自动并行 | 典型应用 |
+| --- | --- | --- | --- | --- |
+| `foreach()` | 对每个元素应用函数 | ✅ | ✅ | 元素变换、统计 |
+| `fill()` | 填充所有元素为同一值 | ✅ | ✅ | 初始化、重置 |
+| `copy_()` | 从另一张量复制元素 | ✅ | ✅ | 数据传输 |
+
+---
+
+## foreach()
+
+### 函数签名
+
+```cpp
+template<typename Func>
+YTensor<T, dim>& foreach(Func&& func, double flop = 1e-11);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `func` | `Func&&` | 应用到每个元素的函数对象 |
+| `flop` | `double` | 每次操作的运算量（用于决定是否并行） |
+
+### 函数对象签名
+
+`func` 支持两种签名：
+
+| 签名类型 | 函数签名 | 说明 |
+| --- | --- | --- |
+| **无坐标版本** | `void func(T& value)` 或 `T func(T& value)` | 更高效，推荐使用 |
+| **带坐标版本** | `void func(T& value, const std::vector<int>& coord)` 或 `T func(T& value, const std::vector<int>& coord)` | 需要元素坐标时使用 |
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>&`
+- **说明**: 返回自身引用，支持链式调用
+
+### 核心功能描述
+
+对张量的每个元素应用指定函数。自动检测函数签名并选择最优实现：
+- **无坐标版本**：使用高效的 `broadcastInplace` 实现
+- **带坐标版本**：需要计算坐标，性能稍低
+
+支持自动并行化（基于 `flop` 参数和张量大小）。
+
+### 实现机制
+
+```cpp
+// 1. 检测函数签名
+constexpr bool oneArgFunc = std::is_invocable_v<Func, T&> 
+                          && !std::is_invocable_v<Func, T&, const std::vector<int>&>;
+
+if constexpr (oneArgFunc) {
+    // 无坐标：使用 broadcastInplace
+    broadcastInplace([&func](T& a) {
+        if constexpr (返回 void) { func(a); }
+        else { a = func(a); }
+    });
+} else {
+    // 带坐标：计算坐标后调用
+    if (mostContinuousView().isContiguous()) {
+        // 快速路径：连续内存
+    } else {
+        // 一般路径：逐元素遍历
+    }
+}
+```
+
+### 使用示例
+
+#### 基本用法：无坐标版本（void 返回）
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    tensor.fill(1.0f);
+    
+    // 使用 void 返回的 lambda（推荐）
+    tensor.foreach([](float& val) {
+        val *= 2.0f;  // 每个元素乘以 2
+    });
+    
+    std::cout << tensor.at(0, 0) << std::endl;  // 输出: 2.0
+}
+```
+
+#### 返回值版本（自动赋值）
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(5.0f);
+
+// 函数返回值会自动赋值给元素
+tensor.foreach([](float& val) {
+    return val * val;  // 返回平方值
+});
+
+std::cout << tensor.at(0, 0) << std::endl;  // 输出: 25.0
+```
+
+#### 带坐标版本
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+
+// 使用坐标信息
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = coord[0] * 10.0f + coord[1];
+});
+
+std::cout << tensor.at(1, 2) << std::endl;  // 输出: 12.0 (1*10 + 2)
+```
+
+#### 带状态的函数对象
+
+```cpp
+struct Scaler {
+    float factor;
+    
+    void operator()(float& val) const {
+        val *= factor;
+    }
+};
+
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(2.0f);
+
+tensor.foreach(Scaler{3.0f});  // 所有元素乘以 3
+
+std::cout << tensor.at(0, 0) << std::endl;  // 输出: 6.0
+```
+
+#### 统计应用（需要 capture）
+
+```cpp
+yt::YTensor<float, 2> tensor = yt::YTensor<float, 2>::randu(100, 100);
+
+// 统计正数个数（注意：lambda 中的捕获变量需要线程安全）
+std::atomic<int> count{0};
+tensor.foreach([&count](float val) {
+    if (val > 0.5f) {
+        count.fetch_add(1, std::memory_order_relaxed);
+    }
+});
+
+std::cout << "Count > 0.5: " << count << std::endl;
+```
+
+### 性能提示
+
+:::tip
+**函数签名选择**
+
+优先使用**无坐标版本**（单参数），除非必须使用坐标：
+- 无坐标版本性能更高（无需计算坐标）
+- 可以使用更优化的实现路径
+:::
+
+:::info
+**并行控制**
+
+`flop` 参数控制并行策略：
+- `flop = 1e-11`（默认）：简单操作，自动并行
+- 增大 `flop`：复杂操作，更积极并行
+- 减小 `flop`：轻量操作，可能串行
+
+内部会根据 `flop * 元素数量` 决定线程数。
+:::
+
+---
+
+## fill()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim>& fill(T value);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `value` | `T` | 填充的值 |
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>&`
+- **说明**: 返回自身引用，支持链式调用
+
+### 核心功能描述
+
+将张量的所有元素填充为指定值。自动检测连续性并选择最优实现。
+
+### 实现策略
+
+```cpp
+int cFrom = isContiguousFrom();  // 检测从哪个维度开始连续
+
+if (cFrom == 0) {
+    // 完全连续：直接使用 std::fill
+    std::fill(data(), data() + size(), value);
+} else if (cFrom < dim) {
+    // 部分连续：遍历非连续维度，fill 连续部分
+    // 并行遍历外层，串行 fill 内层
+} else {
+    // 完全不连续：使用 broadcastInplace 逐元素填充
+}
+```
+
+### 使用示例
+
+#### 基本用法
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // 填充为 0
+    tensor.fill(0.0f);
+    std::cout << tensor.at(1, 2) << std::endl;  // 输出: 0.0
+    
+    // 填充为其他值
+    tensor.fill(3.14f);
+    std::cout << tensor.at(0, 0) << std::endl;  // 输出: 3.14
+}
+```
+
+#### 链式调用
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+
+tensor.fill(1.0f)
+      .foreach([](float& val) { val *= 2.0f; });
+
+std::cout << tensor.at(0, 0) << std::endl;  // 输出: 2.0
+```
+
+#### 非连续张量
+
+```cpp
+yt::YTensor<float, 2> tensor(4, 5);
+auto transposed = tensor.transpose();  // 非连续
+
+// fill() 会自动处理非连续情况
+transposed.fill(99.0f);
+
+std::cout << transposed.at(0, 0) << std::endl;  // 输出: 99.0
+std::cout << tensor.at(0, 0) << std::endl;      // 输出: 99.0（共享内存）
+```
+
+### 性能优势
+
+| 张量状态 | 实现方式 | 性能 |
+| --- | --- | --- |
+| 完全连续 | `std::fill` | ⚡️⚡️⚡️ 极快 |
+| 部分连续 | 并行 + 分块 `std::fill` | ⚡️⚡️ 快 |
+| 完全不连续 | 逐元素填充 | ⚡️ 一般 |
+
+:::tip
+**初始化推荐**
+
+对于大张量初始化，`fill()` 比 `foreach()` 更高效：
+```cpp
+// ✅ 推荐
+tensor.fill(0.0f);
+
+// ❌ 不推荐（性能较差）
+tensor.foreach([](float& val) { val = 0.0f; });
+```
+:::
+
+---
+
+## copy_()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim>& copy_(const YTensorBase& src);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `src` | `const YTensorBase&` | 源张量 |
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>&`
+- **说明**: 返回自身引用，支持链式调用
+
+### 核心功能描述
+
+从源张量复制元素到当前张量（原地操作）。要求：
+- 源和目标张量的 `shape` 必须完全一致
+- 源和目标张量的 `dtype` 必须相同
+- 不会重新分配内存
+- 不支持内存重叠（行为未定义）
+
+### 实现机制
+
+```cpp
+// 内部调用 YTensorBase::copy_()
+YTensorBase::copy_(src);
+```
+
+### 使用示例
+
+#### 基本用法
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> src(3, 4);
+    yt::YTensor<float, 2> dst(3, 4);
+    
+    // 初始化源张量
+    src.fill(5.0f);
+    
+    // 复制到目标张量
+    dst.copy_(src);
+    
+    std::cout << dst.at(0, 0) << std::endl;  // 输出: 5.0
+    
+    // 修改 src 不影响 dst（已复制）
+    src.fill(0.0f);
+    std::cout << dst.at(0, 0) << std::endl;  // 输出: 5.0
+}
+```
+
+#### 链式调用
+
+```cpp
+yt::YTensor<float, 2> src = yt::YTensor<float, 2>::ones(3, 4);
+yt::YTensor<float, 2> dst(3, 4);
+
+dst.copy_(src)
+   .foreach([](float& val) { val *= 10.0f; });
+
+std::cout << dst.at(0, 0) << std::endl;  // 输出: 10.0
+std::cout << src.at(0, 0) << std::endl;  // 输出: 1.0（src 未变）
+```
+
+#### 从 YTensorBase 复制
+
+```cpp
+yt::YTensorBase base = yt::YTensor<float, 2>::zeros(3, 4);
+yt::YTensor<float, 2> typed(3, 4);
+
+// copy_() 接受 YTensorBase
+typed.copy_(base);
+```
+
+### copy_() vs clone()
+
+| 特性 | copy_() | clone() |
+| --- | --- | --- |
+| **操作方式** | 原地复制 | 创建新张量 |
+| **内存分配** | ❌ 不分配 | ✅ 分配新内存 |
+| **目标存在** | ✅ 必须预先存在 | ❌ 创建新对象 |
+| **Shape 要求** | ✅ 必须匹配 | ❌ 无要求 |
+| **返回值** | 自身引用 | 新张量 |
+
+```cpp
+yt::YTensor<float, 2> src(3, 4);
+src.fill(1.0f);
+
+// 方式 1：clone()（创建新张量）
+auto dst1 = src.clone();
+
+// 方式 2：copy_()（原地复制）
+yt::YTensor<float, 2> dst2(3, 4);
+dst2.copy_(src);
+```
+
+### 注意事项
+
+:::danger
+**内存重叠**
+
+`copy_()` 不支持源和目标内存重叠：
+
+```cpp
+yt::YTensor<float, 2> tensor(10, 10);
+auto view1 = tensor.slice(0, 0, 5);
+auto view2 = tensor.slice(0, 2, 7);
+
+// ❌ 错误：view1 和 view2 内存重叠
+view1.copy_(view2);  // 未定义行为！
+```
+:::
+
+:::warning
+**Shape 必须匹配**
+
+```cpp
+yt::YTensor<float, 2> src(3, 4);
+yt::YTensor<float, 2> dst(4, 3);  // Shape 不同
+
+// ❌ 运行时错误
+dst.copy_(src);  // 抛出异常或断言失败
+```
+:::
+
+---
+
+## 性能对比
+
+### foreach vs fill
+
+```cpp
+yt::YTensor<float, 2> tensor(1000, 1000);
+
+// 方式 1：fill()（推荐）
+tensor.fill(0.0f);  // ⚡️⚡️⚡️ 极快（使用 std::fill）
+
+// 方式 2：foreach()（不推荐）
+tensor.foreach([](float& val) { val = 0.0f; });  // ⚡️ 较慢
+```
+
+### foreach：无坐标 vs 带坐标
+
+```cpp
+yt::YTensor<float, 2> tensor(1000, 1000);
+
+// 方式 1：无坐标（推荐）
+tensor.foreach([](float& val) {
+    val = std::sqrt(val);
+});  // ⚡️⚡️ 快（使用 broadcastInplace）
+
+// 方式 2：带坐标（不推荐，除非需要坐标）
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = std::sqrt(val);  // 实际没用到 coord
+});  // ⚡️ 慢（需要计算坐标）
+```
+
+### copy_ vs 循环赋值
+
+```cpp
+yt::YTensor<float, 2> src(1000, 1000);
+yt::YTensor<float, 2> dst(1000, 1000);
+
+// 方式 1：copy_()（推荐）
+dst.copy_(src);  // ⚡️⚡️⚡️ 极快（优化的批量复制）
+
+// 方式 2：手动循环（不推荐）
+for (int i = 0; i < 1000; ++i) {
+    for (int j = 0; j < 1000; ++j) {
+        dst.at(i, j) = src.at(i, j);
+    }
+}  // ⚡️ 极慢（逐元素访问）
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include <cmath>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 创建张量
+    yt::YTensor<float, 2> tensor(5, 4);
+    
+    std::cout << "=== fill() 示例 ===" << std::endl;
+    tensor.fill(2.0f);
+    std::cout << "After fill(2.0): tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;
+    
+    std::cout << "\n=== foreach() 无坐标示例 ===" << std::endl;
+    tensor.foreach([](float& val) {
+        val = val * val;  // 平方
+    });
+    std::cout << "After square: tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;  // 4.0
+    
+    std::cout << "\n=== foreach() 带坐标示例 ===" << std::endl;
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 10.0f + coord[1];
+    });
+    std::cout << "After coord assignment: tensor.at(2, 3) = " << tensor.at(2, 3) << std::endl;  // 23.0
+    
+    std::cout << "\n=== copy_() 示例 ===" << std::endl;
+    yt::YTensor<float, 2> backup(5, 4);
+    backup.copy_(tensor);
+    
+    // 修改原张量
+    tensor.fill(0.0f);
+    std::cout << "tensor.at(2, 3) = " << tensor.at(2, 3) << std::endl;  // 0.0
+    std::cout << "backup.at(2, 3) = " << backup.at(2, 3) << std::endl;  // 23.0（独立副本）
+    
+    std::cout << "\n=== 链式调用示例 ===" << std::endl;
+    yt::YTensor<float, 2> result(5, 4);
+    result.fill(1.0f)
+          .foreach([](float& val) { val += 5.0f; })
+          .foreach([](float& val) { val *= 2.0f; });
+    
+    std::cout << "After chain: result.at(0, 0) = " << result.at(0, 0) << std::endl;  // 12.0
+    
+    std::cout << "\n=== 非连续张量示例 ===" << std::endl;
+    yt::YTensor<float, 2> original(4, 5);
+    original.fill(1.0f);
+    
+    auto transposed = original.transpose();
+    std::cout << "Is contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    // fill() 自动处理非连续
+    transposed.fill(99.0f);
+    std::cout << "transposed.at(0, 0) = " << transposed.at(0, 0) << std::endl;  // 99.0
+    std::cout << "original.at(0, 0) = " << original.at(0, 0) << std::endl;      // 99.0
+    
+    std::cout << "\n=== 统计示例（原子操作）===" << std::endl;
+    yt::YTensor<float, 2> data = yt::YTensor<float, 2>::randu(100, 100);
+    
+    std::atomic<int> count{0};
+    data.foreach([&count](float val) {
+        if (val > 0.5f) {
+            count.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+    
+    std::cout << "Elements > 0.5: " << count << " / " << data.size() << std::endl;
+    
+    return 0;
+}
+```
+
+---
+
+## 最佳实践
+
+### ✅ 推荐做法
+
+```cpp
+// 1. 初始化使用 fill()
+tensor.fill(0.0f);
+
+// 2. 简单变换使用无坐标 foreach()
+tensor.foreach([](float& val) { val *= 2.0f; });
+
+// 3. 需要坐标时才使用带坐标版本
+tensor.foreach([](float& val, const std::vector<int>& coord) {
+    val = coord[0] + coord[1];
+});
+
+// 4. 批量复制使用 copy_()
+dst.copy_(src);
+
+// 5. 链式调用提升可读性
+tensor.fill(1.0f)
+      .foreach([](float& val) { val += 1.0f; });
+```
+
+### ❌ 避免的做法
+
+```cpp
+// 1. 避免用 foreach() 做简单填充
+tensor.foreach([](float& val) { val = 0.0f; });  // 应该用 fill()
+
+// 2. 避免不必要的坐标参数
+tensor.foreach([](float& val, const std::vector<int>&) {
+    val *= 2.0f;  // 不需要坐标，应该用无坐标版本
+});
+
+// 3. 避免手动循环
+for (int i = 0; i < h; ++i) {
+    for (int j = 0; j < w; ++j) {
+        dst.at(i, j) = src.at(i, j);  // 应该用 copy_()
+    }
+}
+
+// 4. 避免在 foreach 中进行不安全的捕获
+int sum = 0;  // ❌ 非线程安全！
+tensor.foreach([&sum](float val) {
+    sum += val;  // 数据竞争！
+});
+```
+
+---
+
+## 相关内容
+
+- [元素访问：索引](./indexing.mdx) - `at()` 和 `operator[]` 方法
+- [元素访问：数据指针](./data_ptr.mdx) - `data()` 和 `atData_()` 方法
+- [内存管理](../construction/memory.mdx) - `clone()`、`reserve()` 等方法
+- [并行计算](../../guides/parallelism.mdx) - 并行策略和性能优化

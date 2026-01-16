@@ -1,0 +1,78 @@
+# .yt 文件格式
+
+本文档介绍 YTensor 的二进制文件格式规范。
+
+## 文件标识
+
+```cpp
+static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
+static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
+```
+
+## 文件结构
+
+```
++------------------+
+|   文件头 (Header) |
++------------------+
+|   元数据 (JSON)   |
++------------------+
+|   张量索引        |
++------------------+
+|   张量数据 1      |
++------------------+
+|   张量数据 2      |
++------------------+
+|   ...             |
++------------------+
+```
+
+## 文件头格式
+
+| 偏移 | 大小 | 内容 |
+| --- | --- | --- |
+| 0 | 8 字节 | Magic: "YTENSORF" |
+| 8 | 1 字节 | 版本号 |
+| 9 | ... | 元数据长度 + JSON |
+
+## 张量索引
+
+每个张量的索引包含：
+- 张量名称
+- 元素类型
+- 形状
+- 数据偏移
+- 压缩信息
+
+## 使用示例
+
+```cpp
+#include "ytensor_io.hpp"
+
+void verify_file() {
+    yt::io::YTensorIO reader;
+    reader.open("data.yt", yt::io::Read);
+    
+    // 验证文件格式
+    if (!reader.validateFile()) {
+        std::cerr << "Invalid file format!" << std::endl;
+        return;
+    }
+    
+    // 列出所有张量
+    auto names = reader.getTensorNames();
+    for (const auto& name : names) {
+        std::cout << "Tensor: " << name << std::endl;
+    }
+    
+    reader.close();
+}
+```
+
+---
+
+## 相关内容
+
+- [YTensorIO](./YTensorIO.mdx) - IO 类
+- [TensorInfo](./tensor_info.mdx) - 张量信息
+- [压缩方法](./compression.mdx) - 压缩配置

@@ -1,0 +1,524 @@
+# 形状操作：切片
+
+本文档介绍 `YTensor<T, dim>` 类的切片方法 `slice()` 和 `slice_()`。
+
+## 概览
+
+切片操作用于获取张量在指定维度上的子集：
+
+| 方法 | 返回类型 | 原地操作 | 说明 |
+| --- | --- | --- | --- |
+| `slice()` | `YTensor<T, dim>` | ❌ | 返回新的视图 |
+| `slice_()` | `YTensor<T, dim>&` | ✅ | 原地修改当前对象 |
+
+---
+
+## slice()
+
+对张量的指定维度进行切片操作。
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> slice(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `atDim` | `int` | - | **必填**。指定要进行切片的维度索引（从 0 开始）。支持负数索引。 |
+| `start` | `int` | `0` | 切片的起始位置（**包含**）。支持负数索引（循环索引）。 |
+| `end` | `int` | `0` | 切片的结束位置（**不包含**）。若设为 `0`，则表示切片至该维度的最后一个元素（包含）。支持负数索引。 |
+| `step` | `int` | `1` | 切片的步长。可以为正数或负数，但**不能为 0**。 |
+| `autoFix` | `bool` | `true` | 是否自动修正切片范围。若开启，当 `start > end` 时会自动交换。 |
+
+### 核心功能描述
+
+返回一个新的张量视图（View），该视图共享原张量的内存，但在指定维度上仅包含原张量的一部分。
+切片操作不会复制数据。它通过修改偏移量（offset）、形状（shape）和步长（stride）来实现。
+支持 Python 风格的负数索引和步长。
+
+### 返回值
+
+* **类型**: `YTensor<T, dim>`
+* **说明**: 返回切片后的新张量。
+* **内存行为**: 返回的对象是原始数据的**视图（View）**，共享内存指针。修改返回张量的数据会影响原张量。
+
+### 切片规则
+
+#### 1. 索引处理
+- **循环索引**：所有索引支持负数和循环，使用模运算映射到有效范围
+  ```cpp
+  index = (index % shape[atDim] + shape[atDim]) % shape[atDim]
+  ```
+
+#### 2. 范围计算
+- `end` 参数指向的是"最后一个元素的下一个位置"（不包含）
+- 实际最后一个元素：`last = end - 1`（循环索引处理后）
+- 新形状大小：`newShape[atDim] = max(0, (last - start) / abs(step) + 1)`
+
+#### 3. autoFix 行为
+- 当 `autoFix = true` 且 `last < start` 时：
+  - 自动交换 `start` 和 `last`
+  - 调整后：`start++`, `last--`（避免包含边界）
+
+#### 4. 步长处理
+- `step > 0`：正向切片，新偏移 = `_offset + start * _stride[atDim]`
+- `step < 0`：反向切片，新偏移 = `_offset + last * _stride[atDim]`（指向最后一个元素）
+- `step == 0`：抛出 `std::invalid_argument` 异常
+
+### 使用示例
+
+#### 基本切片
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建一个形状为 [3, 4, 5] 的 3D 张量
+    yt::YTensor<float, 3> a(3, 4, 5);
+    a.fill(1.0f);
+    
+    // 在第 1 维度（大小为 4）进行切片：从索引 1 开始，到 3 结束（不含 3）
+    // 结果形状应为: [3, 2, 5] (因为 3 - 1 = 2)
+    auto b = a.slice(1, 1, 3, 1);
+    
+    // 验证形状
+    std::cout << "Original shape: [" << a.shape()[0] << ", " << a.shape()[1] << ", " << a.shape()[2] << "]" << std::endl;
+    // 输出: Original shape: [3, 4, 5]
+    
+    std::cout << "Sliced shape: [" << b.shape()[0] << ", " << b.shape()[1] << ", " << b.shape()[2] << "]" << std::endl;
+    // 输出: Sliced shape: [3, 2, 5]
+}
+```
+
+#### 默认参数
+
+```cpp
+yt::YTensor<float, 2> tensor(5, 10);
+
+// 切片整个维度（start=0, end=0 表示到最后）
+auto full = tensor.slice(0);  // 等价于 slice(0, 0, 0, 1)
+std::cout << "Full shape: [" << full.shape()[0] << ", " << full.shape()[1] << "]" << std::endl;
+// 输出: Full shape: [5, 10]
+
+// 从索引 2 开始到最后
+auto from2 = tensor.slice(0, 2);  // slice(0, 2, 0, 1)
+std::cout << "From 2 shape: [" << from2.shape()[0] << ", " << from2.shape()[1] << "]" << std::endl;
+// 输出: From 2 shape: [3, 10]  (5 - 2 = 3)
+```
+
+#### 负数索引（循环索引）
+
+```cpp
+yt::YTensor<float, 2> tensor(5, 10);
+
+// 负数索引：-1 表示最后一个元素的下一个位置（即 5）
+auto b = tensor.slice(0, 1, -1);  // -1 -> 4, 所以切片 [1, 4)
+std::cout << "Shape: [" << b.shape()[0] << ", " << b.shape()[1] << "]" << std::endl;
+// 输出: Shape: [3, 10]  (end-1=4-1=3, (3-1)/1+1=3)
+
+// 从倒数第 2 个开始
+auto c = tensor.slice(0, -2);  // -2 -> 3, slice(0, 3, 0)
+std::cout << "From -2 shape: [" << c.shape()[0] << ", " << c.shape()[1] << "]" << std::endl;
+// 输出: From -2 shape: [2, 10]
+```
+
+#### 步长切片
+
+```cpp
+yt::YTensor<float, 1> vec(10);
+for (int i = 0; i < 10; ++i) {
+    vec.at(i) = static_cast<float>(i);
+}
+
+// 每隔一个元素取一个：[0, 2, 4, 6, 8]
+auto even = vec.slice(0, 0, 0, 2);
+std::cout << "Even size: " << even.size() << std::endl;  // 5
+
+// 验证内容
+for (int i = 0; i < static_cast<int>(even.size()); ++i) {
+    std::cout << even.at(i) << " ";
+}
+std::cout << std::endl;
+// 输出: 0 2 4 6 8
+```
+
+#### 反向步长
+
+```cpp
+yt::YTensor<float, 1> vec(5);
+for (int i = 0; i < 5; ++i) {
+    vec.at(i) = static_cast<float>(i);
+}
+// vec = [0, 1, 2, 3, 4]
+
+// 反向切片：step = -1
+auto reversed = vec.slice(0, 0, 0, -1);
+std::cout << "Reversed size: " << reversed.size() << std::endl;  // 5
+
+for (int i = 0; i < static_cast<int>(reversed.size()); ++i) {
+    std::cout << reversed.at(i) << " ";
+}
+std::cout << std::endl;
+// 输出: 4 3 2 1 0
+```
+
+#### 视图共享内存
+
+```cpp
+yt::YTensor<float, 2> tensor(3, 4);
+tensor.fill(1.0f);
+
+auto sub = tensor.slice(0, 0, 2);  // 前 2 行
+
+// 修改子张量
+sub.fill(99.0f);
+
+// 原张量也被修改（共享内存）
+std::cout << "tensor[0][0] = " << tensor.at(0, 0) << std::endl;  // 99.0
+std::cout << "tensor[2][0] = " << tensor.at(2, 0) << std::endl;  // 1.0（未切片部分）
+```
+
+#### autoFix 参数
+
+```cpp
+yt::YTensor<float, 1> vec(10);
+
+// autoFix = true（默认）：自动修正 start > end
+auto a = vec.slice(0, 7, 3, 1, true);
+// 内部会交换：start=3+1=4, last=7-1=6
+// 结果：[4, 5, 6]
+std::cout << "autoFix=true size: " << a.size() << std::endl;  // 3
+
+// autoFix = false：不修正，返回空张量
+auto b = vec.slice(0, 7, 3, 1, false);
+// last=2 < start=7，newShape = max(0, (2-7)/1+1) = 0
+std::cout << "autoFix=false size: " << b.size() << std::endl;  // 0
+```
+
+---
+
+## slice_()
+
+### 核心功能描述
+
+对指定维度进行原地切片操作，修改当前张量对象。
+
+### 函数签名
+
+```cpp
+YTensor<T, dim>& slice_(
+    int atDim,
+    int start = 0,
+    int end = 0,
+    int step = 1,
+    bool autoFix = true
+);
+```
+
+### 参数说明
+
+参数与 `slice()` 完全相同。
+
+### 返回值
+
+* **类型**: `YTensor<T, dim>&`
+* **说明**: 返回自身引用，支持链式调用。
+* **内存行为**: 原地修改当前对象的形状、步长和偏移量，不创建新对象。
+
+### 实现
+
+```cpp
+YTensor<T, dim>& slice_(int atDim, int start, int end, int step, bool autoFix) {
+    *this = slice(atDim, start, end, step, autoFix);
+    return *this;
+}
+```
+
+### 使用示例
+
+#### 原地切片
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(5, 10);
+    tensor.fill(1.0f);
+    
+    std::cout << "Before: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << "]" << std::endl;
+    // 输出: Before: [5, 10]
+    
+    // 原地切片
+    tensor.slice_(0, 1, 4);
+    
+    std::cout << "After: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << "]" << std::endl;
+    // 输出: After: [3, 10]
+}
+```
+
+#### 链式调用
+
+```cpp
+yt::YTensor<float, 3> tensor(10, 20, 30);
+
+// 链式切片多个维度
+tensor.slice_(0, 2, 8)   // 维度 0: [2, 8)
+      .slice_(1, 5, 15)  // 维度 1: [5, 15)
+      .slice_(2, 0, 20); // 维度 2: [0, 20)
+
+std::cout << "Final shape: [" << tensor.shape()[0] << ", " 
+          << tensor.shape()[1] << ", " << tensor.shape()[2] << "]" << std::endl;
+// 输出: Final shape: [6, 10, 20]
+```
+
+---
+
+## slice() vs slice_()
+
+| 特性 | slice() | slice_() |
+| --- | --- | --- |
+| **返回值** | 新对象 | 自身引用 |
+| **原对象** | 不变 | 被修改 |
+| **内存** | 共享 | 共享 |
+| **用途** | 获取子视图 | 原地缩小范围 |
+| **链式调用** | ❌ 不支持 | ✅ 支持 |
+
+```cpp
+yt::YTensor<float, 2> original(5, 10);
+
+// slice()：原对象不变
+auto sub1 = original.slice(0, 0, 3);
+std::cout << "original shape: [" << original.shape()[0] << ", " << original.shape()[1] << "]" << std::endl;
+// 输出: [5, 10]（不变）
+
+// slice_()：原对象被修改
+original.slice_(0, 0, 3);
+std::cout << "original shape: [" << original.shape()[0] << ", " << original.shape()[1] << "]" << std::endl;
+// 输出: [3, 10]（已修改）
+```
+
+---
+
+## 注意事项与陷阱
+
+:::info
+**内存视图说明**
+
+`slice()` 返回的张量与原张量**共享内存**。
+
+* 修改切片后的张量会影响原张量。
+* 若需要独立的深拷贝副本，请使用 `clone()` 方法：
+  ```cpp
+  auto independent = tensor.slice(0, 1, 3).clone();
+  ```
+* 若需进行**原地（In-place）**切片以修改当前对象，请使用 `slice_()` 方法。
+:::
+
+:::warning
+**与 Python/NumPy 的差异**
+
+**关键区别**：在 YTensor 中，无论 `step` 是正数还是负数，`start` 在循环索引处理后必须**小于等于** `end - 1`（即 `last`），否则将返回空张量（除非启用 `autoFix`）。
+
+这与 Python 中 `step < 0` 时 `start > end` 的逻辑**不同**。
+
+**示例对比**：
+```python
+# Python/NumPy
+arr = np.array([0, 1, 2, 3, 4])
+arr[4:1:-1]  # 结果: [4, 3, 2]（start=4 > end=1 是合法的）
+```
+
+```cpp
+// YTensor
+yt::YTensor<float, 1> vec(5);
+// vec.slice(0, 4, 2, -1);  // ❌ 会返回空张量（last=1 < start=4）
+
+// 正确做法：使用 autoFix
+auto result = vec.slice(0, 4, 2, -1, true);  // ✅ autoFix 会交换
+```
+
+如果启用了 `autoFix`，库会尝试自动修正范围，但在手动计算索引时需格外注意此规则。
+:::
+
+:::danger
+**步长不能为 0**
+
+`step` 参数不能为 0，否则会抛出 `std::invalid_argument` 异常：
+
+```cpp
+try {
+    auto result = tensor.slice(0, 0, 5, 0);  // ❌ step = 0
+} catch (const std::invalid_argument& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+    // 输出: Error: Step cannot be 0 in slice operation.
+}
+```
+:::
+
+:::warning
+**0 维张量不能切片**
+
+对 0 维张量调用 `slice()` 会抛出 `std::out_of_range` 异常：
+
+```cpp
+yt::YTensorBase scalar = yt::YTensor<float, 1>(1).slice(0, 0, 1);
+// 假设某种方式得到 0 维张量
+
+try {
+    auto result = scalar.slice(0, 0, 1);  // ❌ 0 维张量
+} catch (const std::out_of_range& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+}
+```
+:::
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    std::cout << "=== 基本切片 ===" << std::endl;
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 100 + coord[1] * 10 + coord[2];
+    });
+    
+    // 切片第 1 维：[1, 3)
+    auto sliced = tensor.slice(1, 1, 3);
+    std::cout << "Shape: [" << sliced.shape()[0] << ", " 
+              << sliced.shape()[1] << ", " << sliced.shape()[2] << "]" << std::endl;
+    // 输出: Shape: [3, 2, 5]
+    
+    std::cout << "sliced[0][0][0] = " << sliced.at(0, 0, 0) << std::endl;
+    // 输出: 10.0 (对应 tensor[0][1][0])
+    
+    std::cout << "\n=== 负数索引 ===" << std::endl;
+    yt::YTensor<float, 1> vec(10);
+    for (int i = 0; i < 10; ++i) {
+        vec.at(i) = i;
+    }
+    
+    auto tail = vec.slice(0, -3);  // 最后 3 个元素
+    std::cout << "Tail size: " << tail.size() << std::endl;  // 3
+    std::cout << "Tail: ";
+    for (size_t i = 0; i < tail.size(); ++i) {
+        std::cout << tail.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // 输出: Tail: 7 8 9
+    
+    std::cout << "\n=== 步长切片 ===" << std::endl;
+    auto even = vec.slice(0, 0, 0, 2);
+    std::cout << "Even indices: ";
+    for (size_t i = 0; i < even.size(); ++i) {
+        std::cout << even.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // 输出: Even indices: 0 2 4 6 8
+    
+    std::cout << "\n=== 反向切片 ===" << std::endl;
+    auto reversed = vec.slice(0, 0, 0, -1);
+    std::cout << "Reversed: ";
+    for (size_t i = 0; i < reversed.size(); ++i) {
+        std::cout << reversed.at(i) << " ";
+    }
+    std::cout << std::endl;
+    // 输出: Reversed: 9 8 7 6 5 4 3 2 1 0
+    
+    std::cout << "\n=== 视图共享内存 ===" << std::endl;
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.fill(1.0f);
+    
+    auto sub = mat.slice(0, 0, 2);
+    sub.fill(99.0f);
+    
+    std::cout << "mat[0][0] = " << mat.at(0, 0) << std::endl;  // 99.0
+    std::cout << "mat[2][0] = " << mat.at(2, 0) << std::endl;  // 1.0
+    
+    std::cout << "\n=== 原地切片 ===" << std::endl;
+    yt::YTensor<float, 2> tensor2(5, 10);
+    std::cout << "Before: [" << tensor2.shape()[0] << ", " << tensor2.shape()[1] << "]" << std::endl;
+    
+    tensor2.slice_(0, 1, 4).slice_(1, 2, 8);
+    std::cout << "After: [" << tensor2.shape()[0] << ", " << tensor2.shape()[1] << "]" << std::endl;
+    // 输出: After: [3, 6]
+    
+    std::cout << "\n=== autoFix 示例 ===" << std::endl;
+    yt::YTensor<float, 1> vec2(10);
+    
+    auto a = vec2.slice(0, 7, 3, 1, true);   // autoFix: 交换
+    auto b = vec2.slice(0, 7, 3, 1, false);  // 不修正: 空
+    
+    std::cout << "autoFix=true size: " << a.size() << std::endl;   // 3
+    std::cout << "autoFix=false size: " << b.size() << std::endl;  // 0
+    
+    return 0;
+}
+```
+
+---
+
+## 最佳实践
+
+### ✅ 推荐做法
+
+```cpp
+// 1. 使用 slice() 获取子视图
+auto sub = tensor.slice(0, 1, 5);
+
+// 2. 需要独立副本时使用 clone()
+auto independent = tensor.slice(0, 1, 5).clone();
+
+// 3. 原地缩小范围使用 slice_()
+tensor.slice_(0, 2, 8);
+
+// 4. 链式原地切片
+tensor.slice_(0, 2, 8).slice_(1, 5, 15);
+
+// 5. 明确指定所有参数（提高可读性）
+auto sub = tensor.slice(/*atDim=*/0, /*start=*/1, /*end=*/5, /*step=*/1);
+```
+
+### ❌ 避免的做法
+
+```cpp
+// 1. 避免 step = 0
+// auto bad = tensor.slice(0, 0, 5, 0);  // ❌ 会抛出异常
+
+// 2. 避免在反向切片时不使用 autoFix
+// auto bad = tensor.slice(0, 5, 1, -1, false);  // ❌ 会返回空张量
+
+// 3. 避免忘记切片是视图（共享内存）
+auto sub = tensor.slice(0, 0, 2);
+sub.fill(0.0f);  // ⚠️ 原张量也被修改！
+
+// 4. 避免对 0 维张量切片
+// 检查维度
+if (tensor.ndim() > 0) {
+    auto sub = tensor.slice(0, 0, 2);  // ✅ 安全
+}
+```
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`size()`、`stride()` 等方法
+- [形状操作：重塑](./reshape.mdx) - `reshape()`、`view()`、`contiguous()` 方法
+- [形状操作：转置](./transpose.mdx) - `transpose()` 和 `permute()` 方法
+- [内存管理](../construction/memory.mdx) - `clone()` 深拷贝方法
+- [使用指南：内存模型](../../guides/memory_model.mdx) - 视图、浅拷贝、深拷贝详解
+- [使用指南：与 Python 差异](../../guides/python_differences.mdx) - NumPy/PyTorch 对比

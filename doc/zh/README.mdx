@@ -1,0 +1,124 @@
+# YTensor 中文文档
+
+> 现代 C++20 轻量级多维张量库 —— header-only，极简集成，科研/竞赛/工程皆宜
+
+## 欢迎使用 YTensor
+
+YTensor 是一个纯头文件的 C++ 张量库，专为需要高性能多维数组操作的场景设计。它提供了类似 NumPy/PyTorch 的接口，但无需任何运行时依赖，只需包含一个头文件即可使用。
+
+## 特性亮点
+
+- 🧩 **Header-only**：只需 `ytensor_single.hpp`，零第三方依赖，直接 `#include` 即用
+- 📐 **任意维度**：支持 shape、切片、转置、reshape、permute 等常用操作
+- ⚡ **多功能**：支持并行、广播、基础数学、少量常用的深度学习函数（matmul/softmax/attention）
+- 🛠️ **易扩展**：源码清晰，便于二次开发
+- 🗂️ **I/O 支持**：可保存/加载 YTensor 支持的文件格式
+- 🔢 **广泛的类型支持**：支持常用的数据类型，如 float16、bfloat16 等
+
+## 快速开始
+
+### 安装
+
+查看 [安装指南](./installation/installation.mdx) 了解如何将 YTensor 集成到您的项目中。
+
+### 基本示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    // 创建一个 3x4 的浮点型张量
+    yt::YTensor<float, 2> a(3, 4);
+    
+    // 创建全1张量
+    auto b = yt::YTensor<float, 2>::ones(3, 4);
+    
+    // 访问和修改元素
+    a.at(1, 2) = 5.0f;
+    
+    // 执行运算
+    auto c = a + b;
+    
+    // 输出张量
+    std::cout << c << std::endl;
+    
+    return 0;
+}
+```
+
+查看 [快速入门指南](./api/guides/quick_start.mdx) 了解更多示例。
+
+## 文档导航
+
+### 安装和配置
+
+- [安装指南](./installation/installation.mdx) - 如何集成 YTensor 到您的项目
+- [构建选项](./installation/build_options.mdx) - 编译选项和后端配置
+
+### API 参考
+
+#### 核心类
+
+- [YTensor 类](./api/YTensor/overview.mdx) - 编译时类型安全的张量类（推荐使用）
+  - [构造和内存管理](./api/YTensor/construction/constructors.mdx)
+  - [元素访问](./api/YTensor/access/indexing.mdx)
+  - [形状操作](./api/YTensor/shape/query.mdx)
+  - [数学运算](./api/YTensor/math/arithmetic.mdx)
+
+- [YTensorBase 类](./api/YTensorBase/overview.mdx) - 运行时类型擦除的基类
+  - [构造和内存管理](./api/YTensorBase/construction/constructors.mdx)
+  - [元素访问](./api/YTensorBase/access/indexing.mdx)
+  - [形状操作](./api/YTensorBase/shape/query.mdx)
+  - [数学运算](./api/YTensorBase/math/arithmetic.mdx)
+
+#### 函数库
+
+- [function 命名空间](./api/function/matmul.mdx) - 常用函数库
+  - [矩阵乘法](./api/function/matmul.mdx)
+  - [激活函数](./api/function/activation.mdx)
+
+  - [注意力机制](./api/function/attention.mdx)
+
+#### I/O 操作
+
+- [io 命名空间](./api/io/YTensorIO.mdx) - 文件读写功能
+  - [YTensorIO 类](./api/io/YTensorIO.mdx)
+  - [张量信息](./api/io/tensor_info.mdx)
+  - [压缩方法](./api/io/compression.mdx)
+  - [文件格式](./api/io/file_format.mdx)
+
+#### 配置和元数据
+
+- [infos 命名空间](./api/infos/backend.mdx) - 全局配置
+  - [后端选择](./api/infos/backend.mdx)
+  - [类型系统](./api/infos/types.mdx)
+  - [常量定义](./api/infos/constants.mdx)
+
+#### 内核工具
+
+- [kernel 命名空间](./api/kernel/type_dispatch.mdx) - 底层开发工具
+  - [类型分发](./api/kernel/type_dispatch.mdx)
+
+### 使用指南
+
+- [快速入门](./api/guides/quick_start.mdx) - 从零开始的完整示例
+- [内存模型](./api/guides/memory_model.mdx) - 深度解析 view、copy、contiguous
+- [广播机制](./api/guides/broadcast_guide.mdx) - 如何使用广播操作
+- [后端选择策略](./api/guides/backend_selection.mdx) - Naive、Eigen、AVX2 对比
+- [性能优化建议](./api/guides/performance_tips.mdx) - 如何编写高效的代码
+- [与 Python 的差异](./api/guides/python_differences.mdx) - NumPy/PyTorch 用户必读
+- [常见陷阱](./api/guides/common_pitfalls.mdx) - 避免常见错误
+
+## 项目信息
+
+- **版本**: 0.3
+- **作者**: SnifferCaptain
+- **邮箱**: 3586554865@qq.com
+- **语言**: C++20
+
+## 获取帮助
+
+如果您在使用 YTensor 时遇到问题：
+
+1. 阅读相关的 API 参考文档
+2. 在 GitHub 仓库提交 Issue

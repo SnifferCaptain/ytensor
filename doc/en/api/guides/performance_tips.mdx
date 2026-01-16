@@ -1,0 +1,169 @@
+# Performance Optimization
+
+This guide provides best practices for optimizing the performance of YTensor.
+
+## 1. Use In-place Operations
+
+In-place operations avoid memory allocations and significantly improve performance:
+
+```cpp
+// ❌ Slow: Creates a new tensor every time
+a = a + b;
+a = a * 2.0f;
+
+// ✅ Fast: Modifies in-place
+a += b;
+a *= 2.0f;
+```
+
+---
+
+## 2. Maintain Contiguity
+
+Operating on non-contiguous tensors requires extra coordinate calculations:
+
+```cpp
+// ❌ Slow: contiguous() + atData_()
+// Although faster than direct traversal, it creates an extra memory copy
+t.contiguous_();
+for (int i = 0; i < t.size(); ++i) {
+    t.atData_(i) += 1;
+}
+
+// ✅ Recommended: Use foreach or broadcastInplace
+// Contiguity is handled automatically and optimized when necessary
+t.broadcastInplace([](float& val) {
+    val += 1;
+});
+```
+
+## 3. Recommended Element Access Order
+
+For accessing single elements, the following order is recommended:
+
+**`at()` > `atData_()` > `atData()`**
+
+1.  **`at()` (Preferred)**: 
+    *   **Reason**: Directly calculates the offset using strides, which is very fast. Provides bounds checking (in Debug mode), supports multi-dimensional logical coordinates, and offers the best usability.
+    *   **Use Case**: Most random access scenarios.
+
+2.  **`atData_()` (High Performance)**: 
+    *   **Reason**: Directly operates on the underlying memory pointer with no extra overhead, making it the fastest.
+    *   **Downside**: Requires manual calculation of the physical index (flat index), lacks safety checks, and requires the tensor to be contiguous.
+    *   **Use Case**: Inner loops with extreme performance requirements (ensure indices are valid).
+
+3.  **`atData()` (Not Recommended)**: 
+    *   **Reason**: Requires full logical-to-physical coordinate transformation, resulting in high overhead.
+    *   **Use Case**: Only for compatibility with legacy code.
+
+```cpp
+// ✅ Recommended: Use at()
+tensor.at(i, j) = 1.0f;
+
+// ⚡ High Performance: Ensure contiguity then use atData_()
+if (tensor.isContiguous()) {
+    tensor.atData_(offset) = 1.0f;
+}
+
+// ❌ Avoid: Using atData()
+// tensor.atData(offset) = 1.0f;
+```
+
+
+## 4. Batch Operations Over Loops
+
+Leverage built-in vectorization and parallelization:
+
+```cpp
+// ❌ Slow: Manual looping
+for (int i = 0; i < n; ++i) {
+    for (int j = 0; j < m; ++j) {
+        c.at(i, j) = a.at(i, j) + b.at(i, j);
+    }
+}
+
+// ✅ Fast: Using operators (automated parallelization)
+c = a + b;
+```
+
+---
+
+## 5. Utilize Views
+
+Views are zero-copy operations and are much faster than creating copies:
+
+```cpp
+// ✅ Fast: Using a view
+auto sub = tensor.slice(0, 0, 100);
+process(sub);
+
+// Only clone when an independent copy is required
+auto copy = tensor.slice(0, 0, 100).clone();
+```
+
+---
+
+## 6. Pre-allocate Memory
+
+Avoid repetitive allocations within loops:
+
+```cpp
+// ❌ Slow: Allocating on every iteration
+for (int i = 0; i < N; ++i) {
+    auto result = a + b;  // New memory allocated every time
+    process(result);
+}
+
+// ✅ Fast: Pre-allocate and reuse
+auto result = YTensor<float, 2>::zeros(shape);
+for (int i = 0; i < N; ++i) {
+    result.copy_(a);
+    result += b;
+    process(result);
+}
+```
+
+---
+
+## 7. Use the Correct Backend
+
+Choose the appropriate matrix multiplication backend (see [Backend Selection](./backend_selection.mdx)):
+
+```cmake
+# Enable Eigen or AVX2
+target_compile_options(your_target PRIVATE -mavx2 -mfma)
+```
+
+---
+
+## 8. Compilation Optimization
+
+Extreme optimization flags are usually unnecessary. The following combination is recommended for excellent performance:
+
+**Release + O2 + AVX2 + FMA**
+
+```bash
+# CMake
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -mavx2 -mfma")
+
+# Manual compilation
+g++ -O2 -mavx2 -mfma -DNDEBUG ...
+```
+
+
+## Performance Checklist
+
+- [ ] Use in-place operations (`+=`, `*=`, etc.)
+- [ ] Ensure tensors on critical paths are contiguous
+- [ ] Use `atData_()` instead of `atData()` (for contiguous tensors)
+- [ ] Avoid repetitive allocations inside loops
+- [ ] Enable the appropriate backend (Eigen/AVX2)
+- [ ] Compile using Release mode
+
+---
+
+## Related Content
+
+- [Backend Selection](./backend_selection.mdx) - Choose the best backend
+- [Memory Model](./memory_model.mdx) - Understand views and copies
+- [Common Pitfalls](./common_pitfalls.mdx) - Avoid performance pitfalls

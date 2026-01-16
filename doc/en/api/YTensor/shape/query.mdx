@@ -1,0 +1,408 @@
+# Shape Querying
+
+This document describes the methods for querying shape and stride information in YTensor.
+
+---
+
+## shape()
+
+Retrieves the shape vector of the tensor or the size of a specific dimension.
+
+### Function Signatures
+
+```cpp
+// 1. Get the full shape vector
+std::vector<int> shape() const;
+
+// 2. Get the size of a specific dimension
+int shape(int atDim) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+|--------|------|--------|------|
+| `atDim` | `int` | - | Dimension index (starting from 0). Supports negative indexing; `-1` refers to the last dimension. |
+
+### Core Function Description
+
+Retrieves shape information of the tensor.
+*   No-argument version returns the complete shape vector `std::vector<int>`.
+*   Argument version returns the length of the specified dimension. Supports negative indexing.
+
+### Return Value
+
+- **Version 1**: Returns a `std::vector<int>` containing the sizes of all dimensions.
+- **Version 2**: Returns an `int` representing the size of the specified dimension.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+int main() {
+    // Create a 3x4x5 tensor
+    auto a = yt::YTensor<float, 3>(3, 4, 5);
+    
+    // Get the full shape
+    auto shape_vec = a.shape();
+    // shape_vec = {3, 4, 5}
+    
+    // Get specific dimension sizes
+    int dim0 = a.shape(0);   // 3
+    int dim1 = a.shape(1);   // 4
+    int dim2 = a.shape(2);   // 5
+    
+    // Negative indexing
+    int last_dim = a.shape(-1);  // 5 (the last dimension)
+    int second_last = a.shape(-2);  // 4 (the penultimate dimension)
+    
+    return 0;
+}
+```
+
+### Notes
+
+:::warning
+**Wrapping Index Behavior**
+
+Indices are handled with automatic wrapping:
+- Negative indices: `-1` is converted to `dim - 1`.
+- Out-of-range indices: Wrapped using modulo arithmetic.
+
+For example, in a 3D tensor:
+- `shape(-1)` → `shape(2)`
+- `shape(3)` → `shape(0)`
+- `shape(4)` → `shape(1)`
+:::
+
+:::warning
+**0D Tensor Exception**
+
+Calling `shape(int)` on a 0D tensor will throw a `std::out_of_range` exception.
+:::
+
+---
+
+## stride()
+
+Retrieves stride information for the tensor. A stride represents the number of elements to skip in memory to reach the next element along a specific dimension.
+
+### Function Signatures
+
+```cpp
+// 1. Get the logical stride vector
+std::vector<int> stride() const;
+
+// 2. Get the logical stride of a specific dimension
+int stride(int atDim) const;
+
+// 3. Get the actual physical stride vector
+std::vector<int> stride_() const;
+
+// 4. Get the actual physical stride of a specific dimension
+int stride_(int atDim) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+|--------|------|--------|------|
+| `atDim` | `int` | - | Dimension index (starting from 0). Supports negative indexing. |
+
+### Core Function Description
+
+Retrieves stride information for the tensor. Stride represents the number of elements to skip in memory to reach the next element along a specific dimension.
+*   `stride()`: Returns **logical strides** (assuming the tensor is contiguous).
+*   `stride_()`: Returns **physical strides** (actual memory layout). For non-contiguous tensors (e.g., sliced, transposed), physical strides may differ from logical strides.
+
+### Return Value
+
+- **`stride()`**: Returns a **recalculated** contiguous stride vector (assuming contiguous storage).
+- **`stride(int)`**: Returns the **actual physical** stride (read directly from `_stride`).
+- **`stride_()`**: Returns the actual physical memory stride vector.
+- **`stride_(int)`**: Returns the actual physical stride for the specified dimension.
+
+### Logical Strides vs. Physical Strides
+
+:::warning
+**Important Difference**
+
+The **vector version** and the **single-parameter version** of the `stride()` method behave differently:
+
+- `stride()` (vector version): **Recalculates** logical strides as if the data were stored contiguously.
+- `stride(int)` (single-parameter version): **Directly returns** the actual physical stride `_stride[atDim]`.
+
+This means `stride()[i]` and `stride(i)` **may return different values**!
+:::
+
+```cpp
+// Contiguous tensor: Both versions are identical
+auto a = YTensor<float, 2>(3, 4);  // Shape: (3, 4)
+auto s1 = a.stride();   // {4, 1}
+auto s2 = a.stride_();  // {4, 1}
+std::cout << a.stride(0);   // 4
+std::cout << a.stride()[0]; // 4
+// All are consistent.
+
+// Non-contiguous tensor (after transpose): The versions differ!
+auto b = a.transpose(0, 1);  // Shape: (4, 3)
+auto s3 = b.stride();   // {3, 1}  ← Logical strides (recalculated)
+auto s4 = b.stride_();  // {1, 4}  ← Physical strides (actual memory)
+
+std::cout << b.stride()[0];  // 3  ← Logical value
+std::cout << b.stride(0);    // 1  ← Physical value (directly from _stride)
+std::cout << b.stride_(0);   // 1  ← Physical value
+
+// ⚠️ stride()[i] != stride(i) for non-contiguous tensors!
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+#include <iostream>
+
+int main() {
+int main() {
+    // Create a contiguous tensor
+    auto a = yt::YTensor<float, 3>(2, 3, 4);
+    
+    std::cout << "=== Contiguous Tensor ===" << std::endl;
+    auto stride_vec = a.stride();
+    std::cout << "Logical strides: {";
+    for (int s : stride_vec) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // Output: {12, 4, 1}
+    
+    auto stride_vec_ = a.stride_();
+    std::cout << "Physical strides: {";
+    for (int s : stride_vec_) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // Output: {12, 4, 1} (Identical)
+    
+    // After transposition
+    auto b = a.transpose(0, 2);  // Shape: (4, 3, 2)
+    
+    std::cout << "\n=== After Transpose (Non-contiguous) ===" << std::endl;
+    auto b_stride = b.stride();
+    std::cout << "Logical strides: {";
+    for (int s : b_stride) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // Output: {6, 2, 1} (Assuming contiguity)
+    
+    auto b_stride_ = b.stride_();
+    std::cout << "Physical strides: {";
+    for (int s : b_stride_) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // Output: {1, 4, 12} (Actual memory layout)
+    
+    return 0;
+}
+```
+
+### Notes
+
+:::info
+**Which Method to Use**
+
+- **`stride()` vector version**: Retrieves logical strides; useful for understanding the logical layout.
+- **`stride(int)` single-parameter version**: Retrieves actual physical strides; useful for memory offset calculations.
+- **`stride_()` series**: Explicitly retrieves physical strides; recommended for all direct memory operations.
+
+**Best Practice**: To avoid confusion, it is recommended to use the `stride_()` series methods whenever you need to calculate actual memory offsets.
+:::
+
+---
+
+## size()
+
+Retrieves the total number of elements in the tensor.
+
+### Function Signature
+
+```cpp
+size_t size() const;
+```
+
+### Core Function Description
+
+Retrieves the total number of elements in the tensor. Returns the product of all dimension sizes.
+
+### Return Value
+
+Returns a `size_t` representing the total number of elements (the product of all dimension sizes).
+
+### Usage Example
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+size_t total = a.size();  // 2 * 3 * 4 = 24
+```
+
+### Notes
+
+:::info
+**`size()` of Non-contiguous Tensors**
+
+Even if a tensor is non-contiguous (e.g., after slicing or transposing), `size()` returns the **logical number of elements**, not the size of the underlying memory buffer.
+
+```cpp
+auto a = YTensor<float, 2>(10, 10);  // 100 elements
+auto b = a.slice({{0, 5}, {0, 5}});  // 25 elements (5x5)
+std::cout << b.size();  // Output: 25 (logical size)
+// Note: 'b' and 'a' share the same memory buffer which stores 100 elements.
+```
+:::
+
+---
+
+## ndim() / shapeSize()
+
+Retrieves the number of dimensions (rank).
+
+### Function Signature
+
+```cpp
+int ndim() const;                 // Inherited from YTensorBase
+constexpr int shapeSize() const;  // Compile-time version in YTensor
+```
+
+### Core Function Description
+
+Retrieves the number of dimensions (rank). `ndim()` is the runtime version, `shapeSize()` is the compile-time constant version.
+
+### Return Value
+
+Returns an `int` representing the number of dimensions.
+
+### Usage Example
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+int dims1 = a.ndim();       // 3 (runtime)
+int dims2 = a.shapeSize();  // 3 (compile-time constant)
+```
+
+### Comparison
+
+| Method | Source | Characteristics |
+|------|------|------|
+| `ndim()` | `YTensorBase` | Calculated at runtime. |
+| `shapeSize()` | `YTensor<T, dim>` | Compile-time constant; returns the template parameter `dim`. |
+
+---
+
+## shapeMatch()
+
+Checks if the tensor's shape matches a given shape vector.
+
+### Function Signature
+
+```cpp
+bool shapeMatch(const std::vector<int>& otherShape) const;
+```
+
+### Core Function Description
+
+Checks if the tensor's shape exactly matches a given shape vector.
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `otherShape` | `const std::vector<int>&` | The shape vector to compare against. |
+
+### Return Value
+
+- `true`: The shapes match exactly (identical number of dimensions and identical sizes for each).
+- `false`: The shapes do not match.
+
+### Usage Example
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+
+bool match1 = a.shapeMatch({2, 3, 4});  // true
+bool match2 = a.shapeMatch({2, 3, 5});  // false (last dimension differs)
+bool match3 = a.shapeMatch({2, 3});     // false (dimension count differs)
+```
+
+---
+
+## offset()
+
+Calculates the memory offset for an element at a specified index relative to the data pointer.
+
+### Function Signatures
+
+```cpp
+// 1. Variadic argument version
+template<typename... Args>
+int offset(Args... index) const;
+
+// 2. Vector version
+int offset(const std::vector<int>& index) const;
+
+// 3. Physical offset version (includes the tensor's own _offset)
+template<typename... Args>
+int offset_(Args... index) const;
+
+int offset_(const std::vector<int>& index) const;
+```
+
+### Core Function Description
+
+Calculates the linear memory offset for a given multi-dimensional index.
+*   `offset()`: Relative to the start of the current view.
+*   `offset_()`: Absolute offset relative to the original data pointer.
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|-------------|
+| `index` | `int...` or `std::vector<int>` | The multi-dimensional index of the element. |
+
+### Return Value
+
+- **`offset(...)`**: Returns the relative offset (excluding the tensor's base `_offset`).
+- **`offset_(...)`**: Returns the absolute physical offset (`_offset + offset(...)`).
+
+### Usage Example
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+
+// Calculate offset for [1, 2, 3]
+int off1 = a.offset(1, 2, 3);
+// off1 = 1*12 + 2*4 + 3*1 = 12 + 8 + 3 = 23
+
+// Vector version
+int off2 = a.offset({1, 2, 3});  // 23
+
+// For a slice
+auto b = a.slice({{1, 2}, {}, {}});  // b has base _offset = 12
+int off3 = b.offset(0, 0, 0);   // 0 (relative to b's start)
+int off4 = b.offset_(0, 0, 0);  // 12 (relative to original data pointer)
+```
+
+### Notes
+
+:::warning
+**When to use offset vs offset_**
+
+- **`offset()`**: Use when calculating offsets from the current view's start.
+- **`offset_()`**: Use when calculating absolute offsets from the original raw data pointer.
+
+For root tensors (not slices), both are identical. For sliced views, they differ.
+:::
+
+---
+
+## Related Content
+
+- [Slicing Operations](./slice.mdx) - Creating subviews using slices.
+- [Shape Operations: Reshaping](./reshape.mdx) - Changing the shape of a tensor.
+- [Data Access](../access/indexing.mdx) - Accessing elements via indices.
+- [Property Queries](../utilities/properties.mdx) - Checking attributes like contiguity.

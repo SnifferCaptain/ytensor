@@ -1,0 +1,389 @@
+# 形状操作：重塑
+
+本文档介绍 `YTensor<T, dim>` 类的重塑方法，包括 `view()`、`reshape()`、`contiguous()`、`contiguous_()` 和 `mostContinuousView()`。
+
+## 概览
+
+| 方法 | 要求连续 | 返回类型 | 可能拷贝 | 说明 |
+| --- | --- | --- | --- | --- |
+| `view()` | ✅ 必须 | 新视图 | ❌ 否 | 零拷贝重塑（仅连续张量） |
+| `reshape()` | ❌ 否 | 新张量 | ✅ 可能 | 自动处理连续性 |
+| `contiguous()` | ❌ 否 | 新张量 | ✅ 可能 | 返回连续副本 |
+| `contiguous_()` | ❌ 否 | 自身引用 | ✅ 可能 | 原地转换为连续 |
+| `mostContinuousView()` | ❌ 否 | 新视图 | ❌ 否 | 返回最连续的维度排列 |
+
+---
+
+## view()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> view(const std::vector<int>& newShape) const;
+
+template<typename... Args>
+YTensor<T, dim> view(const Args... newShape) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `newShape` | `std::vector<int>` 或 `Args...` | 新的形状。支持 `-1` 自动推断一个维度。 |
+
+### 核心功能描述
+
+零拷贝地改变张量形状。
+返回一个新的张量视图，共享原张量的内存。**要求原张量必须是连续的**。
+新形状的元素总数必须与原张量相同。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 返回新形状的视图（零拷贝）
+- **要求**: **张量必须是连续的**，否则抛出异常
+
+### 说明
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);  // shape: [3, 4]
+    mat.fill(1.0f);
+    
+    // 重塑为 [2, 6]
+    auto reshaped = mat.view(2, 6);
+    std::cout << "Shape: [" << reshaped.shape()[0] << ", " << reshaped.shape()[1] << "]" << std::endl;
+    // 输出: Shape: [2, 6]
+    
+    // 使用 -1 自动推断
+    auto auto_shape = mat.view(-1, 2);  // -1 自动计算为 6
+    std::cout << "Auto shape: [" << auto_shape.shape()[0] << ", " << auto_shape.shape()[1] << "]" << std::endl;
+    // 输出: Auto shape: [6, 2]
+}
+```
+
+### 连续性要求
+
+```cpp
+yt::YTensor<float, 2> mat(3, 4);
+auto transposed = mat.transpose();  // 非连续
+
+// ❌ 错误：非连续张量不能 view
+try {
+    auto bad = transposed.view(4, 3);
+} catch (const std::exception& e) {
+    std::cout << "Error: " << e.what() << std::endl;
+}
+
+// ✅ 正确：先转为连续
+auto good = transposed.contiguous().view(4, 3);
+```
+
+---
+
+## reshape()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> reshape(const std::vector<int>& newShape) const;
+
+template<typename... Args>
+YTensor<T, dim> reshape(const Args... newShape) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `newShape` | `std::vector<int>` 或 `Args...` | 新的形状。支持 `-1` 自动推断。 |
+
+### 核心功能描述
+
+改变张量形状，自动处理连续性。
+*   如果张量是连续的，等效于 `view()`（零拷贝）。
+*   如果张量是不连续的，会先复制为连续副本，再改变形状（深拷贝）。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 新形状的张量（可能是视图，也可能是副本）
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    
+    // 连续张量：零拷贝
+    auto r1 = mat.reshape(2, 6);
+    std::cout << "r1 shares memory: " << (r1.data_() == mat.data_()) << std::endl;
+    // 输出: true
+    
+    // 非连续张量：自动拷贝
+    auto transposed = mat.transpose();
+    auto r2 = transposed.reshape(2, 6);
+    std::cout << "r2 shares memory: " << (r2.data_() == transposed.data_()) << std::endl;
+    // 输出: false（创建了副本）
+}
+```
+
+### view() vs reshape()
+
+| 特性 | view() | reshape() |
+| --- | --- | --- |
+| **连续性要求** | ✅ 必须连续 | ❌ 无要求 |
+| **可能拷贝** | ❌ 永不拷贝 | ✅ 可能拷贝 |
+| **性能** | ⚡️⚡️⚡️ 快 | ⚡️⚡️ 较快 |
+| **使用场景** | 确定连续时 | 不确定连续时 |
+
+```cpp
+// ✅ 确定连续：使用 view()（更快）
+yt::YTensor<float, 2> mat(3, 4);
+auto v = mat.view(2, 6);
+
+// ✅ 不确定连续：使用 reshape()（更安全）
+auto r = some_tensor.reshape(2, 6);  // 自动处理
+```
+
+---
+
+## contiguous()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> contiguous() const;
+```
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 连续的张量
+
+### 核心功能描述
+
+返回张量的连续版本。如果已经连续，返回浅拷贝（共享内存）；否则创建深拷贝。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.fill(1.0f);
+    
+    // 已连续：浅拷贝
+    auto c1 = mat.contiguous();
+    std::cout << "c1 shares memory: " << (c1.data_() == mat.data_()) << std::endl;
+    // 输出: true
+    
+    // 非连续：深拷贝
+    auto transposed = mat.transpose();
+    auto c2 = transposed.contiguous();
+    std::cout << "c2 shares memory: " << (c2.data_() == transposed.data_()) << std::endl;
+    // 输出: false
+    
+    // 验证连续性
+    std::cout << "c2 is contiguous: " << c2.isContiguous() << std::endl;
+    // 输出: true
+}
+```
+
+---
+
+## contiguous_()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim>& contiguous_();
+```
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>&`
+- **说明**: 自身引用
+
+### 核心功能描述
+
+原地转换为连续张量。如果已连续，不做任何操作；否则创建新的连续副本并替换当前对象。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    auto transposed = mat.transpose();
+    
+    std::cout << "Before: " << transposed.isContiguous() << std::endl;  // false
+    
+    // 原地转换
+    transposed.contiguous_();
+    
+    std::cout << "After: " << transposed.isContiguous() << std::endl;   // true
+}
+```
+
+### contiguous() vs contiguous_()
+
+| 特性 | contiguous() | contiguous_() |
+| --- | --- | --- |
+| **返回值** | 新对象 | 自身引用 |
+| **原对象** | 不变 | 可能被替换 |
+| **用途** | 获取连续版本 | 原地连续化 |
+
+---
+
+## mostContinuousView()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> mostContinuousView() const;
+```
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 最连续的维度排列视图
+
+### 核心功能描述
+
+返回张量的最连续视图（通过重排维度）。用于优化性能密集型操作。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 3> tensor(3, 4, 5);
+    auto sliced = tensor.slice(0, 0, 2).slice(1, 1, 3);
+    
+    // 获取最连续视图
+    auto mcv = sliced.mostContinuousView();
+    
+    int cFrom = mcv.isContiguousFrom();
+    std::cout << "Contiguous from dim: " << cFrom << std::endl;
+}
+```
+
+---
+
+## -1 自动推断
+
+`view()` 和 `reshape()` 支持使用 `-1` 自动推断一个维度：
+
+```cpp
+yt::YTensor<float, 2> mat(3, 4);  // size = 12
+
+// -1 自动推断为 6
+auto a = mat.reshape(-1, 2);  // [6, 2]
+auto b = mat.reshape(2, -1);  // [2, 6]
+auto c = mat.reshape(3, -1);  // [3, 4]
+
+// ❌ 错误：只能有一个 -1
+// auto bad = mat.reshape(-1, -1);
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 2> mat(3, 4);
+    mat.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 10 + coord[1];
+    });
+    
+    std::cout << "=== view() ===" << std::endl;
+    auto v = mat.view(2, 6);
+    std::cout << "Shape: [" << v.shape()[0] << ", " << v.shape()[1] << "]" << std::endl;
+    std::cout << "v[0][0] = " << v.at(0, 0) << std::endl;  // 0
+    std::cout << "v[0][5] = " << v.at(0, 5) << std::endl;  // 11
+    
+    std::cout << "\n=== reshape() ===" << std::endl;
+    auto transposed = mat.transpose();
+    std::cout << "Transposed contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    auto r = transposed.reshape(2, 6);
+    std::cout << "Reshaped shape: [" << r.shape()[0] << ", " << r.shape()[1] << "]" << std::endl;
+    
+    std::cout << "\n=== contiguous() ===" << std::endl;
+    auto c = transposed.contiguous();
+    std::cout << "c is contiguous: " << c.isContiguous() << std::endl;  // true
+    
+    std::cout << "\n=== -1 自动推断 ===" << std::endl;
+    auto auto1 = mat.reshape(-1, 2);
+    auto auto2 = mat.reshape(2, -1);
+    std::cout << "auto1: [" << auto1.shape()[0] << ", " << auto1.shape()[1] << "]" << std::endl;  // [6, 2]
+    std::cout << "auto2: [" << auto2.shape()[0] << ", " << auto2.shape()[1] << "]" << std::endl;  // [2, 6]
+    
+    return 0;
+}
+```
+
+---
+
+## 最佳实践
+
+### ✅ 推荐
+
+```cpp
+// 1. 确定连续时用 view()
+if (tensor.isContiguous()) {
+    auto v = tensor.view(new_shape);
+}
+
+// 2. 不确定时用 reshape()
+auto r = tensor.reshape(new_shape);
+
+// 3. 性能关键路径先连续化
+tensor.contiguous_();
+// 后续操作更快
+
+// 4. 使用 -1 自动推断
+auto reshaped = tensor.reshape(-1, feature_dim);
+```
+
+### ❌ 避免
+
+```cpp
+// 1. 非连续时用 view()
+// auto bad = transposed.view(new_shape);  // ❌ 会抛异常
+
+// 2. 重复调用 contiguous()
+for (int i = 0; i < N; ++i) {
+    auto c = tensor.contiguous();  // ❌ 每次都判断
+}
+
+// 应该提前转换
+tensor.contiguous_();
+for (int i = 0; i < N; ++i) {
+    // 直接使用
+}
+```
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()`、`size()`、`isContiguous()` 方法
+- [形状操作：切片](./slice.mdx) - `slice()` 方法
+- [形状操作：转置](./transpose.mdx) - `transpose()` 和 `permute()` 方法
+- [实用工具：属性](../utilities/properties.mdx) - `isContiguous()` 详解
+- [使用指南：内存模型](../../guides/memory_model.mdx) - 连续性深度解析

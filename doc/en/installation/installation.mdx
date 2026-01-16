@@ -1,0 +1,285 @@
+# Installation Guide
+
+YTensor is a header-only C++ library, which means you don't need to compile or link any library files—simply include the headers in your project to start using it.
+
+## System Requirements
+
+### Prerequisites
+
+- **C++ Compiler**: A compiler supporting the C++20 standard
+  - GCC 10+ 
+  - Clang 10+
+  - MSVC 2019+ (Visual Studio 2019 or later)
+
+### Optional Dependencies
+
+The core functionality of YTensor does not require any third-party libraries, but the following libraries can enable additional features or improve performance:
+
+| Library Name | Purpose | Description |
+| --- | --- | --- |
+| **OpenMP** | Parallel Computing | Enables multi-threaded acceleration (highly recommended) |
+| **Eigen** | GEMM Acceleration | Provides a high-performance matrix multiplication backend |
+| **zlib** | File Compression | Supports compressed storage of tensor files (required for some I/O features) |
+
+:::info
+YTensor works perfectly fine without optional dependencies, though certain features might be unavailable or performance may be lower.
+:::
+
+## Installation Methods
+
+### Method 1: Using the Single Header (Recommended)
+
+This is the simplest way to integrate the library and is suitable for most users.
+
+1. **Download the Single Header**
+
+   Get the `ytensor_single.hpp` file from the `single-header/` directory in the project root.
+
+2. **Include the Header**
+
+   Copy `ytensor_single.hpp` to your project and include it in your code:
+
+   ```cpp
+   #include "ytensor_single.hpp"
+   
+   int main() {
+       yt::YTensor<float, 2> tensor(3, 4);
+       // Use the tensor...
+       return 0;
+   }
+   ```
+
+3. **Compile Your Project**
+
+   Compile using a compiler that supports C++20:
+
+   ```bash
+   # GCC
+   g++ -std=c++20 -O2 main.cpp -o main
+   
+   # Clang
+   clang++ -std=c++20 -O2 main.cpp -o main
+   
+   # Enable OpenMP (optional, recommended)
+   g++ -std=c++20 -O2 -fopenmp main.cpp -o main
+   
+   # Clang + OpenMP (may require specifying the library)
+   clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+   ```
+
+### Method 2: Using Modular Headers (Developer Option)
+
+If you need to modify the source code or contribute to development, you can use the modular headers version.
+
+1. **Clone or Download the Project**
+
+   ```bash
+   git clone https://github.com/SnifferCaptain/ytensor.git
+   cd ytensor
+   ```
+
+2. **Set Include Paths**
+
+   Add the project root directory to your compiler's include paths:
+
+   ```bash
+   g++ -std=c++20 -I/path/to/ytensor -O2 main.cpp -o main
+   ```
+
+3. **Include the Main Header**
+
+   ```cpp
+   #include "ytensor.hpp"
+   
+   int main() {
+       yt::YTensor<float, 2> tensor(3, 4);
+       return 0;
+   }
+   ```
+
+## Enabling Optional Features
+
+### Enabling OpenMP (Parallel Computing)
+
+OpenMP is used to accelerate computational operations on large tensors.
+
+**Adding OpenMP support during compilation**:
+
+```bash
+# GCC
+g++ -std=c++20 -O2 -fopenmp main.cpp -o main
+
+# Clang (requires manual linking of gomp)
+clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
+
+# MSVC (Visual Studio)
+cl /std:c++20 /O2 /openmp main.cpp
+```
+
+:::warning
+When using OpenMP with the Clang compiler, it is recommended to link against `libgomp` to avoid potential conflicts with the Eigen library.
+:::
+
+### Enabling Eigen (GEMM Acceleration)
+
+Eigen is a high-performance linear algebra library that YTensor can use to accelerate matrix multiplications.
+
+1. **Install Eigen**
+
+   **Ubuntu/Debian**:
+   ```bash
+   sudo apt-get install libeigen3-dev
+   ```
+
+   **macOS (Homebrew)**:
+   ```bash
+   brew install eigen
+   ```
+
+   **Manual Installation**:
+   Download the headers from the [Eigen website](https://eigen.tuxfamily.org/) and extract them to your system include path.
+
+2. **Include Eigen Path During Compilation**
+
+   YTensor automatically detects if Eigen is available. Ensure the compiler can find the Eigen headers:
+
+   ```bash
+   # If Eigen is in a non-standard path
+   g++ -std=c++20 -O2 -fopenmp -I/usr/include/eigen3 main.cpp -o main
+   ```
+
+3. **Verify if Eigen is Enabled**
+
+   During compilation, YTensor will automatically enable the Eigen backend based on `__has_include(<Eigen/Core>)`.
+
+### Enabling zlib (File Compression)
+
+zlib is used for YTensor's I/O features, supporting compressed tensor files to save storage space.
+
+1. **Install zlib**
+
+   **Ubuntu/Debian**:
+   ```bash
+   sudo apt-get install zlib1g-dev
+   ```
+
+   **macOS (Homebrew)**:
+   ```bash
+   brew install zlib
+   ```
+
+   **Windows**:
+   Download and install from the [zlib website](https://www.zlib.net/).
+
+2. **Link zlib During Compilation**
+
+   ```bash
+   g++ -std=c++20 -O2 main.cpp -o main -lz
+   ```
+
+### Enabling AVX2 Optimization (Advanced)
+
+If your CPU supports the AVX2 instruction set, you can enable custom SIMD optimizations.
+
+```bash
+# GCC/Clang
+g++ -std=c++20 -O2 -mavx2 -mfma main.cpp -o main
+
+# MSVC
+cl /std:c++20 /O2 /arch:AVX2 main.cpp
+```
+
+YTensor automatically detects `__AVX2__` and `__FMA__` macros and enables the corresponding optimized code.
+
+## Building with CMake
+
+If your project uses CMake, you can refer to the following configuration:
+
+```cmake
+cmake_minimum_required(VERSION 3.16)
+project(MyProject)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find optional dependencies
+find_package(OpenMP)
+find_package(ZLIB)
+
+# Add executable
+add_executable(my_app main.cpp)
+
+# Include YTensor header path (if using modular headers)
+target_include_directories(my_app PRIVATE /path/to/ytensor)
+
+# Link OpenMP
+if(OpenMP_CXX_FOUND)
+    target_link_libraries(my_app OpenMP::OpenMP_CXX)
+endif()
+
+# Link zlib
+if(ZLIB_FOUND)
+    target_link_libraries(my_app ZLIB::ZLIB)
+endif()
+
+# Enable optimization and AVX2
+if(NOT MSVC)
+    target_compile_options(my_app PRIVATE -O2 -mavx2 -mfma)
+else()
+    target_compile_options(my_app PRIVATE /O2 /arch:AVX2)
+endif()
+```
+
+Check the `CMakeLists.txt` file in the project root for a complete configuration example.
+
+## Verifying the Installation
+
+Create a simple test program to verify that YTensor is correctly installed:
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // Create a 2x3 tensor
+    yt::YTensor<float, 2> a(2, 3);
+    a.fill(1.0f);
+    
+    // Output the tensor
+    std::cout << "YTensor installed successfully!" << std::endl;
+    std::cout << a << std::endl;
+    
+    // Check backends
+    #if YT_USE_EIGEN
+        std::cout << "Eigen backend: Enabled" << std::endl;
+    #else
+        std::cout << "Eigen backend: Disabled" << std::endl;
+    #endif
+    
+    #if YT_USE_AVX2
+        std::cout << "AVX2 backend: Enabled" << std::endl;
+    #else
+        std::cout << "AVX2 backend: Disabled" << std::endl;
+    #endif
+    
+    return 0;
+}
+```
+
+Compile and run:
+
+```bash
+g++ -std=c++20 -O2 -fopenmp test.cpp -o test
+./test
+```
+
+If you see the output, YTensor has been successfully installed!
+
+## Next Steps
+
+- Check [Build Options](./build_options.mdx) for more compilation configurations.
+- Read [Quick Start](../api/guides/quick_start.mdx) to begin using YTensor.
+- View [API Reference](../api/YTensor/overview.mdx) for detailed functionality.
+
+

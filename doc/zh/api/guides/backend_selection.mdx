@@ -1,0 +1,117 @@
+# 后端选择
+
+本指南帮助你选择最适合的计算后端。
+
+## 可用后端
+
+YTensor 的矩阵乘法支持多个后端：
+
+| 后端 | 枚举值 | 依赖 | 适用场景 |
+| --- | --- | --- | --- |
+| Naive | `MatmulBackend::Naive` | 无 | 兼容性优先、调试 |
+| Eigen | `MatmulBackend::Eigen` | Eigen3 | 一般高性能计算 |
+| AVX2 | `MatmulBackend::AVX2` | AVX2 + FMA CPU | 极致性能，**主序不敏感** |
+
+---
+
+## 自动选择
+
+默认后端根据编译时宏自动选择，优先级：**AVX2 > Eigen > Naive**
+
+```cpp
+// ytensor_infos.hpp 中的定义
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+---
+
+## 编译配置
+
+### 启用 Eigen
+
+```cmake
+# CMakeLists.txt
+find_package(Eigen3 REQUIRED)
+target_link_libraries(your_target Eigen3::Eigen)
+```
+
+Eigen 会被自动检测：
+```cpp
+#if __has_include(<Eigen/Core>)
+    #define YT_USE_EIGEN 1
+#endif
+```
+
+### 启用 AVX2
+
+```cmake
+# CMakeLists.txt
+target_compile_options(your_target PRIVATE -mavx2 -mfma)
+```
+
+或手动定义：
+```cpp
+#define YT_USE_AVX2 1
+#include "ytensor.hpp"
+```
+
+---
+
+## 性能对比
+
+基于典型矩阵乘法 (1000×1000)：
+
+| 后端 | 相对性能 | 说明 |
+| --- | --- | --- |
+| Naive | ~20 GFlops | 基准，三重循环实现 |
+| Eigen | ~75 GFlops | 高度优化，受主序影响 |
+| AVX2 | ~95 GFlops | 手写 SIMD，**主序不敏感** |
+
+> 测试环境：R7-7735H，矩阵大小 mnk=512，单核。
+
+**注意**: 实际性能取决于矩阵大小、CPU 型号、编译优化等因素。
+
+---
+
+## 选择建议
+
+| 场景 | 推荐后端 | 理由 |
+| --- | --- | --- |
+| 开发调试 | Naive | 无依赖，易于调试 |
+| 一般生产 | Eigen | 稳定、高效、广泛支持 |
+| 极致性能 | AVX2 | 最高性能（需 CPU 支持） |
+| 跨平台 | Eigen | 良好的跨平台兼容性 |
+
+---
+
+## 检查当前后端
+
+```cpp
+#include "ytensor_infos.hpp"
+
+void check_backend() {
+    #if YT_USE_AVX2
+        std::cout << "Using AVX2 backend" << std::endl;
+    #elif YT_USE_EIGEN
+        std::cout << "Using Eigen backend" << std::endl;
+    #else
+        std::cout << "Using Naive backend" << std::endl;
+    #endif
+}
+```
+
+---
+
+## 相关内容
+
+- [后端系统](../infos/backend.mdx) - MatmulBackend 枚举详解
+- [性能优化](./performance_tips.mdx) - 其他优化技巧
+- [矩阵乘法](../YTensorBase/math/matmul.mdx) - matmul API

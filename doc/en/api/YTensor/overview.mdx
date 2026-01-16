@@ -1,0 +1,307 @@
+# YTensor Class Overview
+
+`YTensor` is the core template class of the YTensor library, providing a compile-time type-safe multi-dimensional array container. It inherits from `YTensorBase`, offering better type safety and performance while retaining runtime flexibility.
+
+## Class Definition
+
+```cpp
+template <typename T = float, int dim = 1>
+class YTensor : public YTensorBase
+```
+
+**Defined in**: `include/ytensor_core.hpp`
+
+## Template Parameters
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `T` | `typename` | `float` | Data type of tensor elements (e.g., `float`, `double`, `int`). |
+| `dim` | `int` | `1` | Number of dimensions (compile-time constant). |
+
+### Supported Data Types
+
+The `T` parameter can be any type that satisfies the following conditions:
+
+**Standard Numeric Types**:
+- `float` (float32)
+- `double` (float64)
+- `int32_t`, `int64_t`
+- `uint32_t`, `uint64_t`
+- `int8_t`, `uint8_t`
+- `int16_t`, `uint16_t`
+
+**Extended Types**:
+- `yt::float16` (Half-precision floating point)
+- `yt::bfloat16` (Brain floating point)
+
+:::info
+Custom types must satisfy corresponding operator requirements (see the concepts defined in `include/ytensor_concepts.hpp`).
+:::
+
+### Dimension Parameter
+
+The `dim` parameter is a compile-time constant representing the number of dimensions:
+
+- `dim = 1`: 1D tensor (Vector)
+- `dim = 2`: 2D tensor (Matrix)
+- `dim = 3`: 3D tensor
+- `dim = N`: N-dimensional tensor (theoretically supports any number of dimensions)
+
+## Public Type Aliases
+
+```cpp
+using scalarType = T;           // Alias for element type
+static constexpr int ndim = dim; // Constant for number of dimensions
+```
+
+**Example**:
+```cpp
+YTensor<float, 3> tensor(2, 3, 4);
+
+using ElemType = YTensor<float, 3>::scalarType;  // ElemType = float
+constexpr int dims = YTensor<float, 3>::ndim;    // dims = 3
+```
+
+## Relationship with YTensorBase
+
+`YTensor<T, dim>` inherits from `YTensorBase`. Their relationship and usage scenarios are:
+
+| Feature | YTensor&lt;T, dim&gt; | YTensorBase |
+| --- | --- | --- |
+| **Type Safety** | Compile-time type checking | Runtime type erasure |
+| **Performance** | Better (compiler optimization) | Slightly lower (virtual function overhead) |
+| **Flexibility** | Fixed type and dimensions | Variable type and dimensions |
+| **Use Case** | Known type and dimensions | Dynamic types or container storage |
+
+**Inheritance Diagram**:
+```cpp
+YTensorBase (Base class)
+    ↑
+    |
+YTensor<T, dim> (Derived class)
+```
+
+**Conversion**:
+```cpp
+// YTensor can be implicitly converted to YTensorBase
+YTensor<float, 2> a(3, 4);
+YTensorBase base = a;  // Upcasting (safe)
+
+// YTensorBase can be explicitly converted to YTensor (requires type match)
+YTensor<float, 2> b(base);  // Explicit construction (undefined behavior if types mismatch)
+```
+
+:::warning
+When constructing a `YTensor<T, dim>` from a `YTensorBase`, you must ensure that type `T` and dimension `dim` match the source tensor; otherwise, behavior is undefined.
+:::
+
+## Core Concepts
+
+### Compile-time vs Runtime
+
+The primary advantage of `YTensor` is that type and dimensions are determined at compile-time:
+
+```cpp
+// Compile-time type checking
+YTensor<float, 2> a(3, 4);
+YTensor<int, 2> b(3, 4);
+// auto c = a + b;  // Compile error: Type mismatch
+
+// Compile-time dimension checking
+YTensor<float, 2> x(3, 4);
+YTensor<float, 3> y(3, 4, 5);
+// auto z = x + y;  // Compile error: Dimension mismatch
+```
+
+### View Semantics
+
+Most shape operations (`slice`, `permute`, `view`, etc.) return a **View** of the original data rather than a copy:
+
+```cpp
+YTensor<float, 2> a(3, 4);
+auto b = a.slice(0, 1, 3);  // b is a view of a, sharing memory
+
+b.at(0, 0) = 10.0f;  // Modifying b also affects a
+```
+
+See [Memory Model](../guides/memory_model.mdx) for a detailed explanation.
+
+### Contiguity
+
+A tensor can be **contiguous** or **non-contiguous**:
+
+- **Contiguous Tensor**: Elements are stored in memory in row-major (C-style) order.
+- **Non-contiguous Tensor**: Elements are not contiguous in memory after operations like slicing or transposing.
+
+Certain operations (e.g., `view`) require the tensor to be contiguous. Use `contiguous()` to obtain a contiguous version.
+
+```cpp
+YTensor<float, 2> a(3, 4);
+auto b = a.transpose();     // b is non-contiguous
+bool isCont = b.isContiguous();  // false
+
+auto c = b.contiguous();    // c is a new contiguous tensor
+```
+
+## Basic Usage Examples
+
+### Creating Tensors
+
+```cpp
+#include "ytensor_single.hpp"
+
+// Method 1: Specify shape (elements uninitialized)
+yt::YTensor<float, 2> a(3, 4);
+
+// Method 2: Use a vector to specify shape
+std::vector<int> shape = {3, 4};
+yt::YTensor<float, 2> b(shape);
+
+// Method 3: Initializer list
+yt::YTensor<float, 2> c = {3, 4};
+
+// Method 4: Static factory methods
+auto zeros = yt::YTensor<float, 2>::zeros(3, 4);    // All zeros
+auto ones = yt::YTensor<float, 2>::ones(3, 4);      // All ones
+auto randn = yt::YTensor<float, 2>::randn(3, 4);    // Normal distribution N(0,1)
+auto randu = yt::YTensor<float, 2>::randu(3, 4);    // Uniform distribution U(0,1)
+```
+
+### Accessing Elements
+
+```cpp
+yt::YTensor<float, 2> a(3, 4);
+
+// Method 1: at() method (recommended, with bounds checking)
+a.at(1, 2) = 5.0f;
+float val = a.at(1, 2);
+
+// Method 2: operator[] multi-level subscripting
+a[1][2] = 5.0f;
+
+// Method 3: access with a vector index
+std::vector<int> idx = {1, 2};
+a.at(idx) = 5.0f;
+```
+
+### Shape Operations
+
+```cpp
+yt::YTensor<float, 3> a(2, 3, 4);
+
+// Slicing
+auto sliced = a.slice(1, 1, 3);  // Slice [1, 3) on dimension 1
+
+// Transposing
+auto transposed = a.transpose(0, 2);  // Swap dimensions 0 and 2
+
+// Reshaping
+auto reshaped = a.view(2, 12);  // Change to shape [2, 12]
+
+// Dimension operations
+auto squeezed = a.squeeze(0);     // Remove dimension with size 1
+auto unsqueezed = a.unsqueeze(0); // Insert dimension with size 1
+```
+
+### Mathematical Operations
+
+```cpp
+yt::YTensor<float, 2> a(3, 4);
+yt::YTensor<float, 2> b(3, 4);
+
+// Element-wise operations
+auto c = a + b;
+auto d = a * 2.0f;
+auto e = a / b;
+
+// In-place operations
+a += b;
+a *= 2.0f;
+
+// Matrix multiplication
+yt::YTensor<float, 2> x(3, 4);
+yt::YTensor<float, 2> y(4, 5);
+auto z = x.matmul(y);  // Resulting shape: [3, 5]
+```
+
+## Memory Management
+
+`YTensor` uses smart pointers (`std::shared_ptr`) for memory management:
+
+- **Automatic Release**: No manual memory release required.
+- **Shallow Copy**: Default copy construction and assignment are shallow copies (share data).
+- **Deep Copy**: Use the `clone()` method to create an independent copy.
+
+```cpp
+YTensor<float, 2> a(3, 4);
+
+// Shallow copy (shared memory)
+YTensor<float, 2> b = a;
+b.at(0, 0) = 10.0f;  // Both a and b are affected
+
+// Deep copy (independent memory)
+YTensor<float, 2> c = a.clone();
+c.at(0, 0) = 20.0f;  // Only c is affected
+```
+
+## Performance Considerations
+
+### Compile-time Optimization
+
+Since `T` and `dim` are compile-time constants, the compiler can perform aggressive optimizations such as:
+
+- More function inlining
+- Loop unrolling
+- Constant propagation
+- SIMD vectorization
+
+### Recommended Usage Patterns
+
+1. **Prefer `YTensor<T, dim>`** when the type and dimensions are known.
+2. **Use `YTensorBase`** for container storage or when dynamic typing is required.
+3. **Use `at()` instead of `operator[]`** for frequent element access (if bounds checking is acceptable).
+4. **Ensure contiguity** before performing large-scale tensor operations.
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // Create a 3x4 matrix
+    yt::YTensor<float, 2> matrix = yt::YTensor<float, 2>::zeros(3, 4);
+    
+    // Fill data
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            matrix.at(i, j) = static_cast<float>(i * 4 + j);
+        }
+    }
+    
+    // Print matrix
+    std::cout << "Original matrix:\n" << matrix << std::endl;
+    
+    // Slicing operation
+    auto subMatrix = matrix.slice(0, 1, 3).slice(1, 1, 3);
+    std::cout << "Slice [1:3, 1:3]:\n" << subMatrix << std::endl;
+    
+    // Transpose
+    auto transposed = matrix.transpose();
+    std::cout << "Transposed matrix:\n" << transposed << std::endl;
+    
+    // Mathematical operations
+    auto doubled = matrix * 2.0f;
+    std::cout << "Multiplied by 2:\n" << doubled << std::endl;
+    
+    return 0;
+}
+```
+
+## Next Steps
+
+- [Constructor Details](./construction/constructors.mdx) - Learn all ways to create tensors.
+- [Element Access](./access/indexing.mdx) - Master different access methods.
+- [Shape Operations](./shape/query.mdx) - Learn shape querying and transformations.
+- [Mathematical Operations](./math/arithmetic.mdx) - Explore mathematical operators.
+- [Quick Start Guide](../guides/quick_start.mdx) - Complete usage examples.

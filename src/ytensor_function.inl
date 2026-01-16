@@ -38,6 +38,7 @@ yt::YTensor<T, dim> yt::function::relu(const yt::YTensor<T, dim>& x, int order) 
             }
         }, x);
     }
+    return op;
 }
 
 template <typename T, int dim>
@@ -105,6 +106,7 @@ yt::YTensor<T, dim> yt::function::sigmoid(const yt::YTensor<T, dim>& x, int orde
     else{
         throwNotSupport("yt::function::sigmoid", "order != 0, 1, -1");
     }
+    return x;
 }
 
 template<typename T, int dim>

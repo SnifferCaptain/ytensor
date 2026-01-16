@@ -1,0 +1,326 @@
+# 算术运算
+
+本文档介绍 YTensor 的算术运算符重载。
+
+---
+
+## 核心功能描述
+
+YTensor 支持以下算术运算符，可用于：
+- **张量与张量**运算（自动广播）
+- **张量与标量**运算
+
+### 支持的运算符
+
+| 运算符 | 说明 | 原地版本 |
+|--------|------|---------|
+| `+` | 加法 | `+=` |
+| `-` | 减法 | `-=` |
+| `*` | 逐元素乘法 | `*=` |
+| `/` | 逐元素除法 | `/=` |
+| `%` | 取模（整数）/ fmod（浮点数） | `%=` |
+| `&` | 按位与（整数） | `&=` |
+| `\|` | 按位或（整数） | `\|=` |
+| `^` | 按位异或（整数） | `^=` |
+| `<<` | 左移（整数） | `<<=` |
+| `>>` | 右移（整数） | `>>=` |
+| `==` | 等于 | - |
+| `!=` | 不等于 | - |
+| `<` | 小于 | - |
+| `<=` | 小于等于 | - |
+| `>` | 大于 | - |
+| `>=` | 大于等于 | - |
+
+---
+
+## 函数签名
+
+### 张量与张量运算
+
+```cpp
+template <int dim1>
+YTensor<T, std::max(dim, dim1)> operator+(const YTensor<T, dim1>& other) const;
+
+template <int dim1>
+YTensor<T, std::max(dim, dim1)>& operator+=(const YTensor<T, dim1>& other);
+```
+
+**注意**: 数学和位运算符（`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`, `<<`, `>>`）都有相同的签名模式。比较运算符（`==`, `!=`, `<`,...）返回 `YTensor<bool, dim>`。
+
+### 张量与标量运算
+
+```cpp
+YTensor<T, dim> operator+(const T& other) const;
+YTensor<T, dim>& operator+=(const T& other);
+```
+
+---
+
+## 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `other` | `const YTensor<T, dim1>&` 或 `const T&` | 右操作数（张量或标量） |
+
+---
+
+## 返回值
+
+- **非原地版本** (`+`, `-`, `*`, `/`, `%`, `&`, `|`, `^`): 返回新的结果张量
+- **原地版本** (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`): 返回 `*this` 的引用
+
+---
+
+## 使用示例
+
+### 张量与标量运算
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    auto a = YTensor<float, 2>::ones(3, 3);
+    
+    // 加法
+    auto b = a + 2.0f;  // 所有元素 +2
+    
+    // 原地乘法
+    a *= 3.0f;  // 所有元素 *3
+    
+    // 链式操作
+    auto c = (a + 1.0f) * 2.0f - 0.5f;
+    
+    return 0;
+}
+```
+
+### 张量与张量运算（相同形状）
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = YTensor<float, 2>({3, 3}, {1, 2, 3, 4, 5, 6, 7, 8, 9});
+
+// 逐元素加法
+auto c = a + b;
+// c[i][j] = a[i][j] + b[i][j]
+
+// 逐元素乘法
+auto d = a * b;
+// d[i][j] = a[i][j] * b[i][j]
+```
+
+### 广播运算
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 5);  // (3, 5)
+auto b = YTensor<float, 1>::ones(5);     // (5,)
+
+// b 自动广播到 (3, 5)
+auto c = a + b;
+// c[i][j] = a[i][j] + b[j]
+```
+
+### 不同维度的运算
+
+```cpp
+auto a = YTensor<float, 2>({3, 4});      // 2维
+auto b = YTensor<float, 3>({2, 3, 4});   // 3维
+
+// 返回类型自动推导为 YTensor<float, 3>
+auto c = a + b;  // a 广播到 (2, 3, 4)
+```
+
+### 取模运算
+
+```cpp
+// 整数类型：使用 operator%
+auto a = YTensor<int, 2>({2, 3}, {10, 15, 20, 25, 30, 35});
+auto b = a % 7;
+// b = {3, 1, 6, 4, 2, 0}
+
+// 浮点数类型：使用 std::fmod
+auto c = YTensor<float, 2>({2, 3}, {10.5f, 15.3f, 20.7f, 25.2f, 30.8f, 35.1f});
+auto d = c % 7.0f;
+// d = {3.5, 1.3, 6.7, 4.2, 2.8, 0.1}
+```
+
+### 位运算
+
+```cpp
+auto a = YTensor<int, 2>({2, 2}, {15, 7, 3, 5});  // 二进制
+auto b = YTensor<int, 2>({2, 2}, {9, 12, 6, 10});
+
+// 按位与
+auto c = a & b;  // {9, 4, 2, 0}
+
+// 按位或
+auto d = a | b;  // {15, 15, 7, 15}
+
+// 按位异或
+auto e = a ^ b;  // {6, 11, 5, 15}
+
+// 移位运算
+auto f = a << 1; // {30, 14, 6, 10}
+
+// 比较运算
+auto mask = a > 10; // {true, false, false, false}
+```
+
+---
+
+## 广播规则
+
+广播遵循 NumPy 的规则，从**最右侧维度**开始比较：
+
+### 兼容的形状
+
+```cpp
+(3, 5) + (5,)     → (3, 5)  ✅
+(3, 1, 5) + (3, 4, 5) → (3, 4, 5)  ✅
+(2, 3, 4) + (3, 4) → (2, 3, 4)  ✅
+```
+
+### 不兼容的形状
+
+```cpp
+(3, 5) + (3, 4)   → 错误！维度5和4无法广播 ❌
+(3, 5) + (4,)     → 错误！维度5和4无法广播 ❌
+```
+
+---
+
+## 类型要求
+
+不同运算符对类型有不同要求：
+
+| 运算符 | 类型约束 | 说明 |
+|--------|---------|------|
+| `+`, `-`, `*`, `/` | `yt::concepts::HAVE_ADD<T>` 等 | 需要类型支持对应运算 |
+| `%` | 整数或浮点数 | 整数用 `%`，浮点数用 `fmod` |
+| `&`, `\|`, `^` | 整数类型 | 位运算仅支持整数 |
+| `<<`, `>>` | 整数类型 | 移位运算仅支持整数 |
+| `==`, `<`, `>`... | 所有类型 | 返回 bool 张量 |
+
+### 编译时检查
+
+```cpp
+// ✅ 正确：float 支持加法
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a + 1.0f;
+
+// ❌ 编译错误：std::string 不支持加法
+// auto c = YTensor<std::string, 2>(3, 3);
+// auto d = c + std::string("hello");  // 编译失败
+```
+
+---
+
+## 实现细节
+
+### 内部机制
+
+所有运算符使用 `yt::kernel::broadcast` 实现：
+
+```cpp
+// 非原地版本
+template <int dim1>
+YTensor<T, std::max(dim, dim1)> operator+(const YTensor<T, dim1>& other) const {
+    return yt::kernel::broadcast([](const T& a, const T& b) {
+        return a + b;
+    }, *this, other);
+}
+
+// 原地版本
+template <int dim1>
+YTensor<T, std::max(dim, dim1)>& operator+=(const YTensor<T, dim1>& other) {
+    return this->broadcastInplace([](T& a, const T& b) {
+        return a += b;
+    }, other);
+}
+```
+
+### 性能优化
+
+- **原地操作** (`+=`, `-=` 等): 无额外内存分配，直接修改原张量
+- **广播优化**: 内部使用高效的步长计算，避免实际复制数据
+- **向量化**: 支持 SIMD 优化（编译时启用 AVX2）
+
+---
+
+## 注意事项
+
+:::warning
+**整数除法与浮点除法**
+
+```cpp
+auto a = YTensor<int, 2>({2, 2}, {5, 7, 9, 11});
+auto b = a / 2;  // 整数除法：{2, 3, 4, 5}
+
+auto c = YTensor<float, 2>({2, 2}, {5.0f, 7.0f, 9.0f, 11.0f});
+auto d = c / 2.0f;  // 浮点除法：{2.5, 3.5, 4.5, 5.5}
+```
+:::
+
+:::warning
+**除零行为**
+
+除法和取模运算**不检查除零**，行为未定义：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a / 0.0f;  // ⚠️ 产生 inf 或 nan
+
+auto c = YTensor<int, 2>::ones(3, 3);
+auto d = c % 0;  // ⚠️ 未定义行为（可能崩溃）
+```
+:::
+
+:::info
+**原地操作的内存共享**
+
+原地操作会修改所有共享内存的视图：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 3);
+auto b = a;  // b 和 a 共享内存
+
+a += 1.0f;  // a 和 b 都变化！
+std::cout << b.at(0, 0);  // 输出 2.0
+```
+:::
+
+:::info
+**广播后的返回维度**
+
+两个张量运算时，返回维度是 `std::max(dim, dim1)`：
+
+```cpp
+auto a = YTensor<float, 2>(3, 4);    // 2维
+auto b = YTensor<float, 3>(2, 3, 4); // 3维
+auto c = a + b;  // c 是 YTensor<float, 3>
+```
+:::
+
+---
+
+## 性能对比
+
+| 操作 | 时间复杂度 | 内存分配 |
+|------|-----------|---------|
+| `a + b` | O(n) | 新张量 |
+| `a += b` | O(n) | 无 |
+| `a + scalar` | O(n) | 新张量 |
+| `a += scalar` | O(n) | 无 |
+
+**建议**: 尽可能使用原地操作（`+=`, `*=` 等）以提高性能。
+
+---
+
+## 相关内容
+
+- [广播操作](./broadcast.mdx) - 详细的广播机制
+- [矩阵乘法](./matmul.mdx) - 矩阵乘法运算
+- [广播指南](../../guides/broadcast_guide.mdx) - 广播规则详解
+- [性能优化](../../guides/performance_tips.mdx) - 运算性能优化技巧

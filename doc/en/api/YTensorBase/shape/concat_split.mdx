@@ -1,0 +1,256 @@
+# Shape Operations: Concatenation and Splitting
+
+This document describes the concatenation and splitting methods for the `YTensorBase` class, including `concat()` and `split()`.
+
+## Overview
+
+| Method | Return Type | Memory Behavior | Description |
+| --- | --- | --- | --- |
+| `concat()` (Static) | `YTensorBase` | **New Memory** | Concatenates multiple tensors along a specified axis. |
+| `concat()` (Member) | `YTensorBase` | **New Memory** | Concatenates two tensors along a specified axis. |
+| `split()` (By Sizes) | `std::vector<YTensorBase>` | **View** | Splits a tensor according to a list of specified sizes. |
+| `split()` (Equal Splits) | `std::vector<YTensorBase>` | **View** | Splits a tensor into $n$ equal parts. |
+
+---
+
+## `concat()` - Static Method
+
+### Function Signature
+
+```cpp
+static YTensorBase concat(const std::vector<YTensorBase>& tensors, int axis = 0);
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `tensors` | `const std::vector<YTensorBase>&` | - | **Required**. The list of tensors to concatenate. |
+| `axis` | `int` | `0` | The axis along which to concatenate (supports negative indexing). |
+
+### Core Function Description
+
+Concatenates multiple tensors along a specified axis.
+*   Static method, creates a new tensor (new memory allocation).
+*   Requires all input tensors to have the same `ndim` and `dtype`.
+*   Except for the concatenation axis, other dimension sizes must be the same.
+
+### Return Value
+
+- **Type**: `YTensorBase`
+- **Description**: Returns a **new tensor** containing the concatenated data (independent memory, not a view).
+
+### Requirements and Constraints
+
+1. `tensors` must not be empty (otherwise throws `std::invalid_argument`).
+2. All tensors must have the same `ndim()`.
+3. All tensors must have the same `dtype()`.
+4. All tensors must have identical sizes in all dimensions except the concatenation axis.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+    YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+    YTensorBase c = YTensorBase::zeros({2, 3}, "float32");
+    
+    // Concatenate along axis 0
+    YTensorBase result = YTensorBase::concat({a, b, c}, 0);
+    // result.shape() -> {6, 3}
+    
+    // Concatenate along axis 1
+    YTensorBase result2 = YTensorBase::concat({a, b}, 1);
+    // result2.shape() -> {2, 6}
+}
+```
+
+---
+
+## `concat()` - Member Method
+
+### Function Signature
+
+```cpp
+YTensorBase concat(const YTensorBase& other, int axis = 0) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `other` | `const YTensorBase&` | - | **Required**. The other tensor to concatenate with. |
+| `axis` | `int` | `0` | The axis along which to concatenate (supports negative indexing). |
+
+### Core Function Description
+
+Concatenates two tensors along a specified axis.
+*   Member method, convenience wrapper calling the static version.
+*   Returns a new tensor (new memory allocation).
+
+### Implementation
+
+Internally calls the static version:
+
+```cpp
+YTensorBase concat(const YTensorBase& other, int axis) const {
+    return YTensorBase::concat({*this, other}, axis);
+}
+```
+
+### Usage Example
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+
+YTensorBase result = a.concat(b, 0);
+// result.shape() -> {4, 3}
+```
+
+---
+
+## `split()` - Splitting by Size List
+
+### Function Signature
+
+```cpp
+std::vector<YTensorBase> split(const std::vector<int>& splitSizes, int axis = 0) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `splitSizes` | `const std::vector<int>&` | - | **Required**. A list of sizes for each part; all values must be positive. |
+| `axis` | `int` | `0` | The axis along which to split (supports negative indexing). |
+
+### Core Function Description
+
+Splits a tensor into parts based on a list of sizes.
+*   Returns a list of tensors (**Views**, sharing original memory).
+*   The sum of `splitSizes` must equal the size of the specified axis.
+
+### Return Value
+
+- **Type**: `std::vector<YTensorBase>`
+- **Description**: Returns a vector of tensors resulting from the split (**Views**, sharing original memory).
+
+### Requirements and Constraints
+
+1. All values in `splitSizes` must be positive.
+2. The sum of `splitSizes` must equal the size of the specified axis.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10, 4}, "float32");
+
+// Split by specified sizes
+std::vector<YTensorBase> parts = tensor.split({2, 3, 5}, 0);
+// parts[0].shape() -> {2, 4}
+// parts[1].shape() -> {3, 4}
+// parts[2].shape() -> {5, 4}
+```
+
+---
+
+## `split()` - Equal Splitting
+
+### Function Signature
+
+```cpp
+std::vector<YTensorBase> split(int n, int axis = 0) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `n` | `int` | - | **Required**. The number of parts to split into; must be positive. |
+| `axis` | `int` | `0` | The axis along which to split (supports negative indexing). |
+
+### Core Function Description
+
+Splits a tensor into n equal parts.
+*   Returns a list of tensors (**Views**).
+*   The size of the specified axis must be divisible by `n`.
+
+### Return Value
+
+- **Type**: `std::vector<YTensorBase>`
+- **Description**: Returns a vector of tensors resulting from the split (**Views**).
+
+### Requirements and Constraints
+
+1. `n` must be positive.
+2. The size of the specified axis must be divisible by `n` (otherwise throws `std::invalid_argument`).
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({12, 4}, "float32");
+
+// Split equally into 3 parts
+std::vector<YTensorBase> parts = tensor.split(3, 0);
+// parts[0].shape() -> {4, 4}
+// parts[1].shape() -> {4, 4}
+// parts[2].shape() -> {4, 4}
+```
+
+---
+
+## Comparison of Memory Behavior
+
+| Method | Output Memory | Shares Original Data |
+| --- | --- | --- |
+| `concat()` | **Newly Allocated** | ❌ No |
+| `split()` | **View** | ✅ Yes |
+
+### `concat` Creates New Memory
+
+```cpp
+YTensorBase a = YTensorBase::zeros({2, 3}, "float32");
+YTensorBase b = YTensorBase::ones({2, 3}, "float32");
+YTensorBase c = YTensorBase::concat({a, b}, 0);
+
+// Modifying c does not affect a or b
+c.at<float>({0, 0}) = 99.0f;
+// a.at<float>({0, 0}) remains 0.0
+```
+
+### `split` Returns Views (Shared Memory)
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10, 4}, "float32");
+std::vector<YTensorBase> parts = tensor.split(2, 0);
+
+// Modifying parts[0] affects tensor
+parts[0].at<float>({0, 0}) = 99.0f;
+// tensor.at<float>({0, 0}) also becomes 99.0
+```
+
+---
+
+## Error Cases
+
+| Case | Exception Type |
+| --- | --- |
+| `concat` with empty list | `std::invalid_argument` |
+| `concat` dimension mismatch | `std::invalid_argument` |
+| `concat` `dtype` mismatch | `std::invalid_argument` |
+| `concat` shape mismatch on non-concatenation axes | `std::invalid_argument` |
+| `split` with non-positive sizes | `std::invalid_argument` |
+| `split` sizes sum mismatch | `std::invalid_argument` |
+| `split` with non-positive `n` | `std::invalid_argument` |
+| `split` count doesn't divide dimension size exactly | `std::invalid_argument` |
+
+---
+
+## Related Content
+
+- [Shape Queries](./query.mdx) - Methods like `shape()` and `ndim()`.
+- [Shape Operations: Slicing](./slice.mdx) - Method `slice()` (used internally by `split`).
+- [Shape Operations: Dimension](./dimension.mdx) - Methods like `unsqueeze()` and `squeeze()`.

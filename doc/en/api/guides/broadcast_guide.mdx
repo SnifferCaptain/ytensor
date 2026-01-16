@@ -1,0 +1,135 @@
+# Broadcasting Guide
+
+This guide details YTensor's broadcasting mechanism.
+
+## Broadcasting Rules
+
+YTensor follows the **NumPy broadcasting rules**, starting comparisons from the **rightmost dimension**.
+
+### Dimension Match Conditions
+
+Two dimensions are compatible if:
+1. **Equal**: The dimension sizes are the same.
+2. **One of them is 1**: A dimension with size 1 will be "stretched" to match the other.
+
+### Dimension Alignment
+
+Non-existent dimensions are treated as 1. Alignment happens from right to left during comparison.
+
+---
+
+## Examples
+
+### Compatible Shapes
+
+```cpp
+// (3, 4) + (4,) → (3, 4)
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = YTensor<float, 1>::ones(4);
+auto c = a + b;  // ✅ b is broadcast to every row
+
+// (3, 1, 5) + (3, 4, 5) → (3, 4, 5)
+auto d = YTensor<float, 3>::ones(3, 1, 5);
+auto e = YTensor<float, 3>::ones(3, 4, 5);
+auto f = d + e;  // ✅ The second dimension of d is stretched from 1 to 4
+
+// (2, 3, 4) + (3, 4) → (2, 3, 4)
+auto g = YTensor<float, 3>::ones(2, 3, 4);
+auto h = YTensor<float, 2>::ones(3, 4);
+auto i = g + h;  // ✅ h is implicitly padded with 1 to become (1, 3, 4)
+```
+
+### Incompatible Shapes
+
+```cpp
+// (3, 5) + (3, 4) → Error!
+auto a = YTensor<float, 2>::ones(3, 5);
+auto b = YTensor<float, 2>::ones(3, 4);
+// auto c = a + b;  // ❌ 5 and 4 cannot be broadcast
+
+// (3, 5) + (4,) → Error!
+auto d = YTensor<float, 1>::ones(4);
+// auto e = a + d;  // ❌ 5 and 4 cannot be broadcast
+```
+
+---
+
+## Steps Visualized
+
+```
+Shape A: [    3, 1, 5]
+Shape B: [    3, 4, 5]
+         ↓  ↓  ↓  ↓
+Result:  [    3, 4, 5]
+
+Explanation:
+- Dim 0: 3 == 3 ✓
+- Dim 1: 1 is broadcast to 4 ✓
+- Dim 2: 5 == 5 ✓
+```
+
+```
+Shape A: [       3, 4]   → Padded to [1, 3, 4]
+Shape B: [    2, 3, 4]
+         ↓  ↓  ↓  ↓
+Result:  [    2, 3, 4]
+```
+
+---
+
+## Practical Applications
+
+### Row-wise Operations
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+auto row_values = YTensor<float, 1>::ones(10);
+
+// Add row_values to every row
+auto result = data + row_values;  // (100, 10) + (10,) → (100, 10)
+```
+
+### Column-wise Operations
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+auto col_values = YTensor<float, 2>::ones(100, 1);
+
+// Add col_values to every column
+auto result = data + col_values;  // (100, 10) + (100, 1) → (100, 10)
+```
+
+### Scalar Broadcasting
+
+```cpp
+auto data = YTensor<float, 2>::randn(100, 10);
+
+// Automatic scalar broadcasting
+auto result = data + 5.0f;  // All elements +5
+auto scaled = data * 0.1f;  // All elements ×0.1
+```
+
+---
+
+## broadcastInplace Restrictions
+
+The in-place broadcasting operation `broadcastInplace` has a specific restriction: **the shape of `this` must match the resulting broadcast shape**.
+
+```cpp
+auto a = YTensorBase::zeros({3}, "float32");
+auto b = YTensorBase::ones({3, 4}, "float32");
+
+// ❌ Error: The shape of a {3} cannot accommodate the broadcast result {3, 4}
+// a.broadcastInplace([](float& a, float b) { a += b; }, b);
+
+// ✅ Correct: Use a non-in-place operation
+auto c = a.unsqueeze(1) + b;  // {3, 1} + {3, 4} → {3, 4}
+```
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](../YTensor/math/arithmetic.mdx) - Operator broadcasting
+- [broadcastInplace](../YTensorBase/math/broadcast.mdx) - In-place broadcasting details
+- [Common Pitfalls](./common_pitfalls.mdx) - Broadcasting-related errors

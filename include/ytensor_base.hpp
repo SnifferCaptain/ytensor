@@ -134,15 +134,19 @@ public:
 
     int shapeSize() const;
 
-    /// @brief 张量是否是连续的
-    /// @param fromDim 从该维度开始检查
-    /// @return 如果张量是连续的，返回true；否则返回false。
-    /// @example YTensor<float, 3> a(3, 4, 5); bool is_contiguous = a.isContiguous(); // is_contiguous = true
-    bool isContiguous(int fromDim = 0) const;
+    /// @brief 检查指定范围内的维度是否连续
+    /// @param fromDim 从该维度开始检查（包含），支持负索引
+    /// @param toDim 结束维度（不包含），支持负索引，默认-1表示到最后一维（不含）
+    /// @return 如果指定范围内的维度是连续的，返回true；否则返回false
+    /// @example a.isContiguous() 检查整个张量是否连续
+    /// @example a.isContiguous(0, -1) 检查除最后一维外的所有维度是否连续
+    bool isContiguous(int fromDim = 0, int toDim = -1) const;
 
-    /// @brief 获取张量从哪个维度开始是连续的
-    /// @return 返回从哪个维度开始是连续的。如果完全不连续的话，就返回dim
-    int isContiguousFrom() const;
+    /// @brief 获取张量在指定范围内从哪个维度开始是连续的
+    /// @param fromDim 起始维度（包含），支持负索引
+    /// @param toDim 结束维度（不包含），支持负索引，默认-1表示到最后一维（不含）
+    /// @return 返回范围内第一个不连续维度的索引+1，如果全部连续则返回fromDim
+    int isContiguousFrom(int fromDim = 0, int toDim = -1) const;
 
     /// @brief 张量是否是不重叠的
     /// @return 如果张量是不重叠的，返回true；否则返回false。
@@ -196,11 +200,16 @@ public:
     /// @brief 深拷贝：返回一个独立拥有自己数据的 YTensorBase
     YTensorBase clone() const;
 
+    /// @brief 类型转换：返回一个指定新类型的新张量
+    /// @param newDtype 目标类型名称
+    /// @return 返回转换后的新张量
+    YTensorBase cast(const std::string& newDtype) const;
+
     /// @brief 从源张量复制元素到本张量（原地操作，不重新分配内存）
     /// @param src 源张量，shape必须与本张量一致
     /// @return 返回自身引用
-    /// @note 支持非连续张量，会尽可能地复制连续内存块以提高效率
-    /// @note 目前不支持src与dst的内存重叠，若存在重叠则行为未定义
+    /// @note 支持不同dtype之间的类型转换（以本张量类型为准进行转换）
+    /// @note 支持src与dst内存重叠的情况（会自动使用临时缓冲区）
     YTensorBase& copy_(const YTensorBase& src);
 
     /// @brief 自动推导合适形状
@@ -386,6 +395,13 @@ protected:
     /// @brief cout接口
     virtual std::ostream& _cout(std::ostream &os) const;
 };
+
+inline YTensorBase YTensorBase::cast(const std::string& newDtype) const {
+    if (_dtype == newDtype) return this->clone();
+    YTensorBase res(this->shape(), newDtype);
+    res.copy_(*this);
+    return res;
+}
 
 } // namespace yt
 

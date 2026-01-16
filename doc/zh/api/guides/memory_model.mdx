@@ -1,0 +1,140 @@
+# 内存模型
+
+本指南深入解析 YTensor 的内存模型，包括视图、浅拷贝和深拷贝。
+
+## 核心概念
+
+### 1. 共享内存（视图）
+
+大多数形状操作返回**视图**，与原张量共享底层内存：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+
+// 以下操作返回视图（共享内存）
+auto b = a.slice(0, 0, 2);       // 切片
+auto c = a.transpose();           // 转置
+auto d = a.permute({1, 0});       // 重排维度
+auto e = a.view(12);              // 重塑（需连续）
+auto f = a.unsqueeze(0);          // 增加维度
+
+// 修改视图会影响原张量
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // 输出: 99.0
+```
+
+### 2. 浅拷贝
+
+赋值和拷贝构造默认是**浅拷贝**：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a;  // 浅拷贝，共享内存
+
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // 输出: 99.0
+```
+
+### 3. 深拷贝
+
+使用 `clone()` 创建**独立副本**：
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+auto b = a.clone();  // 深拷贝，独立内存
+
+b.at(0, 0) = 99.0f;
+std::cout << a.at(0, 0);  // 输出: 1.0（不受影响）
+```
+
+---
+
+## 连续性
+
+### 什么是连续？
+
+连续张量的内存布局符合行优先（C 风格）顺序，逻辑 stride 与实际 stride 一致。
+
+### 检测连续性
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4);
+std::cout << a.isContiguous();  // true
+
+auto t = a.transpose();
+std::cout << t.isContiguous();  // false（转置破坏连续性）
+```
+
+### 转换为连续
+
+```cpp
+auto a = YTensor<float, 2>::ones(3, 4).transpose();
+
+// 返回连续副本（如果已连续则返回视图）
+auto b = a.contiguous();
+
+// 原地转换
+a.contiguous_();
+```
+
+### 连续性与 view()
+
+`view()` 要求张量必须连续，否则抛出异常：
+
+```cpp
+auto t = tensor.transpose();
+// auto v = t.view(new_shape);  // ❌ 错误！
+
+// ✅ 正确做法
+auto v = t.contiguous().view(new_shape);
+// 或使用 reshape()（自动处理连续性）
+auto v = t.reshape(new_shape);
+```
+
+---
+
+## 内存布局
+
+```
+YTensorBase 内部结构：
++------------------+
+|  _data           | → shared_ptr 指向实际数据块
++------------------+
+|  _offset         |   视图在数据块中的起始偏移
++------------------+
+|  _shape[]        |   各维度大小
++------------------+
+|  _stride[]       |   各维度步长（实际内存步长）
++------------------+
+|  _element_size   |   单个元素字节数
++------------------+
+|  _dtype          |   类型名称字符串
++------------------+
+```
+
+---
+
+## 操作内存行为总结
+
+| 操作 | 返回类型 | 共享内存 |
+| --- | --- | --- |
+| `slice()` | 视图 | ✅ 是 |
+| `transpose()` | 视图 | ✅ 是 |
+| `permute()` | 视图 | ✅ 是 |
+| `view()` | 视图 | ✅ 是 |
+| `unsqueeze()` | 视图 | ✅ 是 |
+| `squeeze()` | 视图 | ✅ 是 |
+| `split()` | 视图列表 | ✅ 是 |
+| `clone()` | 新张量 | ❌ 否 |
+| `contiguous()` | 视图或新张量 | 取决于是否已连续 |
+| `concat()` | 新张量 | ❌ 否 |
+| 算术运算 `+`,`-`,`*`,`/` | 新张量 | ❌ 否 |
+| 原地运算 `+=`,`-=` 等 | 自身引用 | ✅ 是（修改原数据） |
+
+---
+
+## 相关内容
+
+- [形状操作：重塑](../YTensor/shape/reshape.mdx) - contiguous、view 详解
+- [形状操作：切片](../YTensor/shape/slice.mdx) - slice 视图行为
+- [常见陷阱](./common_pitfalls.mdx) - 避免内存相关错误

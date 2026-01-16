@@ -1,0 +1,66 @@
+# Global Constants
+
+This document describes the global constants and configurations in the `yt::infos` namespace.
+
+## File Format Constants
+
+```cpp
+static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
+static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
+```
+
+## Random Number Generation
+
+```cpp
+inline std::mt19937 gen = std::mt19937(std::random_device{}());
+inline std::mutex rngMutex;
+```
+
+Locks are required during use:
+```cpp
+std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
+// Use yt::infos::gen
+```
+
+## Rounding Modes
+
+```cpp
+enum class RoundMode {
+    nearest = 0,     // Round to nearest
+    nearestEven = 1, // Banker's rounding (default)
+    truncate = 2     // Direct truncation
+};
+
+static constexpr RoundMode roundMode = RoundMode::nearestEven;
+```
+
+:::note
+This rounding mode mainly affects the conversion and calculation precision for the **BF16 (bfloat16)** type.
+`nearestEven` (banker's rounding) generally provides better statistical unbiasedness than simple rounding or truncation.
+:::
+
+## Parallelization Threshold
+
+```cpp
+static constexpr double minParOps = 29609.;  // Minimum number of operations for parallelization
+```
+
+## Operation Cost Constants
+
+```cpp
+// Floating-point operations
+static constexpr double flopAdd = 1.;
+static constexpr double flopMul = 1.;
+static constexpr double flopDiv = 1.;
+
+// Integer operations
+static constexpr double ilopAdd = 3.38;
+static constexpr double ilopMul = 3.38;
+```
+
+---
+
+## Related Content
+
+- [Backend System](./backend.mdx) - MatmulBackend configuration
+- [Type Registration](./types.mdx) - TypeRegItem structure

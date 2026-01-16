@@ -1,0 +1,56 @@
+# TensorInfo 结构体
+
+本文档介绍 `yt::io::TensorInfo` 结构体，用于存储张量的元信息。
+
+## 结构定义
+
+```cpp
+struct TensorInfo {
+    std::string name;               // 张量名称
+    std::string typeName;           // 元素类型名称
+    int32_t typeSize;               // 元素类型字节大小
+    std::string tensorType;         // 张量类型 (dense, sparse等)
+    std::vector<int> shape;         // 张量形状
+    uint64_t dataOffset;            // 文件内数据偏移
+    uint64_t compressedSize;        // 压缩后大小
+    std::string compressMethod;     // 压缩算法
+    uint64_t uncompressedSize;      // 原始数据大小
+    std::vector<char> compressedData;  // 内存中的压缩数据（可选）
+};
+```
+
+## 字段说明
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | `string` | 张量名称 |
+| `typeName` | `string` | 类型名称，如 "float32" |
+| `typeSize` | `int32_t` | 元素字节大小 |
+| `tensorType` | `string` | 当前仅支持 "dense" |
+| `shape` | `vector<int>` | 张量形状 |
+| `dataOffset` | `uint64_t` | 数据在文件中的偏移 |
+| `compressedSize` | `uint64_t` | 压缩后的字节数 |
+| `compressMethod` | `string` | 压缩算法名称 |
+| `uncompressedSize` | `uint64_t` | 原始数据字节数 |
+| `compressedData` | `vector<char>` | 内存中的压缩数据 |
+
+## 使用示例
+
+```cpp
+yt::io::YTensorIO reader;
+reader.open("test.yt", yt::io::Read);
+
+// 获取张量信息
+yt::io::TensorInfo info = reader.getTensorInfo("my_tensor");
+
+std::cout << "Name: " << info.name << std::endl;
+std::cout << "Type: " << info.typeName << std::endl;
+std::cout << "Shape: [" << info.shape[0] << ", " << info.shape[1] << "]" << std::endl;
+```
+
+---
+
+## 相关内容
+
+- [YTensorIO](./YTensorIO.mdx) - IO 类
+- [压缩方法](./compression.mdx) - 压缩配置

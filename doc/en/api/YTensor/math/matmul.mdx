@@ -1,0 +1,414 @@
+# Matrix Multiplication
+
+This document describes the matrix multiplication functionality within YTensor.
+
+---
+
+## matmul()
+
+Performs matrix multiplication on the last two dimensions of tensors, supporting batch operations and automatic broadcasting.
+
+### Function Signature
+
+```cpp
+template <int dim1>
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> matmul(
+    const YTensor<T, dim1>& other,
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+|--------|------|--------|------|
+| `other` | `const YTensor<T, dim1>&` | - | The right-hand operand tensor. |
+| `backend` | `MatmulBackend` | `defaultMatmulBackend` | The matrix multiplication backend to use. |
+
+### Core Function Description
+
+Performs matrix multiplication on the last two dimensions.
+*   Supports automatic broadcasting: leading dimensions (batch dimensions) are automatically broadcast.
+*   Supports batch operations: computes multiple matrix products at once.
+*   Backend optimization: automatically selects the best backend (AVX2, Eigen, Naive).
+
+### Return Value
+
+Returns a `YTensor<T, result_dim>`, where `result_dim = max(dim, dim1, 2)`.
+
+### Matrix Multiplication Rules
+
+Assuming:
+- Left tensor shape: `(..., m, k)`
+- Right tensor shape: `(..., k, n)`
+- Result shape: `(..., m, n)`
+
+**Requirements**:
+- The last dimension size of the left tensor (`k`) must match the penultimate dimension size of the right tensor (`k`).
+- Leading batch dimensions `(...)` are automatically broadcasted.
+
+### Usage Examples
+
+#### Basic Matrix Multiplication
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+    
+    // 2D × 2D
+    auto a = YTensor<float, 2>::randn(3, 4);  // (3, 4)
+    auto b = YTensor<float, 2>::randn(4, 5);  // (4, 5)
+    auto c = a.matmul(b);                      // (3, 5)
+    
+    return 0;
+}
+```
+
+#### Batch Matrix Multiplication
+
+```cpp
+// 3D × 3D
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+auto b = YTensor<float, 3>::randn(10, 4, 5);  // (10, 4, 5)
+auto c = a.matmul(b);                          // (10, 3, 5)
+
+// Executes 10 matrix multiplications:
+// c[i] = a[i] @ b[i], where i = 0, 1, ..., 9
+```
+
+#### Broadcasting Matrix Multiplication
+
+```cpp
+// 3D × 2D (Broadcasting)
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+auto b = YTensor<float, 2>::randn(4, 5);      // (4, 5)
+auto c = a.matmul(b);                          // (10, 3, 5)
+
+// 'b' is broadcasted to (10, 4, 5)
+// c[i] = a[i] @ b, where i = 0, 1, ..., 9
+```
+
+#### Vector-Matrix Multiplication
+
+```cpp
+// 1D × 2D (Treated as a row vector)
+auto a = YTensor<float, 1>::randn(4);      // (4,)
+auto b = YTensor<float, 2>::randn(4, 5);   // (4, 5)
+auto c = a.matmul(b);                       // (1, 5)
+
+// 'a' is treated as (1, 4), result is (1, 5)
+```
+
+#### Matrix-Vector Multiplication
+
+```cpp
+// 2D × 1D (Treated as a column vector)
+auto a = YTensor<float, 2>::randn(3, 4);   // (3, 4)
+auto b = YTensor<float, 1>::randn(4);      // (4,)
+auto c = a.matmul(b);                       // (3, 1)
+
+// 'b' is treated as (4, 1), result is (3, 1)
+```
+
+#### Higher-Dimensional Broadcasting
+
+```cpp
+// 4D × 3D
+auto a = YTensor<float, 4>::randn(2, 10, 3, 4);  // (2, 10, 3, 4)
+auto b = YTensor<float, 3>::randn(10, 4, 5);     // (10, 4, 5)
+auto c = a.matmul(b);                             // (2, 10, 3, 5)
+
+// 'b' is broadcasted to (2, 10, 4, 5)
+```
+
+---
+
+## matView()
+
+Treats the last two dimensions of the tensor as a matrix and returns a matrix view.
+
+### Function Signature
+
+```cpp
+YTensor<YTensor<T, 2>, std::max(1, dim - 2)> matView() const;
+```
+
+### Core Function Description
+
+Treats the last two dimensions of the tensor as a matrix and returns a matrix view.
+
+### Return Value
+
+Returns a "tensor of tensors," where:
+- The outer dimension count is `max(1, dim - 2)`.
+- The inner dimension count is `2` (the matrix).
+
+### Use Case
+
+When you need to handle a high-dimensional tensor as a batch of matrices:
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 3, 4);  // (10, 3, 4)
+
+// Get high-level matrix view
+auto matView = a.matView();  // YTensor<YTensor<float, 2>, 1>
+
+// matView[i] is a YTensor<float, 2> with shape (3, 4)
+auto firstMatrix = matView.at(0);  // The (3, 4) matrix
+```
+
+### Notes
+
+:::warning
+**Memory Sharing**
+
+The view returned by `matView()` **shares memory** with the original tensor:
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+auto mv = a.matView();
+
+// Modifying the view affects the original tensor
+mv.at(0).at_(1, 2) = 999.0f;
+std::cout << a.at(0, 1, 2);  // Output: 999.0
+```
+:::
+
+---
+
+## Matrix Multiplication Backends
+
+YTensor supports three backends for matrix multiplication, selectable at compile-time or runtime.
+
+### MatmulBackend Enum
+
+```cpp
+enum class MatmulBackend {
+    Naive = 0,  // Simple triple-loop implementation
+    Eigen = 1,  // Eigen library implementation
+    AVX2 = 2    // Optimized with AVX2 + FMA instructions
+};
+```
+
+### Backend Comparison
+
+| Backend | Dependencies | Performance | Supported Types | Best Use Case |
+|------|------|------|---------|---------|
+| **Naive** | None | Slowest | All types | Debugging, non-arithmetic types |
+| **Eigen** | Eigen Library | Fast | Arithmetic types | General use, cross-platform |
+| **AVX2** | AVX2+FMA CPU | Fastest | `float` | x86_64 production |
+
+### Default Backend Selection
+
+The best available backend is automatically selected at compile-time:
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend = 
+#if YT_USE_AVX2
+    MatmulBackend::AVX2
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+**Priority**: AVX2 > Eigen > Naive.
+
+### Manually Specifying a Backend
+
+```cpp
+auto a = YTensor<float, 2>::randn(100, 100);
+auto b = YTensor<float, 2>::randn(100, 100);
+
+// Use Naive backend
+auto c1 = a.matmul(b, yt::infos::MatmulBackend::Naive);
+
+// Use Eigen backend
+auto c2 = a.matmul(b, yt::infos::MatmulBackend::Eigen);
+
+// Use AVX2 backend
+auto c3 = a.matmul(b, yt::infos::MatmulBackend::AVX2);
+```
+
+---
+
+## Performance Considerations
+
+### Backend Benchmarks
+
+Benchmark results for 512×512 matrix multiplication (Intel i7-10700K):
+
+| Backend | Time (ms) | Relative Perf | GFLOPS |
+|------|----------|---------|--------|
+| Naive | ~1850 | 1.0x | 0.14 |
+| Eigen | ~12.5 | 148x | 21.5 |
+| AVX2 | ~8.3 | 223x | 32.4 |
+
+### Memory Layout
+
+Matrix multiplication assumes **Row-major** layout:
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 4);  // Row-major, contiguous storage
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);  // Efficient
+    
+auto a_t = a.transpose(0, 1);  // Non-contiguous (effectively Column-major)
+auto c2 = a_t.matmul(b);       // Slower
+```
+
+### Recommendations
+
+```cpp
+// ❌ Inefficient: Transposed and non-contiguous
+auto a = YTensor<float, 2>::randn(1000, 1000);
+auto a_t = a.transpose(0, 1);
+auto b = YTensor<float, 2>::randn(1000, 1000);
+auto c = a_t.matmul(b);  // Non-contiguous memory access
+
+// ✅ Efficient: Contiguous first
+auto a = YTensor<float, 2>::randn(1000, 1000);
+auto a_t = a.transpose(0, 1).contiguous();  // Copy to contiguous memory
+auto b = YTensor<float, 2>::randn(1000, 1000);
+auto c = a_t.matmul(b);  // Contiguous memory access
+```
+
+---
+
+## Type Requirements
+
+Matrix multiplication requires that the element type supports addition and multiplication:
+
+```cpp
+static_assert(HAVE_ADD<T> && HAVE_MUL<T>, 
+              "Type must have add and mul in matmul");
+```
+
+### Supported Types
+
+- ✅ All arithmetic types: `float`, `double`, `int`, `int64_t`, etc.
+- ✅ Custom types that implement `operator+` and `operator*`.
+- ❌ Types lacking addition or multiplication (compilation error).
+
+### Non-arithmetic Types
+
+Non-arithmetic types can only use the Naive backend:
+
+```cpp
+struct Complex {
+    float real, imag;
+    Complex operator+(const Complex& other) const { /*...*/ }
+    Complex operator*(const Complex& other) const { /*...*/ }
+};
+
+auto a = YTensor<Complex, 2>(3, 4);
+auto b = YTensor<Complex, 2>(4, 5);
+
+// Automatically uses Naive backend regardless of parameters
+auto c = a.matmul(b);
+```
+
+---
+
+## Error Handling
+
+### Shape Mismatch
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 5);  // (3, 5)
+auto b = YTensor<float, 2>::randn(4, 7);  // (4, 7)
+
+try {
+    auto c = a.matmul(b);
+} catch (const std::runtime_error& e) {
+    // Error: Last dimension of left (5) != penultimate dimension of right (4)
+    std::cout << e.what() << std::endl;
+}
+```
+
+**Requirement**: `a.shape(-1) == b.shape(-2)`.
+
+---
+
+## Comparison with NumPy/PyTorch
+
+### Similarities
+
+```python
+# NumPy/PyTorch
+a = np.random.randn(3, 4)
+b = np.random.randn(4, 5)
+c = a @ b  # or np.matmul(a, b)
+```
+
+```cpp
+// YTensor
+auto a = YTensor<float, 2>::randn(3, 4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);
+```
+
+### Differences
+
+| Feature | NumPy/PyTorch | YTensor |
+|------|--------------|---------|
+| Operator | `@` or `matmul()` | Only `matmul()` |
+| Backend Selection | Automatic (BLAS) | Manual or Automatic |
+| GPU Support | ✅ (PyTorch) | ❌ |
+| Compile-time Opt | ❌ | ✅ (for dimensions) |
+
+---
+
+## Best Practices
+
+### 1. Prefer Batch Operations
+
+```cpp
+// ❌ Inefficient: Loop with individual calls
+std::vector<YTensor<float, 2>> results;
+for (int i = 0; i < 100; ++i) {
+    auto a = getMatrix(i);
+    auto b = getMatrix(i + 1);
+    results.push_back(a.matmul(b));
+}
+
+// ✅ Efficient: Batch matrix multiplication
+auto a_batch = YTensor<float, 3>::stack(aList);  // (100, m, k)
+auto b_batch = YTensor<float, 3>::stack(bList);  // (100, k, n)
+auto c_batch = a_batch.matmul(b_batch);          // (100, m, n)
+```
+
+### 2. Contiguous Memory
+
+```cpp
+// ✅ Ensure matrices are contiguous
+auto a = getTensor().contiguous();
+auto b = getTensor().contiguous();
+auto c = a.matmul(b);  // Optimal performance
+```
+
+### 3. Choose the Right Backend
+
+```cpp
+// Small matrices: Naive is sufficient
+if (m * n * k < 1000) {
+    c = a.matmul(b, MatmulBackend::Naive);
+}
+// Large matrices: Use AVX2 or Eigen
+else {
+    c = a.matmul(b);  // Uses best default backend
+}
+```
+
+---
+
+## Related Content
+
+- [Arithmetic Operations](./arithmetic.mdx) - Element-wise operations.
+- [Broadcasting Operations](./broadcast.mdx) - The broadcasting mechanism.
+- [Backend Selection Guide](../../guides/backend_selection.mdx) - Comparison and selection of backends.
+- [Performance Optimization](../../guides/performance_tips.mdx) - Optimizing matrix multiplication.

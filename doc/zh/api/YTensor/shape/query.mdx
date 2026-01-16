@@ -1,0 +1,416 @@
+# 形状查询
+
+本文档介绍 YTensor 的形状和步长查询方法。
+
+---
+
+## shape()
+
+获取张量的形状向量或指定维度的大小。
+
+### 函数签名
+
+```cpp
+// 1. 获取完整形状向量
+std::vector<int> shape() const;
+
+// 2. 获取指定维度的大小
+int shape(int atDim) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `atDim` | `int` | - | 维度索引（从0开始）。支持负数索引，`-1` 表示最后一个维度。 |
+
+### 核心功能描述
+
+返回张量的形状信息。
+*   无参数版本返回完整的形状向量 `std::vector<int>`。
+*   带参数版本返回指定维度的长度。支持负数索引（如 `-1` 表示最后一维）。
+
+### 返回值
+
+- **版本1**: 返回 `std::vector<int>`，包含所有维度的大小。
+- **版本2**: 返回 `int`，指定维度的大小。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+int main() {
+    // 创建 3×4×5 的张量
+    auto a = yt::YTensor<float, 3>(3, 4, 5);
+    
+    // 获取完整形状
+    auto shape_vec = a.shape();
+    // shape_vec = {3, 4, 5}
+    
+    // 获取指定维度
+    int dim0 = a.shape(0);   // 3
+    int dim1 = a.shape(1);   // 4
+    int dim2 = a.shape(2);   // 5
+    
+    // 负索引
+    int last_dim = a.shape(-1);  // 5（最后一个维度）
+    int second_last = a.shape(-2);  // 4（倒数第二个维度）
+    
+    return 0;
+}
+```
+
+### 注意事项
+
+:::warning
+**循环索引行为**
+
+索引会自动循环处理：
+- 负数索引：`-1` 转换为 `dim-1`
+- 超出范围：会通过取模运算循环
+
+例如，对于 3 维张量：
+- `shape(-1)` → `shape(2)`
+- `shape(3)` → `shape(0)`
+- `shape(4)` → `shape(1)`
+:::
+
+:::warning
+**0维张量异常**
+
+对 0 维张量调用 `shape(int)` 会抛出 `std::out_of_range` 异常。
+:::
+
+---
+
+## stride()
+
+获取张量的步长（stride）信息。
+
+### 函数签名
+
+```cpp
+// 1. 获取逻辑步长向量
+std::vector<int> stride() const;
+
+// 2. 获取指定维度的逻辑步长
+int stride(int atDim) const;
+
+// 3. 获取真实物理步长向量
+std::vector<int> stride_() const;
+
+// 4. 获取指定维度的真实物理步长
+int stride_(int atDim) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `atDim` | `int` | - | 维度索引（从0开始）。支持负数索引。 |
+
+### 核心功能描述
+
+获取张量的步长信息。步长表示在内存中移动到下一个元素需要跨越的元素数量。
+*   `stride()`: 返回**逻辑步长**（假设张量是连续的）。
+*   `stride_()`: 返回**物理步长**（实际内存布局）。对于非连续张量（如切片、转置后），物理步长与逻辑步长可能不同。
+
+### 返回值
+
+- **`stride()`**: 返回**重新计算**的连续步长向量（假设数据连续存储）
+- **`stride(int)`**: 返回**实际物理**步长（直接从 `_stride` 读取）
+- **`stride_()`**: 返回实际的物理内存步长向量
+- **`stride_(int)`**: 返回指定维度的实际物理步长
+
+### 逻辑步长 vs 物理步长
+
+:::warning
+**重要差异**
+
+`stride()` 方法的**向量版本**和**单参数版本**行为不同：
+
+- `stride()` 向量版本：**重新计算**假设连续存储的逻辑步长
+- `stride(int)` 单参数版本：**直接返回**实际的物理步长 `_stride[atDim]`
+
+这意味着 `stride()[i]` 和 `stride(i)` **可能返回不同的值**！
+:::
+
+```cpp
+// 连续张量：两个版本相同
+auto a = YTensor<float, 2>(3, 4);  // 形状 (3, 4)
+auto s1 = a.stride();   // {4, 1}
+auto s2 = a.stride_();  // {4, 1}
+std::cout << a.stride(0);   // 4
+std::cout << a.stride()[0]; // 4
+// 都相同
+
+// 非连续张量（转置后）：两个版本不同！
+auto b = a.transpose(0, 1);  // 形状 (4, 3)
+auto s3 = b.stride();   // {3, 1}  ← 逻辑步长（重新计算）
+auto s4 = b.stride_();  // {1, 4}  ← 物理步长（实际内存）
+
+std::cout << b.stride()[0];  // 3  ← 逻辑值
+std::cout << b.stride(0);    // 1  ← 物理值（直接从 _stride 读取）
+std::cout << b.stride_(0);   // 1  ← 物理值
+
+// ⚠️ stride()[i] != stride(i) 对于非连续张量！
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+#include <iostream>
+
+int main() {
+int main() {
+    // 创建连续张量
+    auto a = yt::YTensor<float, 3>(2, 3, 4);
+    
+    std::cout << "=== 连续张量 ===" << std::endl;
+    auto stride_vec = a.stride();
+    std::cout << "逻辑步长: {";
+    for (int s : stride_vec) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // 输出: {12, 4, 1}
+    
+    auto stride_vec_ = a.stride_();
+    std::cout << "物理步长: {";
+    for (int s : stride_vec_) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // 输出: {12, 4, 1}（相同）
+    
+    // 转置后
+    auto b = a.transpose(0, 2);  // (4, 3, 2)
+    
+    std::cout << "\n=== 转置后（非连续） ===" << std::endl;
+    auto b_stride = b.stride();
+    std::cout << "逻辑步长: {";
+    for (int s : b_stride) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // 输出: {6, 2, 1}（假设连续）
+    
+    auto b_stride_ = b.stride_();
+    std::cout << "物理步长: {";
+    for (int s : b_stride_) std::cout << s << " ";
+    std::cout << "}" << std::endl;
+    // 输出: {1, 4, 12}（实际内存布局）
+    
+    return 0;
+}
+```
+
+### 注意事项
+
+:::info
+**何时使用哪个方法**
+
+- **`stride()` 向量版本**: 获取逻辑步长，用于理解数据的逻辑布局
+- **`stride(int)` 单参数版本**: 获取实际物理步长，用于内存计算
+- **`stride_()` 系列**: 明确获取物理步长，推荐用于所有内存操作
+
+**最佳实践**: 为避免混淆，建议统一使用 `stride_()` 系列方法来获取实际的内存步长。
+:::
+
+---
+
+## size()
+
+获取张量的元素总数。
+
+### 函数签名
+
+```cpp
+size_t size() const;
+```
+
+### 核心功能描述
+
+获取张量的元素总数。返回所有维度大小的乘积。
+
+### 返回值
+
+返回 `size_t`，表示张量的元素总数（所有维度大小的乘积）。
+
+### 使用示例
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+size_t total = a.size();  // 2 * 3 * 4 = 24
+```
+
+### 注意事项
+
+:::info
+**非连续张量的 size()**
+
+即使张量是非连续的（如切片或转置后），`size()` 返回的仍然是**逻辑元素数**，而不是实际占用的内存大小。
+
+```cpp
+auto a = YTensor<float, 2>(10, 10);  // 100 个元素
+auto b = a.slice({{0, 5}, {0, 5}});  // 25 个元素
+std::cout << b.size();  // 输出: 25（逻辑大小）
+// 但 b 和 a 共享内存，实际占用 100 个元素的空间
+```
+:::
+
+---
+
+## ndim() / shapeSize()
+
+获取张量的维度数。
+
+### 函数签名
+
+```cpp
+int ndim() const;           // 继承自 YTensorBase
+constexpr int shapeSize() const;  // YTensor 的编译时版本
+```
+
+### 核心功能描述
+
+获取张量的维度数（Rank）。`ndim()` 是运行时版本，`shapeSize()` 是编译时常量版本。
+
+### 返回值
+
+返回 `int`，表示张量的维度数。
+
+### 使用示例
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+int dims1 = a.ndim();       // 3
+int dims2 = a.shapeSize();  // 3（编译时常量）
+```
+
+### 差异说明
+
+| 方法 | 来源 | 特点 |
+|------|------|------|
+| `ndim()` | `YTensorBase` | 运行时计算 |
+| `shapeSize()` | `YTensor<T, dim>` | 编译时常量，返回模板参数 `dim` |
+
+---
+
+## shapeMatch()
+
+检查张量的形状是否与给定形状匹配。
+
+### 函数签名
+
+```cpp
+bool shapeMatch(const std::vector<int>& otherShape) const;
+```
+
+### 核心功能描述
+
+检查张量的形状是否与给定形状向量完全匹配。
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `otherShape` | `const std::vector<int>&` | 待比较的形状向量 |
+
+### 返回值
+
+- `true`: 形状完全匹配（维度数和每个维度的大小都相同）
+- `false`: 形状不匹配
+
+### 使用示例
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+
+bool match1 = a.shapeMatch({2, 3, 4});  // true
+bool match2 = a.shapeMatch({2, 3, 5});  // false（最后维度不同）
+bool match3 = a.shapeMatch({2, 3});     // false（维度数不同）
+```
+
+### 实现逻辑
+
+```cpp
+// 检查步骤：
+// 1. 维度数是否相同
+// 2. 每个维度的大小是否相同
+```
+
+---
+
+## offset()
+
+计算指定索引处元素相对于数据指针的偏移量。
+
+### 函数签名
+
+```cpp
+// 1. 可变参数版本
+template<typename... Args>
+int offset(Args... index) const;
+
+// 2. 向量版本
+int offset(const std::vector<int>& index) const;
+
+// 3. 物理偏移量版本（包含张量自身的 _offset）
+template<typename... Args>
+int offset_(Args... index) const;
+
+int offset_(const std::vector<int>& index) const;
+```
+
+### 核心功能描述
+
+计算指定多维索引对应的线性内存偏移量。
+*   `offset()`：相对于当前视图起点的偏移。
+*   `offset_()`：相对于原始数据指针的绝对偏移。
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `index` | `int...` 或 `std::vector<int>` | 元素的多维索引 |
+
+### 返回值
+
+- **`offset(...)`**: 返回相对偏移量（不包含张量的 `_offset`）
+- **`offset_(...)`**: 返回绝对物理偏移量（`_offset + offset(...)`）
+
+### 使用示例
+
+```cpp
+auto a = YTensor<float, 3>(2, 3, 4);
+
+// 计算 [1, 2, 3] 的偏移量
+int off1 = a.offset(1, 2, 3);
+// off1 = 1*12 + 2*4 + 3*1 = 12 + 8 + 3 = 23
+
+// 向量版本
+int off2 = a.offset({1, 2, 3});  // 23
+
+// 对于切片
+auto b = a.slice({{1, 2}, {}, {}});  // b 的 _offset = 12
+int off3 = b.offset(0, 0, 0);   // 0（相对于 b 的起始）
+int off4 = b.offset_(0, 0, 0);  // 12（相对于原始数据的起始）
+```
+
+### 注意事项
+
+:::warning
+**何时使用 offset 和 offset_**
+
+- **`offset()`**: 计算相对于当前视图起点的偏移
+- **`offset_()`**: 计算相对于原始数据指针的绝对偏移
+
+对于根张量（非切片），两者相同。对于切片视图，两者不同。
+:::
+
+---
+
+## 相关内容
+
+- [切片操作](./slice.mdx) - 使用切片创建子视图
+- [变形操作](./reshape.mdx) - 改变张量形状
+- [数据访问](../access/indexing.mdx) - 使用索引访问元素
+- [属性查询](../utilities/properties.mdx) - 检查连续性等属性

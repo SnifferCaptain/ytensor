@@ -1,0 +1,213 @@
+# Shape Operations: Dimension
+
+This document describes the dimension manipulation methods for the `YTensorBase` class, including `unsqueeze()`, `squeeze()`, `repeat()`, and `unfold()`.
+
+## Overview
+
+| Method | Return Type | In-place Version | Description |
+| --- | --- | --- | --- |
+| `unsqueeze()` | `YTensorBase` | `unsqueeze_()` | Inserts a dimension of size 1. |
+| `squeeze()` | `YTensorBase` | `squeeze_()` | Removes dimension(s) of size 1. |
+| `repeat()` | `YTensorBase` | `repeat_()` | Repeats along dimensions (only supported for dimensions of size 1). |
+| `unfold()` | `YTensorBase` | `unfold_()` | Sliding window unfolding. |
+
+All of these operations are **zero-copy**; the returned tensor shares its underlying memory with the original tensor.
+
+---
+
+## `unsqueeze()`
+
+### Function Signatures
+
+```cpp
+YTensorBase unsqueeze(int dim) const;
+YTensorBase& unsqueeze_(int dim);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `dim` | `int` | The position where the new dimension will be inserted. Supports negative indexing; the valid range is `[0, ndim()]`. |
+
+### Core Function Description
+
+Inserts a new dimension of size 1 at the specified location. This is a zero-copy operation.
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+    // tensor.shape() -> {3, 4}
+    
+    // Insert at position 0
+    YTensorBase a = tensor.unsqueeze(0);
+    // a.shape() -> {1, 3, 4}
+    
+    // Insert at position 1
+    YTensorBase b = tensor.unsqueeze(1);
+    // b.shape() -> {3, 1, 4}
+    
+    // Insert at the end
+    YTensorBase c = tensor.unsqueeze(-1);
+    // c.shape() -> {3, 4, 1}
+}
+```
+
+---
+
+## `squeeze()`
+
+### Function Signatures
+
+```cpp
+YTensorBase squeeze(int dim = -1) const;
+YTensorBase& squeeze_(int dim = -1);
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `dim` | `int` | `-1` | The dimension to remove. If `dim >= 0`, only that specific dimension is removed (it must have size 1). If `dim < 0`, all dimensions of size 1 are removed. |
+
+### Core Function Description
+
+Removes dimensions of size 1. This is a zero-copy operation.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({1, 3, 1, 4, 1}, "float32");
+
+// Squeeze a specific dimension
+YTensorBase a = tensor.squeeze(0);
+// a.shape() -> {3, 1, 4, 1}
+
+// Squeeze all dimensions of size 1
+YTensorBase b = tensor.squeeze();  // dim is -1 by default
+// b.shape() -> {3, 4}
+```
+
+:::warning
+Attempting to squeeze a dimension whose size is not 1 will throw a `std::runtime_error`.
+:::
+
+---
+
+## `repeat()`
+
+### Function Signatures
+
+```cpp
+YTensorBase repeat(const std::vector<int>& times) const;
+
+template<typename... Args>
+YTensorBase repeat(const Args... times) const;
+
+YTensorBase& repeat_(const std::vector<int>& times);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `times` | `std::vector<int>` or `Args...` | The number of times to repeat along each dimension. The length of this list must equal `ndim()`. |
+
+### Core Function Description
+
+Repeats the tensor along the specified dimensions. **Repetition is only supported for dimensions of size 1**; this is achieved as a zero-copy operation by setting the stride of those dimensions to 0.
+
+### Usage Example
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({1, 3, 1}, "float32");
+// tensor.shape() -> {1, 3, 1}
+
+// Repeat along dimensions of size 1
+YTensorBase repeated = tensor.repeat({4, 1, 2});
+// repeated.shape() -> {4, 3, 2}
+```
+
+:::caution
+Attempting to repeat along a dimension whose size is not 1 will throw a `std::runtime_error`.
+```cpp
+YTensorBase tensor = YTensorBase::zeros({2, 3}, "float32");
+// tensor.repeat({2, 1});  // ❌ Error: Dim 0 has size 2, not 1.
+```
+:::
+
+---
+
+## `unfold()`
+
+### Function Signatures
+
+```cpp
+YTensorBase unfold(int atDim, int kernel, int stride = 1, int dilation = 1) const;
+YTensorBase& unfold_(int atDim, int kernel, int stride = 1, int dilation = 1);
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `atDim` | `int` | - | **Required**. The index of the dimension to unfold. |
+| `kernel` | `int` | - | **Required**. The window size. |
+| `stride` | `int` | `1` | Transition distance between windows. |
+| `dilation` | `int` | `1` | Dilation factor within the window. |
+
+### Core Function Description
+
+Performs a sliding window unfolding along a specified dimension. This inserts a new dimension after `atDim` representing the elements within each window.
+
+### Return Value
+
+The resulting shape is calculated as:
+- The size of dimension `atDim` becomes: `n_windows = (shape[atDim] - (kernel - 1) * dilation - 1) / stride + 1`
+- A new dimension of size `kernel` is inserted immediately after `atDim`.
+
+### Usage Example
+
+```cpp
+YTensorBase vec = YTensorBase::zeros({10}, "float32");
+
+// Window size 3, stride 1
+YTensorBase unfolded = vec.unfold(0, 3, 1);
+// unfolded.shape() -> {8, 3}
+// Calculation: 8 = (10 - 3) / 1 + 1
+
+// Window size 3, stride 2
+YTensorBase unfolded2 = vec.unfold(0, 3, 2);
+// unfolded2.shape() -> {4, 3}
+// Calculation: 4 = (10 - 3) / 2 + 1
+```
+
+---
+
+## In-place Versions
+
+All methods described above have corresponding in-place versions (suffixed with an underscore):
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+// Modify in-place
+tensor.unsqueeze_(0);   // tensor shape becomes {1, 3, 4}
+tensor.squeeze_(0);     // tensor shape becomes {3, 4}
+
+YTensorBase t2 = YTensorBase::zeros({1, 3, 1}, "float32");
+t2.repeat_({4, 1, 2});  // t2 shape becomes {4, 3, 2}
+```
+
+---
+
+## Related Content
+
+- [Shape Queries](./query.mdx) - Methods like `shape()` and `ndim()`.
+- [Shape Operations: Slicing](./slice.mdx) - The `slice()` method.
+- [Shape Operations: Transposition](./transpose.mdx) - The `permute()` method.
+- [Shape Operations: Concat/Split](./concat_split.mdx) - Methods like `concat()` and `split()`.

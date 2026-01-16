@@ -1,0 +1,402 @@
+# 构造函数
+
+本文档详细介绍 `YTensor<T, dim>` 类的所有构造函数及其使用方法。
+
+## 默认构造函数
+
+### 函数签名
+
+```cpp
+YTensor();
+```
+
+### 核心功能描述
+
+创建一个空的张量，所有维度大小为 0，不分配数据内存。
+
+### 返回值
+
+- 返回一个形状为 `[0, 0, ..., 0]`（dim个0）的空张量
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建空张量
+    yt::YTensor<float, 3> empty;
+    
+    // 查看形状
+    std::cout << empty.shape()[0] << std::endl;  // 输出: 0
+    std::cout << empty.size() << std::endl;      // 输出: 0
+    
+    // 可以后续使用 reserve() 分配空间
+    empty.reserve(2, 3, 4);
+    std::cout << empty.size() << std::endl;      // 输出: 24
+}
+```
+
+### 注意事项
+
+:::warning
+空张量不能直接访问元素，必须先使用 `reserve()` 方法分配空间。
+:::
+
+---
+
+## 形状构造函数（vector版本）
+
+### 函数签名
+
+```cpp
+YTensor(const std::vector<int> shape);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `shape` | `const std::vector<int>&` | 张量的形状向量，长度必须等于 `dim` |
+
+### 核心功能描述
+
+使用 `std::vector<int>` 指定形状创建张量。会分配内存并使用默认初始化（元素值未定义）。
+
+### 返回值
+
+- 返回指定形状的张量，元素使用默认初始化
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 使用 vector 创建 3x4x5 的张量
+    std::vector<int> shape = {3, 4, 5};
+    yt::YTensor<float, 3> tensor(shape);
+    
+    std::cout << tensor.size() << std::endl;  // 输出: 60
+    std::cout << tensor.shape(0) << std::endl;  // 输出: 3
+}
+```
+
+### 异常
+
+- 如果 `shape.size() != dim`，抛出 `std::invalid_argument` 异常
+
+```cpp
+std::vector<int> wrong_shape = {3, 4};  // 只有2个元素
+// yt::YTensor<float, 3> t(wrong_shape);  // 抛出异常！
+```
+
+---
+
+## 形状构造函数（可变参数版本）
+
+### 函数签名
+
+```cpp
+template <typename... Args>
+YTensor(Args... args);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `args` | `Args...` | 可变参数，每个参数表示一个维度的大小 |
+
+### 核心功能描述
+
+使用可变参数指定形状创建张量。参数个数必须等于 `dim`。这是最常用的构造方式。
+
+### 编译时检查
+
+```cpp
+static_assert(sizeof...(args) == dim, "Number of arguments must match the dimension");
+```
+
+参数个数在编译时检查，不匹配会导致编译错误。
+
+### 返回值
+
+- 返回指定形状的张量，元素使用默认初始化
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建 3x4 的二维张量（最常用）
+    yt::YTensor<float, 2> matrix(3, 4);
+    
+    // 创建 2x3x4x5 的四维张量
+    yt::YTensor<double, 4> tensor4d(2, 3, 4, 5);
+    
+    // 创建一维向量
+    yt::YTensor<int, 1> vector(10);
+    
+    std::cout << matrix.size() << std::endl;   // 输出: 12
+    std::cout << tensor4d.size() << std::endl; // 输出: 120
+    std::cout << vector.size() << std::endl;   // 输出: 10
+}
+```
+
+### 编译错误示例
+
+```cpp
+// 错误：参数个数不匹配
+// yt::YTensor<float, 3> t(3, 4);  // 编译错误！需要3个参数
+// yt::YTensor<float, 2> m(3, 4, 5);  // 编译错误！需要2个参数
+```
+
+---
+
+## 形状构造函数（初始化列表版本）
+
+### 函数签名
+
+```cpp
+YTensor(std::initializer_list<int> list);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `list` | `std::initializer_list<int>` | 初始化列表，长度必须等于 `dim` |
+
+### 核心功能描述
+
+使用初始化列表语法创建张量，提供类似数组初始化的便利性。
+
+### 返回值
+
+- 返回指定形状的张量，元素使用默认初始化
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 使用初始化列表创建张量
+    yt::YTensor<float, 3> tensor = {3, 4, 5};
+    
+    // 也可以直接使用大括号
+    yt::YTensor<double, 2> matrix{10, 20};
+    
+    std::cout << tensor.size() << std::endl;  // 输出: 60
+    std::cout << matrix.size() << std::endl;  // 输出: 200
+}
+```
+
+### 异常
+
+- 如果 `list.size() != dim`，抛出 `std::invalid_argument` 异常
+
+---
+
+## 从 YTensorBase 构造（显式转换）
+
+### 函数签名
+
+```cpp
+explicit YTensor(const YTensorBase& base);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `base` | `const YTensorBase&` | 源 YTensorBase 对象 |
+
+### 核心功能描述
+
+从 `YTensorBase` 对象构造 `YTensor<T, dim>`。这是一个**显式构造函数**，用于类型向下转换。
+
+### 重要提示
+
+:::danger
+**用户责任**：必须确保源 `YTensorBase` 的类型和维度与目标 `YTensor<T, dim>` 完全匹配：
+- 元素类型必须是 `T`
+- 维度数必须是 `dim`
+
+否则行为未定义，可能导致程序崩溃或数据损坏！
+:::
+
+### 返回值
+
+- 返回一个与源张量共享数据的 `YTensor<T, dim>` 对象（浅拷贝）
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    // 创建 YTensorBase
+    yt::YTensorBase base({3, 4}, "float32");
+    
+    // 显式转换为 YTensor（类型和维度必须匹配）
+    yt::YTensor<float, 2> tensor(base);
+    
+    std::cout << tensor.size() << std::endl;  // 输出: 12
+    
+    // 修改 tensor 也会影响 base（共享内存）
+    tensor.at(0, 0) = 10.0f;
+}
+```
+
+### 异常
+
+- 如果 `base.ndim() != dim`，抛出 `std::invalid_argument` 异常
+- 如果类型不匹配，不会抛出异常，但行为未定义
+
+### 安全使用建议
+
+```cpp
+// 安全的转换方式
+yt::YTensorBase base({3, 4}, "float32");
+
+// 1. 检查维度
+if (base.ndim() == 2) {
+    // 2. 检查类型
+    if (base.dtype() == "float32") {
+        yt::YTensor<float, 2> tensor(base);  // 安全
+        // 使用 tensor...
+    }
+}
+```
+
+---
+
+## 拷贝构造函数
+
+### 函数签名
+
+```cpp
+YTensor(const YTensor& other);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `other` | `const YTensor&` | 源张量 |
+
+### 核心功能描述
+
+拷贝构造函数，执行**浅拷贝**（共享底层数据）。
+
+### 浅拷贝行为
+
+- 新张量与源张量共享相同的数据指针
+- 修改任一张量的元素会影响另一个
+- 使用 `std::shared_ptr` 管理内存，自动引用计数
+
+### 返回值
+
+- 返回一个与源张量共享数据的新张量
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> a(3, 4);
+    a.fill(1.0f);
+    
+    // 浅拷贝
+    yt::YTensor<float, 2> b(a);
+    
+    // 修改 b 会影响 a
+    b.at(0, 0) = 10.0f;
+    std::cout << a.at(0, 0) << std::endl;  // 输出: 10.0
+    
+    // 如需深拷贝，使用 clone()
+    yt::YTensor<float, 2> c = a.clone();
+    c.at(0, 0) = 20.0f;
+    std::cout << a.at(0, 0) << std::endl;  // 输出: 10.0（不受影响）
+}
+```
+
+### 注意事项
+
+:::info
+**内存共享**
+
+拷贝构造和赋值运算符默认都是浅拷贝。如果需要独立的副本，请使用 `clone()` 方法。
+:::
+
+---
+
+## 构造函数对比
+
+| 构造方式 | 示例 | 内存分配 | 适用场景 |
+| --- | --- | --- | --- |
+| 默认构造 | `YTensor<float, 2>()` | 否 | 延迟初始化 |
+| 可变参数 | `YTensor<float, 2>(3, 4)` | 是 | 最常用，推荐 |
+| vector | `YTensor<float, 2>(shape)` | 是 | 动态形状 |
+| 初始化列表 | `YTensor<float, 2>{3, 4}` | 是 | 简洁语法 |
+| 从Base | `YTensor<float, 2>(base)` | 否（共享） | 类型转换 |
+| 拷贝 | `YTensor<float, 2>(other)` | 否（共享） | 浅拷贝 |
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    // 1. 默认构造
+    yt::YTensor<float, 2> empty;
+    std::cout << "Empty size: " << empty.size() << std::endl;  // 0
+    
+    // 2. 可变参数构造（推荐）
+    yt::YTensor<float, 2> matrix(3, 4);
+    matrix.fill(1.0f);
+    std::cout << "Matrix size: " << matrix.size() << std::endl;  // 12
+    
+    // 3. vector 构造
+    std::vector<int> shape = {2, 3};
+    yt::YTensor<int, 2> tensor(shape);
+    std::cout << "Tensor size: " << tensor.size() << std::endl;  // 6
+    
+    // 4. 初始化列表构造
+    yt::YTensor<double, 3> tensor3d = {2, 3, 4};
+    std::cout << "3D Tensor size: " << tensor3d.size() << std::endl;  // 24
+    
+    // 5. 拷贝构造（浅拷贝）
+    yt::YTensor<float, 2> shallow_copy(matrix);
+    shallow_copy.at(0, 0) = 100.0f;
+    std::cout << "Original: " << matrix.at(0, 0) << std::endl;  // 100.0（受影响）
+    
+    // 6. 深拷贝
+    yt::YTensor<float, 2> deep_copy = matrix.clone();
+    deep_copy.at(0, 0) = 200.0f;
+    std::cout << "Original: " << matrix.at(0, 0) << std::endl;  // 100.0（不受影响）
+    
+    // 7. 从 YTensorBase 构造
+    yt::YTensorBase base({2, 2}, "float32");
+    yt::YTensor<float, 2> from_base(base);
+    std::cout << "From base size: " << from_base.size() << std::endl;  // 4
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [内存管理](./memory.mdx) - 了解 `reserve()`、`clone()` 等内存操作
+- [拷贝语义](./memory.mdx) - 深入理解浅拷贝和深拷贝
+- [工厂方法](./factories.mdx) - 使用 `zeros()`、`ones()` 等静态方法创建张量
+- [YTensorBase 构造函数](../../YTensorBase/construction/constructors.mdx) - 基类的构造方法

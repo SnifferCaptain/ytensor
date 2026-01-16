@@ -1,0 +1,170 @@
+# 类型查询
+
+本文档介绍 `YTensorBase` 类的数据类型查询方法，包括 `dtype()` 和 `elementSize()` 方法。
+
+## 概览
+
+`YTensorBase` 提供 `dtype()` 和 `elementSize()` 方法用于查询张量的数据类型信息。这些方法返回存储在对象内部的类型元数据。
+
+## 方法签名
+
+```cpp
+std::string dtype() const;
+size_t elementSize() const;
+```
+
+---
+
+## `dtype()`
+
+### 核心功能描述
+
+返回张量的数据类型字符串标识符。
+
+### 返回值
+
+- **类型**: `std::string`
+- **说明**: 类型字符串，例如 `"float32"`, `"int32"`, `"bfloat16"` 等
+
+### 实现细节
+
+```cpp
+inline std::string YTensorBase::dtype() const { 
+    return _dtype; 
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+    
+    std::cout << "类型: " << tensor.dtype() << std::endl;
+    // 输出: 类型: float32
+}
+```
+
+---
+
+## `elementSize()`
+
+### 核心功能描述
+
+返回单个元素的字节大小。
+
+### 返回值
+
+- **类型**: `size_t`
+- **说明**: 元素占用的字节数
+
+### 实现细节
+
+```cpp
+inline size_t YTensorBase::elementSize() const { 
+    return _element_size; 
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+    
+    std::cout << "元素大小: " << tensor.elementSize() << " 字节" << std::endl;
+    // 输出: 元素大小: 4 字节
+}
+```
+
+---
+
+## 综合示例
+
+### 类型检查
+
+```cpp
+YTensorBase a = YTensorBase::ones({5}, "int32");
+YTensorBase b = YTensorBase::ones({5}, "float32");
+
+if (a.dtype() != b.dtype()) {
+    std::cout << "类型不匹配！" << std::endl;
+    std::cout << "a: " << a.dtype() << ", b: " << b.dtype() << std::endl;
+}
+// 输出: 类型不匹配！
+// 输出: a: int32, b: float32
+```
+
+### 计算总内存大小
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({100}, "int64");
+
+size_t totalBytes = tensor.size() * tensor.elementSize();
+std::cout << "总内存占用: " << totalBytes << " 字节" << std::endl;
+// 输出: 总内存占用: 800 字节 (100 * 8)
+```
+
+### 与模板方法配合
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({10}, "float32");
+
+// 使用 dtype() 进行运行时类型检查
+if (tensor.dtype() == "float32") {
+    float* ptr = tensor.data<float>();  // 类型安全
+    // ... 使用 ptr
+} else if (tensor.dtype() == "int32") {
+    int* ptr = tensor.data<int>();
+    // ... 使用 ptr
+}
+```
+
+---
+
+## 支持的类型
+
+常见的 `dtype()` 字符串包括：
+
+| dtype 字符串 | 元素大小 | C++ 类型 |
+|-------------|---------|---------|
+| `"float32"` | 4 字节  | `float` |
+| `"float64"` | 8 字节  | `double` |
+| `"int32"`   | 4 字节  | `int32_t` |
+| `"int64"`   | 8 字节  | `int64_t` |
+| `"bfloat16"`| 2 字节  | `bfloat16_t` |
+
+:::tip
+具体支持的类型取决于类型注册表的配置。可以通过 `yt::types::getTypeRegistry()` 查看所有已注册类型。
+:::
+
+---
+
+## 注意事项
+
+1. **只读属性**：`dtype()` 和 `elementSize()` 返回的是创建时确定的类型信息，不能在运行时修改
+
+2. **类型匹配**：使用模板方法时必须确保类型匹配：
+   ```cpp
+   YTensorBase t = YTensorBase::zeros({10}, "int32");
+   // 错误示例
+   float* ptr = t.data<float>();  // 类型不匹配！
+   
+   // 正确示例
+   if (t.dtype() == "int32") {
+       int* ptr = t.data<int>();
+   }
+   ```
+
+3. **内存布局**：`elementSize()` 只表示单个元素大小，总内存占用还需考虑 `size()` 和可能的非连续布局
+
+---
+
+## 相关方法
+
+- [`data<T>()`](./data_ptr.mdx) - 获取原始指针，需要与 `dtype()` 匹配
+- [`at<T>()`](./indexing.mdx) - 元素访问，需要正确的类型参数

@@ -1,0 +1,313 @@
+# 数据指针访问
+
+本文档介绍 `YTensorBase` 类的底层数据指针访问方法，包括 `data<T>()`、`atData<T>()` 和 `atData_<T>()` 方法。
+
+## 概览
+
+YTensorBase 提供三种数据访问方法：
+
+| 方法 | 返回类型 | 偏移量处理 | 适用场景 |
+| --- | --- | --- | --- |
+| `data<T>()` | `T*` | 已包含 `_offset` | 获取起始指针 |
+| `atData<T>(index)` | `T&` | 逻辑索引 → 坐标 → 物理位置 | 兼容性（性能较低） |
+| `atData_<T>(index)` | `T&` | 物理索引直接访问 | Element-wise 操作（需连续） |
+
+:::warning
+使用这些方法时需确保模板参数 `T` 与张量的实际 `dtype()` 匹配，否则会导致未定义行为。
+:::
+
+---
+
+## `data<T>()`
+
+### 函数签名
+
+```cpp
+template <typename T>
+T* data();
+
+template <typename T>
+const T* data() const;
+
+// float 特化版本（无需模板参数）
+float* data();
+const float* data() const;
+```
+
+### 核心功能描述
+
+获取张量数据的起始指针。
+*   返回的指针已经包含了偏移量（`_offset`）。
+*   直接指向当前视图的第一个元素。
+
+### 返回值
+
+- **类型**: `T*` 或 `const T*`
+- **说明**: 指向第一个元素的指针（已应用 `_offset`）；如果 `_data` 为空则返回 `nullptr`
+
+### 实现细节
+
+```cpp
+template <typename T>
+inline T* YTensorBase::data() {
+    if (!_data) return nullptr;
+    return reinterpret_cast<T*>(_data.get()) + _offset;
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // 获取 float 指针（使用特化版本）
+    float* ptr = tensor.data();
+    ptr[0] = 1.0f;  // 修改第一个元素
+
+    // 获取指定类型的指针
+    YTensorBase intTensor = YTensorBase::zeros({10}, "int32");
+    int* intPtr = intTensor.data<int>();
+    intPtr[0] = 42;
+}
+```
+
+### 与子张量配合
+
+```cpp
+YTensorBase a = YTensorBase::zeros({3, 4, 5}, "float32");
+YTensorBase b = a.slice(0, 1, 2);  // 切片，形状 [1, 4, 5]
+
+// a.data() 与 b.data() 不同（不同的视图起始位置）
+// 但它们共享底层内存
+float* aPtr = a.data();
+float* bPtr = b.data();
+// bPtr = aPtr + offset_差值
+```
+
+:::caution
+对于非连续张量，`data()` 返回的指针不能简单地按线性索引访问。如需遍历所有元素，应使用 `at<T>()` 方法或先调用 `contiguous()`。
+:::
+
+---
+
+## `atData<T>()`
+
+### 函数签名
+
+```cpp
+template <typename T>
+T& atData(int index);
+
+template <typename T>
+const T& atData(int index) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `index` | `int` | 逻辑索引（从 0 到 `size()-1`） |
+
+### 核心功能描述
+
+通过逻辑索引访问元素。
+*   内部会将逻辑索引转换为多维坐标（`toCoord`），再调用 `at<T>()` 访问元素。
+*   **不推荐使用**，性能较低，仅用于兼容性场景。
+
+### 返回值
+
+- **类型**: `T&` 或 `const T&`
+- **说明**: 返回指定逻辑位置的元素引用
+
+### 实现细节
+
+```cpp
+template <typename T>
+inline T& YTensorBase::atData(int index) {
+    auto coord = toCoord(index);  // 逻辑索引 -> 坐标
+    return at<T>(coord);          // 坐标 -> 元素
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // 使用逻辑索引访问
+    tensor.atData<float>(0) = 1.0f;   // 等价于 at<float>({0, 0})
+    tensor.atData<float>(5) = 5.0f;   // 等价于 at<float>({1, 1})
+
+    // 逻辑索引计算方式（行优先）：
+    // index = i * shape[1] + j
+    // 5 = 1 * 4 + 1  => 坐标 (1, 1)
+}
+```
+
+:::warning
+**性能较低**
+
+`atData<T>()` 内部需要：
+1. 将逻辑索引转换为多维坐标（`toCoord()`）
+2. 再将坐标转换为物理索引（`at<T>()`）
+
+性能远低于直接使用 `at<T>()` 或 `atData_<T>()`。仅用于兼容旧代码。
+:::
+
+---
+
+## `atData_<T>()`
+
+### 函数签名
+
+```cpp
+template <typename T>
+T& atData_(int index);
+
+template <typename T>
+const T& atData_(int index) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `index` | `int` | 物理索引（相对于 `data<T>()` 起始位置） |
+
+### 核心功能描述
+
+通过物理索引直接访问元素，非常高效。
+*   **要求张量必须是连续的**。
+*   不进行边界检查。
+
+### 返回值
+
+- **类型**: `T&` 或 `const T&`
+- **说明**: 返回指定物理位置的元素引用
+
+### 实现细节
+
+```cpp
+template <typename T>
+inline T& YTensorBase::atData_(int index) {
+    return this->data<T>()[index + _offset];
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    YTensorBase tensor = YTensorBase::zeros({3, 4}, "float32");
+
+    // 确保张量连续
+    assert(tensor.isContiguous());
+
+    // 使用物理索引高效访问
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_<float>(i) = static_cast<float>(i);
+    }
+
+    // 验证
+    std::cout << tensor.at<float>({0, 0}) << std::endl;  // 输出: 0
+    std::cout << tensor.at<float>({1, 2}) << std::endl;  // 输出: 6
+}
+```
+
+### Element-wise 操作
+
+`atData_<T>()` 非常适合 element-wise 操作：
+
+```cpp
+void scale_inplace(YTensorBase& tensor, float factor) {
+    assert(tensor.isContiguous());  // 确保连续
+    assert(tensor.dtype() == "float32");  // 确保类型匹配
+
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_<float>(i) *= factor;
+    }
+}
+```
+
+:::danger
+**严格要求**
+
+`atData_<T>()` 使用前必须满足：
+1. **张量必须连续**（`isContiguous() == true`）
+2. **索引不能越界**（不进行检查）
+3. **类型必须匹配**（`T` 与 `dtype()` 对应）
+
+错误使用会导致未定义行为或程序崩溃！
+:::
+
+---
+
+## 方法对比
+
+| 特性 | `data<T>()` | `atData<T>()` | `atData_<T>()` |
+| --- | --- | --- | --- |
+| **返回类型** | 指针 | 引用 | 引用 |
+| **索引方式** | 手动计算 | 逻辑索引 | 物理索引 |
+| **性能** | ✅ 高 | ❌ 低 | ✅ 高 |
+| **连续性要求** | 无（但需步长计算） | 无 | ✅ 必须连续 |
+| **边界检查** | 无 | 有 | 无 |
+| **推荐场景** | 底层操作 | 兼容性 | Element-wise |
+
+---
+
+## 使用建议
+
+### 推荐做法
+
+```cpp
+// ✅ 单个元素访问：使用 at<T>()
+tensor.at<float>({i, j, k}) = value;
+
+// ✅ Element-wise 操作（连续张量）：使用 atData_<T>()
+if (tensor.isContiguous()) {
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_<float>(i) *= 2.0f;
+    }
+}
+
+// ✅ 底层指针操作：使用 data<T>() + stride
+float* ptr = tensor.data<float>();
+auto stride = tensor.stride_();
+ptr[i * stride[0] + j * stride[1]] = value;
+```
+
+### 避免的做法
+
+```cpp
+// ❌ 避免：使用 atData<T>()（性能差）
+for (size_t i = 0; i < tensor.size(); ++i) {
+    tensor.atData<float>(i) = value;  // 每次都要坐标转换
+}
+
+// ❌ 避免：非连续张量使用 atData_<T>()
+if (!tensor.isContiguous()) {
+    // tensor.atData_<float>(i) = value;  // 未定义行为！
+}
+
+// ❌ 避免：类型不匹配
+YTensorBase t = YTensorBase::zeros({10}, "int32");
+float* ptr = t.data<float>();  // 类型不匹配！
+```
+
+---
+
+## 相关内容
+
+- [元素访问：索引](./indexing.mdx) - `at<T>()` 模板方法
+- [类型查询](./dtype.mdx) - `dtype()`、`elementSize()` 方法
+- [形状变换：重塑](../shape/reshape.mdx) - `contiguous()` 方法

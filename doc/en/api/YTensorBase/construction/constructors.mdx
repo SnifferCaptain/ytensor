@@ -1,0 +1,502 @@
+# Constructors
+
+This document describes the constructors for `YTensorBase`, including default construction, shape-based construction, and copy construction.
+
+---
+
+## Overview
+
+`YTensorBase` provides three primary ways to construct an object:
+
+```cpp
+// 1. Default constructor (creates an empty tensor)
+YTensorBase a;
+
+// 2. Shape and type constructor
+YTensorBase b({2, 3, 4}, "float32");
+
+// 3. Copy constructor (shallow copy by default)
+YTensorBase c = b;
+```
+
+---
+
+## Default Constructor
+
+### Core Function Description
+
+Creates an empty tensor without allocating any underlying memory.
+
+### Function Signature
+
+```cpp
+YTensorBase() = default;
+```
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+
+    
+    yt::YTensorBase tensor;
+    
+    // Query attributes
+    std::cout << tensor.ndim() << std::endl;    // Output: 0
+    std::cout << tensor.size() << std::endl;    // Output: 0
+    
+    return 0;
+}
+```
+
+---
+
+## Shape and Type Constructor
+
+### Core Function Description
+
+Creates a tensor with a specified shape and data type.
+
+### Function Signature
+
+```cpp
+YTensorBase(const std::vector<int>& shape, const std::string& dtype = "float32");
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+|--------|------|--------|------|
+| `shape` | `const std::vector<int>&` | - | The shape of the tensor. |
+| `dtype` | `const std::string&` | `"float32"` | The data type identifier string. |
+
+### Supported Data Types
+
+| dtype String | C++ Type | Bytes |
+|--------------|----------|--------|
+| `"float32"` | `float` | 4 |
+| `"float64"` | `double` | 8 |
+| `"int32"` | `int32_t` | 4 |
+| `"int64"` | `int64_t` | 8 |
+| `"int8"` | `int8_t` | 1 |
+| `"uint8"` | `uint8_t` | 1 |
+| `"bool"` | `bool` | 1 |
+
+### Memory Allocation
+
+The constructor performs the following steps:
+1. Calculates the total number of elements required for contiguous storage.
+2. Allocates `total_elements * elementSize` bytes of memory.
+3. Initializes strides using row-major (C-style) order.
+4. Sets the internal offset to 0.
+
+### Usage Examples
+
+#### Basic Usage
+
+```cpp
+
+
+// float32 tensor (default)
+auto a = yt::YTensorBase({2, 3, 4});
+std::cout << a.dtype() << std::endl;        // Output: "float32"
+std::cout << a.elementSize() << std::endl;  // Output: 4
+
+// int32 tensor
+auto b = yt::YTensorBase({10, 20}, "int32");
+std::cout << b.size() << std::endl;  // Output: 200
+
+// double tensor
+auto c = yt::YTensorBase({5, 5}, "float64");
+std::cout << c.elementSize() << std::endl;  // Output: 8
+```
+
+#### Different Dimensionalities
+
+```cpp
+// 1D Tensor
+auto vec = yt::YTensorBase({100}, "float32");
+
+// 2D Tensor
+auto mat = yt::YTensorBase({10, 20}, "float32");
+
+// 3D Tensor
+auto cube = yt::YTensorBase({5, 10, 15}, "float32");
+
+// High-dimensional Tensor
+auto tensor = yt::YTensorBase({2, 3, 4, 5, 6}, "float32");
+```
+
+#### Stride Calculation
+
+```cpp
+auto a = yt::YTensorBase({2, 3, 4}, "float32");
+
+auto stride = a.stride();
+// stride = {12, 4, 1} (Row-major order)
+
+// Calculation logic:
+// stride[2] = 1
+// stride[1] = stride[2] * shape[2] = 1 * 4 = 4
+// stride[0] = stride[1] * shape[1] = 4 * 3 = 12
+```
+
+---
+
+## Copy Constructor
+
+### Core Function Description
+
+Creates a copy of an existing tensor.
+
+### Function Signature
+
+```cpp
+YTensorBase(const YTensorBase& other);
+```
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|------|
+| `other` | `const YTensorBase&` | The source tensor to copy from. |
+
+### Copying Behavior
+
+The copy constructor performs a **shallow copy**:
+- It copies the shape, strides, and offset.
+- It **shares** the underlying data pointer (via `std::shared_ptr`).
+- The actual element data is not duplicated.
+
+:::warning
+**Important Note**
+
+Because `YTensorBase` uses shallow copying by default for performance, modifications to the data of one tensor will affect all tensors sharing that data. To create an independent duplicate with its own memory, use the `clone()` method.
+
+```cpp
+yt::YTensorBase a({2, 3}, "float32");
+yt::YTensorBase b = a;  // Shallow copy (shared data)
+
+a.at<float>(0, 0) = 1.0f;
+// b.at<float>(0, 0) is now 1.0f as well.
+
+// For a deep copy:
+yt::YTensorBase c = a.clone();
+a.at<float>(0, 0) = 2.0f;
+// c.at<float>(0, 0) remains 1.0f.
+```
+:::
+
+### Usage Examples
+
+#### Basic Sharing
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+a.at<float>(0, 0) = 1.0f;
+
+// Copy construction
+yt::YTensorBase b = a;
+
+std::cout << b.at<float>(0, 0) << std::endl;  // Output: 1.0
+
+// Verification of data sharing
+a.at<float>(0, 0) = 2.0f;
+std::cout << b.at<float>(0, 0) << std::endl;  // Output: 2.0 (shared)
+```
+
+#### Storing in Containers
+
+```cpp
+std::vector<yt::YTensorBase> tensors;
+
+auto a = yt::YTensorBase({2, 3}, "float32");
+auto b = yt::YTensorBase({4, 5}, "int32");
+
+// Copy construction occurs when pushing into the vector
+tensors.push_back(a);
+tensors.push_back(b);
+
+// The original and stored tensors share the same data
+a.at<float>(0, 0) = 1.0f;
+std::cout << tensors[0].at<float>(0, 0) << std::endl;  // Output: 1.0
+```
+
+---
+
+## Copy Assignment Operator
+
+### Core Function Description
+
+Assigns one tensor to another.
+
+### Function Signature
+
+```cpp
+YTensorBase& operator=(const YTensorBase& other);
+```
+
+### Parameters
+
+| Name | Type | Description |
+|--------|------|------|
+| `other` | `const YTensorBase&` | The source tensor to assign. |
+
+### Return Value
+
+Returns a reference to the current object.
+
+### Assignment Behavior
+
+Like the copy constructor, this performs a **shallow copy** (data sharing).
+
+### Usage Example
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+auto b = yt::YTensorBase({4, 5}, "int32");
+
+// Assignment operator
+b = a;  // b now shares data with a.
+
+std::cout << b.shape(0) << std::endl;  // Output: 2
+std::cout << b.dtype() << std::endl;   // Output: "float32"
+```
+
+---
+
+## Non-POD Type Support
+
+`YTensorBase` supports non-POD (Plain Old Data) types and will automatically call their constructors and destructors.
+
+### Custom Types
+
+```cpp
+struct MyType {
+    float value;
+    
+    MyType() : value(0.0f) {
+        std::cout << "MyType constructed" << std::endl;
+    }
+    
+    ~MyType() {
+        std::cout << "MyType destructed" << std::endl;
+    }
+};
+
+// Register the type (requires registration in ytensor_types)
+// auto tensor = yt::YTensorBase({2, 3}, "MyType");
+// Each element's MyType() constructor is called on creation.
+// Each element's ~MyType() destructor is called on shared data destruction.
+```
+
+### POD Type Optimization
+
+For POD types (like `float` or `int`), `YTensorBase` uses simple memory allocation without calling constructors per element:
+
+```cpp
+// POD type: Fast allocation without initialization
+auto a = yt::YTensorBase({1000, 1000}, "float32");
+
+// Non-POD type: Calls constructors for every element
+// auto b = yt::YTensorBase({1000, 1000}, "CustomType");
+```
+
+---
+
+## Memory Management
+
+### Reference Counting
+
+`YTensorBase` manages its data using `std::shared_ptr<char[]>`, supporting automatic reference counting:
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+
+{
+    yt::YTensorBase b = a;  // Ref count becomes 2
+    yt::YTensorBase c = a;  // Ref count becomes 3
+    // b and c go out of scope, ref count returns to 1
+}
+
+// 'a' remains valid
+```
+
+### Automatic Deallocation
+
+When the last reference to a memory block goes out of scope, the memory is automatically freed:
+
+```cpp
+{
+    auto a = yt::YTensorBase({1000, 1000}, "float32");
+    // Allocates ~4MB of memory
+} // 'a' goes out of scope; memory is automatically released.
+```
+
+---
+
+## Exception Safety
+
+### Shape Validation
+
+```cpp
+// Empty shape
+try {
+    auto a = yt::YTensorBase({}, "float32");
+    // Creates a 0-dimensional tensor (allowed)
+} catch (...) {
+    // No exception thrown
+}
+
+// Negative dimensions
+auto b = yt::YTensorBase({2, -3, 4}, "float32");
+// Negative numbers are treated as 0. Total elements = 0, minimal allocation.
+```
+
+### Type Validation
+
+```cpp
+// Unknown type
+try {
+    auto a = yt::YTensorBase({2, 3}, "unknown_type");
+    // Throws an exception if the type is not registered.
+} catch (const std::exception& e) {
+    std::cerr << e.what() << std::endl;
+}
+```
+
+---
+
+## Performance Considerations
+
+### Construction Cost
+
+```cpp
+// Small tensor: Very fast
+auto a = yt::YTensorBase({10, 10}, "float32");  // ~400 bytes
+
+// Large tensor: Slower due to OS allocation
+auto b = yt::YTensorBase({1000, 1000}, "float32");  // ~4MB
+```
+
+### Copying Cost
+
+```cpp
+// Shallow Copy: O(1)
+auto a = yt::YTensorBase({1000, 1000}, "float32");
+auto b = a;  // Copies only metadata and pointers; extremely fast.
+
+// Deep Copy: O(n)
+auto c = a.clone();  // Duplicates all element data; slower.
+```
+
+---
+
+## Summary of Usage Examples
+
+### Creating Various Tensor Types
+
+```cpp
+
+
+// Floating point tensors
+auto float_tensor = yt::YTensorBase({10, 20}, "float32");
+auto double_tensor = yt::YTensorBase({10, 20}, "float64");
+
+// Integer tensors
+auto int_tensor = yt::YTensorBase({10, 20}, "int32");
+auto long_tensor = yt::YTensorBase({10, 20}, "int64");
+
+// Boolean tensors
+auto bool_tensor = yt::YTensorBase({10, 20}, "bool");
+```
+
+### Batch Creation
+
+```cpp
+std::vector<yt::YTensorBase> create_batch(int batch_size, 
+                                       const std::vector<int>& shape,
+                                       const std::string& dtype) {
+    std::vector<yt::YTensorBase> batch;
+    for (int i = 0; i < batch_size; i++) {
+        batch.emplace_back(shape, dtype);
+    }
+    return batch;
+}
+
+// Usage
+auto batch = create_batch(32, {3, 224, 224}, "float32");
+```
+
+### Type Conversion
+
+```cpp
+yt::YTensorBase convert_dtype(const yt::YTensorBase& src, const std::string& new_dtype) {
+    yt::YTensorBase dst(src.shape(), new_dtype);
+    
+    // Element-wise conversion (requires type dispatching)
+    if (src.dtype() == "float32" && new_dtype == "int32") {
+        const float* src_data = src.data<float>();
+        int* dst_data = dst.data<int>();
+        for (size_t i = 0; i < src.size(); i++) {
+            dst_data[i] = static_cast<int>(src_data[i]);
+        }
+    }
+    
+    return dst;
+}
+```
+
+---
+
+## Best Practices
+
+### 1. Use Default Types
+
+```cpp
+// ✅ Defaults to float32 (most common)
+auto tensor = yt::YTensorBase({10, 20});
+
+// 🔶 Use explicit types only when necessary
+auto int_tensor = yt::YTensorBase({10, 20}, "int32");
+```
+
+### 2. Avoid Unnecessary Copies
+
+```cpp
+// ❌ Potential unnecessary copy
+yt::YTensorBase get_tensor() {
+    yt::YTensorBase tensor({10, 20}, "float32");
+    return tensor;  // Relying on RVO or potentially triggering a copy
+}
+
+// ✅ Explicitly enabling move semantics if needed
+yt::YTensorBase get_tensor_move() {
+    yt::YTensorBase tensor({10, 20}, "float32");
+    return std::move(tensor); // Moves metadata only
+}
+```
+
+### 3. Use emplace_back for Containers
+
+```cpp
+std::vector<yt::YTensorBase> tensors;
+
+// ❌ Avoid push_back if constructing a temporary
+yt::YTensorBase temp({10, 20}, "float32");
+tensors.push_back(temp);
+
+// ✅ Construct directly in-place
+tensors.emplace_back(std::vector<int>{10, 20}, "float32");
+```
+
+---
+
+## Related Content
+
+- [Factory Methods](./factories.mdx) - Conveniences like `zeros` and `ones`.
+- [Memory Management](./memory.mdx) - Methods like `clone` and `contiguous`.
+- [YTensor Constructors](../../YTensor/construction/constructors.mdx) - Compile-time typed versions.
+- [Type System](../../infos/types.mdx) - The `dtype` registration mechanism.

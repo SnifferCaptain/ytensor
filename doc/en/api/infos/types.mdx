@@ -1,0 +1,66 @@
+# Type Registration
+
+This document describes the type registration system in the `yt::infos` namespace.
+
+## TypeRegItem Struct
+
+```cpp
+struct TypeRegItem {
+    std::string name;                              // Type name
+    int32_t size;                                  // Size in bytes
+    std::function<std::string(const void*)> toString;  // Function to convert to string
+    bool isPOD = true;                             // Whether it's a POD type
+    std::function<void(void*)> destructor = nullptr;   // Destructor
+    std::function<void(void*, const void*)> copyConstruct = nullptr;  // Copy constructor
+    std::function<void(void*)> defaultConstruct = nullptr;  // Default constructor
+};
+```
+
+## Type Registry
+
+```cpp
+auto& getTypeRegistry();
+```
+
+Returns a reference to the global type registry.
+
+:::warning
+Modifying the type registry is an advanced operation, typically performed only during library initialization.
+:::
+
+## Floating-point Specification
+
+YTensor supports `float` (fp32), `double` (fp64), and `bfloat16` (bf16).
+Specifically, for the BF16 type, its rounding mode is affected by the global configuration (see [Constants](./constants.mdx)).
+
+## Built-in Types
+
+| Type Name | Size (Bytes) | C++ Type |
+| --- | --- | --- |
+| `"float32"` | 4 | `float` |
+| `"float64"` | 8 | `double` |
+| `"int32"` | 4 | `int32_t` |
+| `"int64"` | 8 | `int64_t` |
+| `"bfloat16"` | 2 | `yt::bfloat16` |
+
+## Non-POD Type Support
+
+For non-POD types (e.g., `std::string`, custom classes), the following should be registered:
+- `destructor`: Destructor function
+- `copyConstruct`: Copy constructor function
+- `defaultConstruct`: Default constructor function
+
+:::danger
+**IO Support Limitation**
+
+Currently, the file IO system has **incomplete** support for non-POD types.
+Although the type system allows registering non-POD types, saving them to a file might directly write the object's memory representation (shallow copy) instead of serialized content.
+
+**Do not rely on YTensor IO to store non-POD types that contain pointers or dynamic resources (such as `std::vector` or `std::string`).**
+:::
+
+---
+
+## Related Content
+
+- [Type Querying](../YTensorBase/access/dtype.mdx) - `dtype()` method

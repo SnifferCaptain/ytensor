@@ -1,0 +1,504 @@
+# 构造函数
+
+本文档介绍 YTensorBase 的构造函数，包括默认构造、形状构造和拷贝构造。
+
+---
+
+## 概述
+
+YTensorBase 提供三种构造方式：
+
+```cpp
+// 1. 默认构造（空张量）
+YTensorBase a;
+
+// 2. 形状和类型构造
+YTensorBase b({2, 3, 4}, "float32");
+
+// 3. 拷贝构造（深拷贝）
+YTensorBase c = b;
+```
+
+---
+
+## 默认构造函数
+
+### 核心功能描述
+
+创建一个空张量，不分配内存。
+
+### 函数签名
+
+```cpp
+YTensorBase() = default;
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+
+    
+    yt::YTensorBase tensor;
+    
+    // 查询属性
+    std::cout << tensor.ndim() << std::endl;    // 0
+    std::cout << tensor.size() << std::endl;    // 0
+    
+    return 0;
+}
+```
+
+---
+
+## 形状构造函数
+
+### 核心功能描述
+
+使用指定形状和数据类型创建张量。
+
+### 函数签名
+
+```cpp
+YTensorBase(const std::vector<int>& shape, const std::string& dtype = "float32");
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `shape` | `const std::vector<int>&` | - | 张量形状 |
+| `dtype` | `const std::string&` | `"float32"` | 数据类型字符串 |
+
+### 支持的数据类型
+
+| dtype 字符串 | C++ 类型 | 字节数 |
+|--------------|----------|--------|
+| `"float32"` | `float` | 4 |
+| `"float64"` | `double` | 8 |
+| `"int32"` | `int32_t` | 4 |
+| `"int64"` | `int64_t` | 8 |
+| `"int8"` | `int8_t` | 1 |
+| `"uint8"` | `uint8_t` | 1 |
+| `"bool"` | `bool` | 1 |
+
+### 内存分配
+
+构造函数会：
+1. 计算连续存储所需的总元素数
+2. 分配 `total * elementSize` 字节内存
+3. 初始化步幅为行优先（C 风格）
+4. 设置偏移量为 0
+
+### 使用示例
+
+#### 基本用法
+
+```cpp
+
+
+// float32 张量（默认）
+auto a = yt::YTensorBase({2, 3, 4});
+std::cout << a.dtype() << std::endl;        // "float32"
+std::cout << a.elementSize() << std::endl;  // 4
+
+// int32 张量
+auto b = yt::YTensorBase({10, 20}, "int32");
+std::cout << b.size() << std::endl;  // 200
+
+// double 张量
+auto c = yt::YTensorBase({5, 5}, "float64");
+std::cout << c.elementSize() << std::endl;  // 8
+```
+
+#### 不同维度
+
+```cpp
+// 一维张量
+auto vec = yt::YTensorBase({100}, "float32");
+
+// 二维张量
+auto mat = yt::YTensorBase({10, 20}, "float32");
+
+// 三维张量
+auto cube = yt::YTensorBase({5, 10, 15}, "float32");
+
+// 高维张量
+auto tensor = yt::YTensorBase({2, 3, 4, 5, 6}, "float32");
+```
+
+#### 步幅计算
+
+```cpp
+auto a = yt::YTensorBase({2, 3, 4}, "float32");
+
+auto stride = a.stride();
+// stride = {12, 4, 1}  （行优先顺序）
+
+// 计算公式：
+// stride[2] = 1
+// stride[1] = stride[2] * shape[2] = 1 * 4 = 4
+// stride[0] = stride[1] * shape[1] = 4 * 3 = 12
+```
+
+---
+
+## 拷贝构造函数
+
+### 核心功能描述
+
+创建现有张量的深拷贝。
+
+### 函数签名
+
+```cpp
+YTensorBase(const YTensorBase& other);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `other` | `const YTensorBase&` | 要拷贝的源张量 |
+
+### 拷贝行为
+
+拷贝构造函数执行**深拷贝**：
+- 复制形状、步幅、偏移量
+- **共享**底层数据指针（`std::shared_ptr`）
+- 数据本身不被复制
+
+:::warning
+**注意**
+
+YTensorBase 的拷贝构造是**浅拷贝**（共享数据），而非深拷贝。要创建独立副本，使用 `clone()`。
+
+```cpp
+yt::YTensorBase a({2, 3}, "float32");
+yt::YTensorBase b = a;  // 浅拷贝（共享数据）
+
+a.at<float>(0, 0) = 1.0f;
+// b.at<float>(0, 0) == 1.0f  ✅ 共享数据
+
+// 深拷贝
+yt::YTensorBase c = a.clone();
+a.at<float>(0, 0) = 2.0f;
+// c.at<float>(0, 0) == 1.0f  ✅ 独立数据
+```
+:::
+
+### 使用示例
+
+#### 基本拷贝
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+a.at<float>(0, 0) = 1.0f;
+
+// 拷贝构造
+yt::YTensorBase b = a;
+
+std::cout << b.at<float>(0, 0) << std::endl;  // 1.0
+
+// 共享数据验证
+a.at<float>(0, 0) = 2.0f;
+std::cout << b.at<float>(0, 0) << std::endl;  // 2.0（共享）
+```
+
+#### 存储到容器
+
+```cpp
+std::vector<yt::YTensorBase> tensors;
+
+auto a = yt::YTensorBase({2, 3}, "float32");
+auto b = yt::YTensorBase({4, 5}, "int32");
+
+// 拷贝构造
+tensors.push_back(a);
+tensors.push_back(b);
+
+// 原张量和容器中的张量共享数据
+a.at<float>(0, 0) = 1.0f;
+std::cout << tensors[0].at<float>(0, 0) << std::endl;  // 1.0
+```
+
+---
+
+## 拷贝赋值运算符
+
+### 核心功能描述
+
+将一个张量赋值给另一个张量。
+
+### 函数签名
+
+```cpp
+YTensorBase& operator=(const YTensorBase& other);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+|--------|------|------|
+| `other` | `const YTensorBase&` | 要赋值的源张量 |
+
+### 返回值
+
+返回当前对象的引用。
+
+### 赋值行为
+
+与拷贝构造相同，执行**浅拷贝**（共享数据）。
+
+### 使用示例
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+auto b = yt::YTensorBase({4, 5}, "int32");
+
+// 赋值运算符
+b = a;  // b 现在与 a 共享数据
+
+std::cout << b.shape(0) << std::endl;  // 2
+std::cout << b.dtype() << std::endl;   // "float32"
+```
+
+---
+
+## 非 POD 类型支持
+
+YTensorBase 支持非 POD（Plain Old Data）类型，会自动调用构造函数和析构函数。
+
+### 自定义类型
+
+```cpp
+struct MyType {
+    float value;
+    
+    MyType() : value(0.0f) {
+        std::cout << "MyType constructed" << std::endl;
+    }
+    
+    ~MyType() {
+        std::cout << "MyType destructed" << std::endl;
+    }
+};
+
+// 注册类型（需要在 ytensor_types.hpp 中注册）
+// auto tensor = yt::YTensorBase({2, 3}, "MyType");
+// 构造时会调用 MyType() 构造函数
+// 析构时会调用 ~MyType() 析构函数
+```
+
+### POD 类型优化
+
+对于 POD 类型（如 `float`, `int`），YTensorBase 使用简单的内存分配，不调用构造函数：
+
+```cpp
+// POD 类型：快速分配
+auto a = yt::YTensorBase({1000, 1000}, "float32");
+// 只分配内存，不初始化
+
+// 非 POD 类型：调用构造函数
+// auto b = yt::YTensorBase({1000, 1000}, "CustomType");
+// 为每个元素调用构造函数
+```
+
+---
+
+## 内存管理
+
+### 引用计数
+
+YTensorBase 使用 `std::shared_ptr<char[]>` 管理数据，支持自动引用计数：
+
+```cpp
+auto a = yt::YTensorBase({2, 3}, "float32");
+
+{
+    yt::YTensorBase b = a;  // 引用计数 +1
+    yt::YTensorBase c = a;  // 引用计数 +1
+    // b, c 离开作用域，引用计数 -2
+}
+
+// a 仍然有效，引用计数 = 1
+```
+
+### 自动释放
+
+当最后一个引用离开作用域时，内存自动释放：
+
+```cpp
+{
+    auto a = yt::YTensorBase({1000, 1000}, "float32");
+    // 分配 4MB 内存
+} // a 离开作用域，内存自动释放
+```
+
+---
+
+## 异常安全
+
+### 形状验证
+
+```cpp
+// ❌ 空形状
+try {
+    auto a = yt::YTensorBase({}, "float32");
+    // 创建 0 维张量（允许）
+} catch (...) {
+    // 不会抛出异常
+}
+
+// ✅ 负数形状
+auto b = yt::YTensorBase({2, -3, 4}, "float32");
+// 负数被视为 0，总元素数 = 0，分配 1 字节
+```
+
+### 类型验证
+
+```cpp
+// ❌ 未知类型
+try {
+    auto a = yt::YTensorBase({2, 3}, "unknown_type");
+    // 抛出异常或返回 0
+} catch (const std::exception& e) {
+    std::cerr << e.what() << std::endl;
+}
+```
+
+---
+
+## 性能考虑
+
+### 构造成本
+
+```cpp
+// 小张量：快速
+auto a = yt::YTensorBase({10, 10}, "float32");  // ~400 字节
+
+// 大张量：较慢
+auto b = yt::YTensorBase({1000, 1000}, "float32");  // ~4MB
+```
+
+### 拷贝成本
+
+```cpp
+// 浅拷贝：O(1)
+auto a = yt::YTensorBase({1000, 1000}, "float32");
+auto b = a;  // 只复制指针，非常快
+
+// 深拷贝：O(n)
+auto c = a.clone();  // 复制所有数据，较慢
+```
+
+---
+
+## 使用示例汇总
+
+### 创建不同类型张量
+
+```cpp
+
+
+// 浮点张量
+auto float_tensor = yt::YTensorBase({10, 20}, "float32");
+auto double_tensor = yt::YTensorBase({10, 20}, "float64");
+
+// 整数张量
+auto int_tensor = yt::YTensorBase({10, 20}, "int32");
+auto long_tensor = yt::YTensorBase({10, 20}, "int64");
+
+// 布尔张量
+auto bool_tensor = yt::YTensorBase({10, 20}, "bool");
+```
+
+### 批量创建
+
+```cpp
+std::vector<yt::YTensorBase> create_batch(int batch_size, 
+                                       const std::vector<int>& shape,
+                                       const std::string& dtype) {
+    std::vector<yt::YTensorBase> batch;
+    for (int i = 0; i < batch_size; i++) {
+        batch.emplace_back(shape, dtype);
+    }
+    return batch;
+}
+
+// 使用
+auto batch = create_batch(32, {3, 224, 224}, "float32");
+```
+
+### 类型转换
+
+```cpp
+yt::YTensorBase convert_dtype(const yt::YTensorBase& src, const std::string& new_dtype) {
+    yt::YTensorBase dst(src.shape(), new_dtype);
+    
+    // 逐元素转换（需要根据类型分发）
+    if (src.dtype() == "float32" && new_dtype == "int32") {
+        const float* src_data = src.data<float>();
+        int* dst_data = dst.data<int>();
+        for (size_t i = 0; i < src.size(); i++) {
+            dst_data[i] = static_cast<int>(src_data[i]);
+        }
+    }
+    
+    return dst;
+}
+```
+
+---
+
+## 最佳实践
+
+### 1. 使用默认类型
+
+```cpp
+// ✅ 默认 float32（最常用）
+auto tensor = yt::YTensorBase({10, 20});
+
+// 🔶 仅在必要时指定其他类型
+auto int_tensor = yt::YTensorBase({10, 20}, "int32");
+```
+
+### 2. 避免不必要的拷贝
+
+```cpp
+// ❌ 不必要的拷贝
+yt::YTensorBase func() {
+    yt::YTensorBase tensor({10, 20}, "float32");
+    return tensor;  // 可能触发拷贝
+}
+
+// ✅ 移动语义
+yt::YTensorBase func() {
+    yt::YTensorBase tensor({10, 20}, "float32");
+    return std::move(tensor);  // 移动，不拷贝
+}
+```
+
+### 3. 使用 emplace_back
+
+```cpp
+std::vector<yt::YTensorBase> tensors;
+
+// ❌ 不必要的拷贝
+yt::YTensorBase temp({10, 20}, "float32");
+tensors.push_back(temp);
+
+// ✅ 原地构造
+tensors.emplace_back(std::vector<int>{10, 20}, "float32");
+```
+
+---
+
+## 相关内容
+
+- [工厂方法](./factories.mdx) - zeros, ones 等便捷构造
+- [内存管理](./memory.mdx) - clone, contiguous
+- [YTensor 构造函数](../../YTensor/construction/constructors.mdx) - 编译时类型版本
+- [类型系统](../../infos/types.mdx) - dtype 注册机制

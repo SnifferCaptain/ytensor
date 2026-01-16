@@ -1,0 +1,181 @@
+# Shape Operations: Transposition
+
+This document describes the transposition methods for the `YTensor<T, dim>` class, including `transpose()`, `permute()`, and `permute_()`.
+
+## Overview
+
+| Method | Function | In-place | Description |
+| --- | --- | --- | --- |
+| `transpose()` | Swaps two dimensions | ❌ | Swaps the last two dimensions by default. |
+| `permute()` | Reorders all dimensions | ❌ | Reorders dimensions according to a specified sequence. |
+| `permute_()` | Reorders all dimensions | ✅ | In-place version of `permute`. |
+
+---
+
+## transpose()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim> transpose(int dim0 = -2, int dim1 = -1) const;
+```
+
+### Parameters
+
+| Name | Type | Default Value | Description |
+| --- | --- | --- | --- |
+| `dim0` | `int` | `-2` | Index of the first dimension to swap (supports negative indexing). |
+| `dim1` | `int` | `-1` | Index of the second dimension to swap (supports negative indexing). |
+
+### Core Function Description
+
+Swaps the two specified dimensions of the tensor. Returns a new view, the data is not copied, but may become non-contiguous.
+Defaults to swapping the last two dimensions (suitable for matrix transposition).
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: Returns a view of the tensor with the specified dimensions swapped (zero-copy).
+
+### Usage Examples
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    
+    // Default: swap the last two dimensions
+    auto t = mat.transpose();
+    std::cout << "Shape: [" << t.shape()[0] << ", " << t.shape()[1] << "]" << std::endl;
+    // Output: Shape: [4, 3]
+    
+    // 3D Tensor
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    auto t3 = tensor.transpose(0, 2);  // Swap dimension 0 and 2
+    std::cout << "3D Shape: [" << t3.shape()[0] << ", " << t3.shape()[1] << ", " << t3.shape()[2] << "]" << std::endl;
+    // Output: 3D Shape: [4, 3, 2]
+}
+```
+
+---
+
+## permute()
+
+### Function Signatures
+
+```cpp
+YTensor<T, dim> permute(const std::vector<int>& newOrder) const;
+
+template<typename... Args>
+YTensor<T, dim> permute(const Args... newOrder) const;
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` or `Args...` | The new order of dimensions (supports negative indexing). |
+
+### Core Function Description
+
+Reorders all dimensions according to the specified order. Returns a new view, the data is not copied.
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>`
+- **Description**: Returns a view of the tensor with dimensions reordered (zero-copy).
+
+### Usage Examples
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    
+    // Reorder to [4, 2, 3] (original dims 2, 0, 1)
+    auto p = tensor.permute(2, 0, 1);
+    std::cout << "Shape: [" << p.shape()[0] << ", " << p.shape()[1] << ", " << p.shape()[2] << "]" << std::endl;
+    // Output: Shape: [4, 2, 3]
+    
+    // Using a vector
+    std::vector<int> order = {1, 2, 0};
+    auto p2 = tensor.permute(order);
+    std::cout << "Shape2: [" << p2.shape()[0] << ", " << p2.shape()[1] << ", " << p2.shape()[2] << "]" << std::endl;
+    // Output: Shape2: [3, 4, 2]
+}
+```
+
+---
+
+## permute_()
+
+### Function Signature
+
+```cpp
+YTensor<T, dim>& permute_(const std::vector<int>& newOrder);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` | The new order of dimensions. |
+
+### Core Function Description
+
+In-place reordering of all dimensions, modifying the shape and stride of the current tensor.
+
+### Return Value
+
+- **Type**: `YTensor<T, dim>&`
+- **Description**: Returns a reference to the current object (supports method chaining).
+
+### Usage Example
+
+```cpp
+yt::YTensor<float, 3> tensor(2, 3, 4);
+
+// Reorder in-place
+tensor.permute_({2, 0, 1});
+std::cout << "Shape: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << ", " << tensor.shape()[2] << "]" << std::endl;
+// Output: Shape: [4, 2, 3]
+```
+
+---
+
+## Full Example
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 100 + coord[1] * 10 + coord[2];
+    });
+    
+    std::cout << "=== transpose() ===" << std::endl;
+    auto t = tensor.transpose();  // Default: swap last two dims
+    std::cout << "Shape: [" << t.shape()[0] << ", " << t.shape()[1] << ", " << t.shape()[2] << "]" << std::endl;
+    std::cout << "t[0][0][0] = " << t.at(0, 0, 0) << std::endl;  // Same as tensor[0][0][0]
+    std::cout << "t[0][2][1] = " << t.at(0, 2, 1) << std::endl;  // Same as tensor[0][1][2]
+    
+    std::cout << "\n=== permute() ===" << std::endl;
+    auto p = tensor.permute(2, 0, 1);
+    std::cout << "Shape: [" << p.shape()[0] << ", " << p.shape()[1] << ", " << p.shape()[2] << "]" << std::endl;
+    std::cout << "p[0][0][0] = " << p.at(0, 0, 0) << std::endl;  // Same as tensor[0][0][0]
+    
+    return 0;
+}
+```
+
+---
+
+## Related Content
+
+- [Shape Querying](./query.mdx) - Methods like `shape()` and `stride()`.
+- [Shape Operations: Reshaping](./reshape.mdx) - Methods like `reshape()` and `contiguous()`.
+- [Utility Properties](../utilities/properties.mdx) - Details on the `isContiguous()` check.

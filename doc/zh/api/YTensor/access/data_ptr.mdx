@@ -1,0 +1,483 @@
+# 元素访问：数据指针
+
+本文档介绍 `YTensor<T, dim>` 类的底层数据指针访问方法，包括 `data()`、`data_()`、`atData()` 和 `atData_()` 方法。
+
+## 概览
+
+YTensor 提供四种数据指针访问方法：
+
+| 方法 | 指针位置 | 偏移量 | 安全性 | 适用场景 |
+| --- | --- | --- | --- | --- |
+| `data()` | 当前视图的起始位置 | 包含 `_offset` | 安全 | 一般指针访问 |
+| `data_()` | 内存块的起始位置 | 不包含 `_offset` | 需谨慎 | 内部实现、高级用法 |
+| `atData()` | - | 逻辑索引 | 安全但较慢 | 兼容性 |
+| `atData_()` | - | 物理索引 | 高效但需连续 | Element-wise 操作 |
+
+---
+
+## data()
+
+### 函数签名
+
+```cpp
+T* data();
+const T* data() const;
+```
+
+### 核心功能描述
+
+获取当前张量视图的数据指针。返回的指针指向当前视图的第一个元素，已经包含了偏移量（`_offset`）。
+
+### 返回值
+
+- **类型**: `T*` 或 `const T*`
+- **说明**: 指向当前视图起始位置的指针
+
+### 实现
+
+```cpp
+T* data() {
+    return data_() + _offset;
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    tensor.fill(1.0f);
+    
+    // 获取数据指针
+    float* ptr = tensor.data();
+    
+    // 使用步长访问元素
+    auto stride = tensor.stride_();
+    for (int i = 0; i < tensor.shape(0); ++i) {
+        for (int j = 0; j < tensor.shape(1); ++j) {
+            int offset = i * stride[0] + j * stride[1];
+            ptr[offset] = i * 4 + j;
+        }
+    }
+    
+    // 验证
+    std::cout << tensor.at(1, 2) << std::endl;  // 输出: 6
+}
+```
+
+### 子张量的 data()
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+auto sub = tensor[1];  // 子张量
+
+// sub.data() 指向 tensor 的第二个"切片"
+float* sub_ptr = sub.data();
+
+// sub_ptr 与 tensor.data() 不同
+// sub_ptr = tensor.data_() + tensor._offset + 1 * tensor.stride(0)
+```
+
+### 注意事项
+
+:::info
+**视图感知**
+
+`data()` 返回的指针考虑了当前视图的偏移量，因此总是指向当前张量的逻辑起始位置。
+
+对于非连续张量，必须使用 `stride_()` 步长来正确访问元素。
+:::
+
+---
+
+## data_()
+
+### 函数签名
+
+```cpp
+T* data_();
+const T* data_() const;
+```
+
+### 核心功能描述
+
+获取底层内存块的起始指针，**不包含**偏移量（`_offset`）。这是真正的物理内存地址。
+
+### 返回值
+
+- **类型**: `T*` 或 `const T*`
+- **说明**: 指向底层内存块起始位置的指针
+
+### 实现
+
+```cpp
+T* data_() {
+    return reinterpret_cast<T*>(_data.get());
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // 获取底层指针
+    float* raw_ptr = tensor.data_();
+    
+    // 直接访问物理内存（不考虑偏移）
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        raw_ptr[i] = static_cast<float>(i);
+    }
+    
+    // 对于连续张量，data() 与 data_() + offset 等价
+    std::cout << (tensor.data() == tensor.data_() + tensor.offset_()) << std::endl;  // true
+}
+```
+
+### 子张量的 data_()
+
+```cpp
+yt::YTensor<float, 3> tensor(3, 4, 5);
+auto sub = tensor[1];  // 子张量
+
+// sub.data_() 与 tensor.data_() 相同（共享内存）
+std::cout << (sub.data_() == tensor.data_()) << std::endl;  // true
+
+// 但 sub.data() 与 tensor.data() 不同（不同的视图）
+std::cout << (sub.data() == tensor.data()) << std::endl;  // false
+```
+
+### 注意事项
+
+:::warning
+**高级用法**
+
+`data_()` 是底层方法，通常仅用于：
+- 库内部实现
+- 高性能场景（需要理解内存布局）
+- 与 C API 交互
+
+一般用户应使用 `data()` 方法。
+:::
+
+---
+
+## data() vs data_()
+
+### 关系
+
+```cpp
+// data() 的实现
+T* data() {
+    return data_() + _offset;
+}
+```
+
+### 对比
+
+| 特性 | data() | data_() |
+| --- | --- | --- |
+| **指针位置** | 当前视图起始 | 内存块起始 |
+| **包含偏移** | ✅ 是 | ❌ 否 |
+| **子张量** | 不同指针 | 相同指针 |
+| **推荐使用** | ✅ 一般场景 | ⚠️ 高级场景 |
+
+### 示例对比
+
+```cpp
+yt::YTensor<float, 2> tensor(10, 10);
+auto sub = tensor.slice(0, 2, 5);  // 切片
+
+// 完整张量
+std::cout << "Tensor data(): " << tensor.data() << std::endl;
+std::cout << "Tensor data_(): " << tensor.data_() << std::endl;
+
+// 子张量
+std::cout << "Sub data(): " << sub.data() << std::endl;  // 偏移后的位置
+std::cout << "Sub data_(): " << sub.data_() << std::endl;  // 与 tensor 相同
+
+// 验证关系
+assert(sub.data_() == tensor.data_());  // 共享内存
+assert(sub.data() != tensor.data());    // 不同视图
+```
+
+---
+
+## atData()
+
+### 函数签名
+
+```cpp
+T& atData(int index);
+const T& atData(int index) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `index` | `int` | 逻辑索引（从 0 开始） |
+
+### 核心功能描述
+
+通过逻辑索引访问元素。内部会将逻辑索引转换为坐标，再调用 `at()` 方法。
+
+**不推荐使用**，性能较低，仅用于兼容性。
+
+### 返回值
+
+- **类型**: `T&` 或 `const T&`
+- **说明**: 返回指定逻辑位置的元素引用
+
+### 实现
+
+```cpp
+T& atData(int index) {
+    auto coord = toCoord(index);  // 逻辑索引 -> 坐标
+    return at(coord);             // 坐标 -> 元素
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // 使用逻辑索引
+    tensor.atData(0) = 1.0f;   // 等价于 tensor.at(0, 0)
+    tensor.atData(5) = 5.0f;   // 等价于 tensor.at(1, 1)
+    
+    std::cout << tensor.atData(5) << std::endl;  // 输出: 5.0
+    
+    // 逻辑索引的计算
+    // index = i * shape[1] + j
+    // 5 = 1 * 4 + 1  =>  (i=1, j=1)
+}
+```
+
+### 性能考虑
+
+:::warning
+**性能较低**
+
+`atData()` 内部需要：
+1. 将逻辑索引转换为多维坐标（`toCoord()`）
+2. 再将坐标转换为物理索引（`at()`）
+
+性能远低于直接使用 `at()` 方法。仅用于兼容旧代码。
+:::
+
+---
+
+## atData_()
+
+### 函数签名
+
+```cpp
+T& atData_(int index);
+const T& atData_(int index) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `index` | `int` | 物理索引（相对于 `data_()` + `_offset`） |
+
+### 核心功能描述
+
+通过物理索引直接访问元素，非常高效。**要求张量必须是连续的**，且不进行边界检查。
+
+### 返回值
+
+- **类型**: `T&` 或 `const T&`
+- **说明**: 返回指定物理位置的元素引用
+
+### 实现
+
+```cpp
+T& atData_(int index) {
+    return data_()[_offset + index];
+}
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    // 使用物理索引（张量必须连续）
+    assert(tensor.isContiguous());
+    
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) = static_cast<float>(i);
+    }
+    
+    // 验证
+    std::cout << tensor.at(0, 0) << std::endl;  // 输出: 0
+    std::cout << tensor.at(1, 2) << std::endl;  // 输出: 6 (1*4 + 2)
+}
+```
+
+### Element-wise 操作
+
+`atData_()` 非常适合 element-wise 操作：
+
+```cpp
+void add_scalar(yt::YTensor<float, 2>& tensor, float value) {
+    assert(tensor.isContiguous());  // 确保连续
+    
+    size_t n = tensor.size();
+    for (size_t i = 0; i < n; ++i) {
+        tensor.atData_(i) += value;
+    }
+}
+```
+
+### 注意事项
+
+:::danger
+**严格要求**
+
+`atData_()` 使用前必须满足：
+1. **张量必须连续**（`isContiguous() == true`）
+2. **索引不能越界**（不进行检查）
+3. **理解物理内存布局**
+
+错误使用会导致未定义行为或程序崩溃！
+:::
+
+---
+
+## atData() vs atData_()
+
+| 特性 | atData() | atData_() |
+| --- | --- | --- |
+| **索引类型** | 逻辑索引 | 物理索引 |
+| **坐标转换** | ✅ 需要 | ❌ 不需要 |
+| **性能** | ❌ 慢 | ✅ 快 |
+| **连续性要求** | ❌ 无 | ✅ 必须连续 |
+| **边界检查** | ✅ 有 | ❌ 无 |
+| **推荐使用** | ❌ 不推荐 | ✅ Element-wise |
+
+---
+
+## 使用建议
+
+### 推荐做法
+
+```cpp
+// ✅ 元素访问：使用 at()
+tensor.at(i, j, k) = value;
+
+// ✅ 指针访问：使用 data()
+float* ptr = tensor.data();
+auto stride = tensor.stride_();
+ptr[i * stride[0] + j * stride[1]] = value;
+
+// ✅ Element-wise：使用 atData_()（连续张量）
+if (tensor.isContiguous()) {
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) *= 2.0f;
+    }
+}
+```
+
+### 避免的做法
+
+```cpp
+// ❌ 避免：使用 atData()（性能差）
+for (int i = 0; i < tensor.size(); ++i) {
+    tensor.atData(i) = value;  // 每次都要坐标转换
+}
+
+// ❌ 避免：非连续张量使用 atData_()
+if (!tensor.isContiguous()) {
+    // tensor.atData_(i) = value;  // 未定义行为！
+}
+
+// ❌ 避免：直接操作 data_()（除非你完全理解）
+float* raw = tensor.data_();
+// raw[index] = value;  // 可能访问错误位置
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 2> tensor(3, 4);
+    
+    std::cout << "=== data() 示例 ===" << std::endl;
+    // 使用 data() 和 stride
+    float* ptr = tensor.data();
+    auto stride = tensor.stride_();
+    
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            int offset = i * stride[0] + j * stride[1];
+            ptr[offset] = i * 10 + j;
+        }
+    }
+    
+    std::cout << "tensor.at(1, 2) = " << tensor.at(1, 2) << std::endl;  // 12.0
+    
+    std::cout << "\n=== atData_() 示例 ===" << std::endl;
+    // Element-wise 操作
+    assert(tensor.isContiguous());
+    for (size_t i = 0; i < tensor.size(); ++i) {
+        tensor.atData_(i) += 100.0f;
+    }
+    
+    std::cout << "tensor.at(0, 0) = " << tensor.at(0, 0) << std::endl;  // 100.0
+    std::cout << "tensor.at(1, 2) = " << tensor.at(1, 2) << std::endl;  // 112.0
+    
+    std::cout << "\n=== 子张量指针 ===" << std::endl;
+    auto sub = tensor[1];
+    
+    std::cout << "tensor.data() = " << (void*)tensor.data() << std::endl;
+    std::cout << "sub.data() = " << (void*)sub.data() << std::endl;
+    std::cout << "tensor.data_() = " << (void*)tensor.data_() << std::endl;
+    std::cout << "sub.data_() = " << (void*)sub.data_() << std::endl;
+    
+    std::cout << "sub shares memory: " << (sub.data_() == tensor.data_()) << std::endl;  // true
+    
+    std::cout << "\n=== 非连续张量 ===" << std::endl;
+    auto transposed = tensor.transpose();
+    std::cout << "Transposed contiguous: " << transposed.isContiguous() << std::endl;  // false
+    
+    // 非连续张量不能使用 atData_()
+    // transposed.atData_(0) = 999.0f;  // 危险！未定义行为
+    
+    // 但可以使用 data() + stride
+    float* t_ptr = transposed.data();
+    auto t_stride = transposed.stride_();
+    t_ptr[0 * t_stride[0] + 0 * t_stride[1]] = 999.0f;  // 安全
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [元素访问：索引](./indexing.mdx) - `at()` 和 `operator[]` 方法
+- [迭代操作](./iteration.mdx) - `foreach()`、`fill()` 等高级操作
+- [形状查询](../shape/query.mdx) - `stride()`、`offset()` 等方法
+- [性能优化](../../guides/performance_tips.mdx) - 高效访问模式

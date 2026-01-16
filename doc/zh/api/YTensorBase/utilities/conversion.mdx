@@ -1,0 +1,199 @@
+# 坐标转换
+
+本文档介绍 `YTensorBase` 类的坐标转换方法。
+
+## 概述
+
+| 方法 | 返回类型 | 说明 |
+| --- | --- | --- |
+| `toIndex()` | `size_t` | 坐标 → 逻辑索引（基于逻辑 stride） |
+| `toIndex_()` | `size_t` | 坐标 → 物理索引（基于实际 stride） |
+| `toCoord()` | `std::vector<int>` | 逻辑索引 → 坐标 |
+| `autoShape()` | `std::vector<int>` | 自动推导形状（支持 -1） |
+| `cast()` | `YTensorBase` | 类型转换 |
+
+---
+
+## `toIndex()`
+
+### 函数签名
+
+```cpp
+template <typename... Args>
+size_t toIndex(const Args... args) const;
+
+size_t toIndex(const std::vector<int>& pos) const;
+```
+
+### 核心功能描述
+
+将多维坐标转换为**逻辑索引**。
+*   基于逻辑 stride，即行优先连续存储的索引。
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+size_t idx = tensor.toIndex({1, 2, 3});
+// idx = 1 * 20 + 2 * 5 + 3 = 33（逻辑索引）
+
+// 可变参数版本
+size_t idx2 = tensor.toIndex(1, 2, 3);
+```
+
+### 注意
+
+- 如果张量是**非连续的**，`toIndex()` 返回的是逻辑索引，不是实际的内存偏移
+- 若需获取实际内存偏移，请使用 `toIndex_()`
+
+---
+
+## `toIndex_()`
+
+### 函数签名
+
+```cpp
+template <typename... Args>
+size_t toIndex_(const Args... args) const;
+
+size_t toIndex_(const std::vector<int>& pos) const;
+```
+
+### 核心功能描述
+
+将坐标转换为**物理索引**。
+*   基于实际 `_stride`。
+*   用于配合 `data<T>()` 直接访问内存。
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+YTensorBase transposed = tensor.transpose();
+
+// 物理索引 != 逻辑索引（因为转置改变了 stride）
+size_t physIdx = transposed.toIndex_({0, 0});
+float* ptr = transposed.data<float>();
+float value = ptr[physIdx];
+```
+
+---
+
+## `toCoord()`
+
+### 函数签名
+
+```cpp
+std::vector<int> toCoord(size_t index) const;
+```
+
+### 核心功能描述
+
+将逻辑索引转换为多维坐标。
+*   是 `toIndex()` 的逆操作。
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+
+std::vector<int> coord = tensor.toCoord(33);
+// coord = {1, 2, 3}
+
+// 验证
+size_t idx = tensor.toIndex(coord);
+// idx == 33
+```
+
+---
+
+## `autoShape()`
+
+### 函数签名
+
+```cpp
+template<typename... Args>
+std::vector<int> autoShape(const Args... shape) const;
+
+std::vector<int> autoShape(const std::vector<int>& shape) const;
+```
+
+### 核心功能描述
+
+自动推导形状。
+*   支持 `-1` 表示自动计算该维度的大小。
+
+### 规则
+
+1. 只有一个 `-1`: 根据总元素数自动计算
+2. 多个 `-1`: 前面的 `-1` 使用原 shape 对应位置的值，最后一个 `-1` 自动计算
+
+### 使用示例
+
+```cpp
+YTensorBase tensor = YTensorBase::zeros({3, 4, 5}, "float32");
+// tensor.size() = 60
+
+// 单个 -1：自动计算
+std::vector<int> s1 = tensor.autoShape({-1, 12});
+// s1 = {5, 12}（因为 60 / 12 = 5）
+
+std::vector<int> s2 = tensor.autoShape({2, -1, 5});
+// s2 = {2, 6, 5}（因为 60 / (2 * 5) = 6）
+
+// 多个 -1：按位置使用原 shape
+std::vector<int> s3 = tensor.autoShape({-1, 2, 2, -1});
+// s3 = {3, 2, 2, 5}
+// 第一个 -1 → 原 shape[0] = 3
+// 最后一个 -1 → 60 / (3 * 2 * 2) = 5
+```
+
+### 异常
+
+- 元素总数不能被整除时抛出 `std::invalid_argument`
+- 多个 `-1` 但对应位置超出原 shape 范围时抛出异常
+
+---
+
+## `cast()`
+
+### 函数签名
+
+```cpp
+YTensorBase cast(const std::string& newDtype) const;
+```
+
+### 核心功能描述
+
+类型转换：返回一个指定新类型的新张量。
+*   如果目标类型与当前类型相同，则返回自身的深拷贝（`clone()`）。
+*   如果不同，则创建一个新张量并逐元素转换数据。
+*   支持任意已注册类型之间的转换（需要底层支持）。
+
+### 使用示例
+
+```cpp
+// 1. 基本转换：int -> float
+YTensorBase a = YTensorBase::zeros({2, 3}, "int32");
+YTensorBase b = a.cast("float32");
+// b.dtype() == "float32"
+
+// 2. 精度转换：float64 -> float32
+YTensorBase c = b.cast("float64");
+
+// 3. 布尔转换：float -> bool
+YTensorBase d = a.cast("bool");
+```
+
+### 异常
+
+*   如果目标类型不支持转换，可能会抛出异常（取决于具体的类型分发实现）。
+
+---
+
+## 相关内容
+
+- [数据指针](../access/data_ptr.mdx) - `data<T>()`、`atData_()`方法
+- [形状查询](../shape/query.mdx) - `shape()`、`stride()` 方法
+- [属性查询](./properties.mdx) - `isContiguous()` 方法

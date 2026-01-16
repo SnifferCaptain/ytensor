@@ -1,0 +1,185 @@
+# 形状操作：维度变换
+
+本文档介绍 `YTensor<T, dim>` 类的维度变换方法，包括 `unsqueeze()`、`squeeze()`、`repeat()` 和 `unfold()`。
+
+## 概览
+
+| 方法 | 功能 | 维度变化 | 说明 |
+| --- | --- | --- | --- |
+| `unsqueeze()` / `unsqueeze_()` | 插入大小为 1 的维度 | +1 | 零拷贝 |
+| `squeeze()` / `squeeze_()` | 移除大小为 1 的维度 | -1 或 -N | 零拷贝 |
+| `repeat()` / `repeat_()` | 沿维度重复 | 不变 | 需要拷贝 |
+| `unfold()` / `unfold_()` | 滑动窗口展开 | +1 | 零拷贝视图 |
+
+---
+
+## unsqueeze()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim+1> unsqueeze(int atDim) const;
+YTensor<T, dim+1>& unsqueeze_(int atDim);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `atDim` | `int` | 插入位置（支持负数索引） |
+
+### 核心功能描述
+
+在指定位置插入一个大小为 1 的新维度。不改变数据，只修改形状信息（视图操作）。
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);  // [3, 4]
+    
+    // 在第 0 维前插入
+    auto u0 = mat.unsqueeze(0);  // [1, 3, 4]
+    std::cout << "Shape: [" << u0.shape()[0] << ", " << u0.shape()[1] << ", " << u0.shape()[2] << "]" << std::endl;
+    
+    // 在最后插入
+    auto u_last = mat.unsqueeze(-1);  // [3, 4, 1]
+    std::cout << "Shape: [" << u_last.shape()[0] << ", " << u_last.shape()[1] << ", " << u_last.shape()[2] << "]" << std::endl;
+}
+```
+
+---
+
+## squeeze()
+
+### 函数签名
+
+```cpp
+// 移除指定维度（必须大小为 1）
+YTensorBase squeeze(int atDim) const;
+YTensorBase& squeeze_(int atDim);
+
+// 移除所有大小为 1 的维度
+YTensorBase squeeze() const;
+YTensorBase& squeeze_();
+```
+
+### 核心功能描述
+
+移除大小为 1 的维度。
+*   指定 `atDim`：移除特定维度（如果该维度大小不为 1，则抛出异常或无效）。
+*   不指定参数：移除所有大小为 1 的维度。
+不改变数据，只修改形状信息（视图操作）。
+
+### 使用示例
+
+```cpp
+yt::YTensor<float, 3> tensor(1, 3, 1);  // [1, 3, 1]
+
+// 移除第 0 维
+auto s0 = tensor.squeeze(0);  // [3, 1]
+std::cout << "Shape: [" << s0.shape()[0] << ", " << s0.shape()[1] << "]" << std::endl;
+
+// 移除所有大小为 1 的维度
+auto s_all = tensor.squeeze();  // [3]
+std::cout << "Shape: [" << s_all.shape()[0] << "]" << std::endl;
+```
+
+---
+
+## repeat()
+
+### 函数签名
+
+```cpp
+YTensorBase repeat(const std::vector<int>& repeats) const;
+YTensorBase& repeat_(const std::vector<int>& repeats);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `repeats` | `std::vector<int>` | 每个维度的重复次数 |
+
+### 核心功能描述
+
+沿各维度重复张量内容。此操作**会分配新内存**并复制数据。
+
+### 使用示例
+
+```cpp
+yt::YTensor<float, 2> mat(2, 3);  // [2, 3]
+mat.fill(1.0f);
+
+// 第 0 维重复 2 次，第 1 维重复 3 次
+auto r = mat.repeat({2, 3});  // [4, 9]
+std::cout << "Shape: [" << r.shape()[0] << ", " << r.shape()[1] << "]" << std::endl;
+```
+
+---
+
+## unfold()
+
+### 函数签名
+
+```cpp
+YTensorBase unfold(int atDim, int size, int step) const;
+YTensorBase& unfold_(int atDim, int size, int step);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `atDim` | `int` | 展开的维度 |
+| `size` | `int` | 窗口大小 |
+| `step` | `int` | 步长 |
+
+### 核心功能描述
+
+返回一个滑动窗口视图。在指定维度上，以 `size` 为窗口大小、`step` 为步长展开一个新的额外维度。
+常用于卷积或图像分块处理。
+
+### 使用示例
+
+```cpp
+yt::YTensor<float, 1> vec(10);  // [10]
+
+// 滑动窗口：大小=3，步长=2
+auto u = vec.unfold(0, 3, 2);  // [4, 3]
+// 4 = (10 - 3) / 2 + 1 个窗口
+std::cout << "Shape: [" << u.shape()[0] << ", " << u.shape()[1] << "]" << std::endl;
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 2> mat(3, 4);
+    
+    std::cout << "=== unsqueeze ===" << std::endl;
+    auto u = mat.unsqueeze(0);
+    std::cout << "Shape: [" << u.shape()[0] << ", " << u.shape()[1] << ", " << u.shape()[2] << "]" << std::endl;
+    
+    std::cout << "\n=== squeeze ===" << std::endl;
+    auto s = u.squeeze(0);
+    std::cout << "Shape: [" << s.shape()[0] << ", " << s.shape()[1] << "]" << std::endl;
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()` 和 `ndim()` 方法
+- [形状操作：重塑](./reshape.mdx) - `reshape()` 方法

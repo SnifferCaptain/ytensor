@@ -1,0 +1,181 @@
+# 形状操作：转置
+
+本文档介绍 `YTensor<T, dim>` 类的转置方法，包括 `transpose()` 和 `permute()` / `permute_()`。
+
+## 概览
+
+| 方法 | 功能 | 原地操作 | 说明 |
+| --- | --- | --- | --- |
+| `transpose()` | 交换两个维度 | ❌ | 默认交换最后两维 |
+| `permute()` | 重排所有维度 | ❌ | 指定新的维度顺序 |
+| `permute_()` | 重排所有维度 | ✅ | 原地版本 |
+
+---
+
+## transpose()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> transpose(int dim0 = -2, int dim1 = -1) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dim0` | `int` | `-2` | 第一个维度索引（支持负数） |
+| `dim1` | `int` | `-1` | 第二个维度索引（支持负数） |
+
+### 核心功能描述
+
+交换张量的两个维度。返回一个新的视图，数据不拷贝，但可能会变为非连续。
+默认交换最后两个维度（适用于矩阵转置）。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 交换指定维度后的视图（零拷贝）
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 2> mat(3, 4);
+    
+    // 默认：交换最后两维
+    auto t = mat.transpose();
+    std::cout << "Shape: [" << t.shape()[0] << ", " << t.shape()[1] << "]" << std::endl;
+    // 输出: Shape: [4, 3]
+    
+    // 3D 张量
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    auto t3 = tensor.transpose(0, 2);  // 交换第 0 和第 2 维
+    std::cout << "3D Shape: [" << t3.shape()[0] << ", " << t3.shape()[1] << ", " << t3.shape()[2] << "]" << std::endl;
+    // 输出: 3D Shape: [4, 3, 2]
+}
+```
+
+---
+
+## permute()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim> permute(const std::vector<int>& newOrder) const;
+
+template<typename... Args>
+YTensor<T, dim> permute(const Args... newOrder) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` 或 `Args...` | 新的维度顺序（支持负数索引） |
+
+### 核心功能描述
+
+按照指定的顺序重排所有维度。返回一个新的视图，数据不拷贝。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>`
+- **说明**: 重排维度后的视图（零拷贝）
+
+### 使用示例
+
+```cpp
+#include "ytensor_single.hpp"
+
+void example() {
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    
+    // 重排为 [4, 2, 3]（维度 2, 0, 1）
+    auto p = tensor.permute(2, 0, 1);
+    std::cout << "Shape: [" << p.shape()[0] << ", " << p.shape()[1] << ", " << p.shape()[2] << "]" << std::endl;
+    // 输出: Shape: [4, 2, 3]
+    
+    // 使用 vector
+    std::vector<int> order = {1, 2, 0};
+    auto p2 = tensor.permute(order);
+    std::cout << "Shape2: [" << p2.shape()[0] << ", " << p2.shape()[1] << ", " << p2.shape()[2] << "]" << std::endl;
+    // 输出: Shape2: [3, 4, 2]
+}
+```
+
+---
+
+## permute_()
+
+### 函数签名
+
+```cpp
+YTensor<T, dim>& permute_(const std::vector<int>& newOrder);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `newOrder` | `std::vector<int>` | 新的维度顺序 |
+
+### 核心功能描述
+
+原地重排所有维度，修改当前张量的形状和步长。
+
+### 返回值
+
+- **类型**: `YTensor<T, dim>&`
+- **说明**: 自身引用（支持链式调用）
+
+### 使用示例
+
+```cpp
+yt::YTensor<float, 3> tensor(2, 3, 4);
+
+// 原地重排
+tensor.permute_({2, 0, 1});
+std::cout << "Shape: [" << tensor.shape()[0] << ", " << tensor.shape()[1] << ", " << tensor.shape()[2] << "]" << std::endl;
+// 输出: Shape: [4, 2, 3]
+```
+
+---
+
+## 完整示例
+
+```cpp
+#include <iostream>
+#include "ytensor_single.hpp"
+
+int main() {
+    yt::YTensor<float, 3> tensor(2, 3, 4);
+    tensor.foreach([](float& val, const std::vector<int>& coord) {
+        val = coord[0] * 100 + coord[1] * 10 + coord[2];
+    });
+    
+    std::cout << "=== transpose() ===" << std::endl;
+    auto t = tensor.transpose();  // 交换最后两维
+    std::cout << "Shape: [" << t.shape()[0] << ", " << t.shape()[1] << ", " << t.shape()[2] << "]" << std::endl;
+    std::cout << "t[0][0][0] = " << t.at(0, 0, 0) << std::endl;  // tensor[0][0][0]
+    std::cout << "t[0][2][1] = " << t.at(0, 2, 1) << std::endl;  // tensor[0][1][2]
+    
+    std::cout << "\n=== permute() ===" << std::endl;
+    auto p = tensor.permute(2, 0, 1);
+    std::cout << "Shape: [" << p.shape()[0] << ", " << p.shape()[1] << ", " << p.shape()[2] << "]" << std::endl;
+    std::cout << "p[0][0][0] = " << p.at(0, 0, 0) << std::endl;  // tensor[0][0][0]
+    
+    return 0;
+}
+```
+
+---
+
+## 相关内容
+
+- [形状查询](./query.mdx) - `shape()` 和 `stride()` 方法
+- [形状操作：重塑](./reshape.mdx) - `reshape()` 和 `contiguous()` 方法
+- [实用工具：属性](../utilities/properties.mdx) - `isContiguous()` 检查

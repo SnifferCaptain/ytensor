@@ -1,0 +1,555 @@
+# YTensorBase Overview
+
+`YTensorBase` is the **runtime polymorphic base class** of the YTensor library, providing a type-erased tensor interface.
+
+---
+
+## Overview
+
+The relationship between `YTensorBase` and `YTensor`:
+
+```cpp
+// YTensor: Compile-time type safety
+YTensor<float, 3> a({2, 3, 4});  // Type and dimensions determined at compile time
+
+// YTensorBase: Runtime polymorphism
+YTensorBase b({2, 3, 4}, "float32");  // Type and dimensions determined at runtime
+```
+
+### Core Features
+
+- **Runtime Typing**: Data types are specified via strings ("float32", "int32", etc.).
+- **Runtime Dimensions**: The number of dimensions is determined at runtime.
+- **Type Erasure**: All types share a unified interface.
+- **Compatibility**: Tensors can be converted between `YTensor` and `YTensorBase`.
+
+---
+
+## Why YTensorBase?
+
+### 1. Dynamic Typing Scenarios
+
+```cpp
+// ❌ YTensor cannot handle types determined at runtime
+std::string user_dtype = get_user_input();  // "float32" or "int32"?
+// YTensor<???, 3> tensor;  // Cannot decide at compile time
+
+// ✅ YTensorBase supports runtime typing
+YTensorBase tensor({2, 3, 4}, user_dtype);
+```
+
+### 2. Heterogeneous Containers
+
+```cpp
+// ❌ YTensor makes it difficult to store different types in one container
+std::vector<YTensor<???, ???>> tensors;  // Type inconsistency
+
+// ✅ YTensorBase allows unified storage
+std::vector<YTensorBase> tensors;
+tensors.push_back(YTensorBase({2, 3}, "float32"));
+tensors.push_back(YTensorBase({4, 5}, "int32"));
+tensors.push_back(YTensorBase({1, 2, 3}, "double"));
+```
+
+### 3. Serialization/Deserialization
+
+```cpp
+// Loading a tensor from a file (type and dimensions unknown until runtime)
+YTensorBase load_tensor(const std::string& filename) {
+    auto info = read_header(filename);
+    return YTensorBase(info.shape, info.dtype);
+}
+```
+
+### 4. Integration with Python
+
+```cpp
+// Tensors from Python have unknown types at compile time
+YTensorBase from_python(PyObject* obj) {
+    auto shape = extract_shape(obj);
+    auto dtype = extract_dtype(obj);  // Determined at runtime
+    return YTensorBase(shape, dtype);
+}
+```
+
+---
+
+## YTensorBase vs YTensor
+
+| Feature | YTensor\<T, dim\> | YTensorBase |
+|------|----------------|-------------|
+| **Type Checking** | **Compile-time** | Runtime |
+| **Dim Checking** | **Compile-time** | Runtime |
+| **Performance** | **Faster** (inlining, optimization) | Slightly slower (virtual functions) |
+| **Flexibility** | Fixed type | **Dynamic type** |
+| **Storage** | Mismatched types incompatible | **Unified interface** |
+| **Safety** | **Guaranteed at compile time** | Checked at runtime |
+| **Use Case** | Performance critical, type known | **Type unknown, heterogeneous storage** |
+
+---
+
+## Supported Data Types
+
+`YTensorBase` uses strings to specify data types:
+
+### Basic Types
+
+| dtype String | C++ Type | Bytes | Description |
+|--------------|----------|--------|------|
+| `"float32"` | `float` | 4 | Single-precision floating point (default) |
+| `"float64"` | `double` | 8 | Double-precision floating point |
+| `"int32"` | `int32_t` | 4 | 32-bit signed integer |
+| `"int64"` | `int64_t` | 8 | 64-bit signed integer |
+| `"int8"` | `int8_t` | 1 | 8-bit signed integer |
+| `"uint8"` | `uint8_t` | 1 | 8-bit unsigned integer |
+| `"bool"` | `bool` | 1 | Boolean type |
+
+### Usage Example
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+
+    
+    // Different data types
+    auto a = yt::YTensorBase({2, 3}, "float32");
+    auto b = yt::YTensorBase({4, 5}, "int32");
+    auto c = yt::YTensorBase({10}, "double");
+    
+    // Query dtype
+    std::cout << a.dtype() << std::endl;  // "float32"
+    std::cout << b.dtype() << std::endl;  // "int32"
+    
+    // Query element size
+    std::cout << a.elementSize() << std::endl;  // 4
+    std::cout << b.elementSize() << std::endl;  // 4
+    std::cout << c.elementSize() << std::endl;  // 8
+    
+    return 0;
+}
+```
+
+---
+
+## Basic Operations
+
+### Construction
+
+```cpp
+// 1. Specify shape and type
+YTensorBase a({2, 3, 4}, "float32");
+
+// 2. Copy construction
+YTensorBase b = a;  // Deep copy
+
+// 3. Factory methods
+auto zeros = YTensorBase::zeros({2, 3}, "float32");
+auto ones = YTensorBase::ones({4, 5}, "int32");
+```
+
+### Element Access
+
+```cpp
+auto a = YTensorBase({2, 3}, "float32");
+
+// Must specify the type template parameter
+float& val = a.at<float>(1, 2);
+val = 3.14f;
+
+// Const access
+const float& val2 = static_cast<const YTensorBase&>(a).at<float>(1, 2);
+```
+
+### Shape Operations
+
+```cpp
+auto a = YTensorBase({2, 3, 4}, "float32");
+
+// Query shape
+auto shape = a.shape();  // std::vector<int>{2, 3, 4}
+int dim1 = a.shape(1);   // 3
+int ndim = a.ndim();     // 3
+
+// Slicing
+auto sliced = a.slice(0, 0, 1);  // Get the first row
+
+// Transposing
+auto transposed = a.transpose(0, 1);
+
+// Reshaping
+auto reshaped = a.view({6, 4});
+```
+
+---
+
+## Interoperability with YTensor
+
+### YTensor → YTensorBase
+
+Since `YTensor` inherits from `YTensorBase`, it can be implicitly converted:
+
+```cpp
+YTensor<float, 3> a({2, 3, 4});
+
+// Implicit conversion
+YTensorBase b = a;  // ✅ Deep copy
+
+// Reference (avoids copy)
+YTensorBase& ref = a;  // ✅ Points to the same object
+```
+
+### YTensorBase → YTensor
+
+Requires explicit construction; type and dimensions must match:
+
+```cpp
+YTensorBase a({2, 3, 4}, "float32");
+
+// ✅ Type and dimensions match
+YTensor<float, 3> b(a.shape());
+b.copy_(a);
+
+// ❌ Mismatched type or dimensions leading to undefined behavior
+// YTensor<int, 3> c(a.shape());
+// c.copy_(a);  // ⚠️ Type mismatch
+
+// ❌ Dimension mismatch
+// YTensor<float, 2> d({2, 3});
+// d.copy_(a);  // ❌ Shape mismatch
+```
+
+---
+
+## Memory Model
+
+`YTensorBase` shares the same memory model as `YTensor`:
+
+### Shared Underlying Data
+
+```cpp
+YTensorBase a({2, 3, 4}, "float32");
+YTensorBase b = a;  // Deep copy (independent data)
+
+auto c = a.slice(0, 0, 1);  // Shallow copy (shared data)
+c.at<float>(0, 0, 0) = 1.0f;
+// a.at<float>(0, 0, 0) == 1.0f  ✅ Shared
+```
+
+### Contiguity
+
+```cpp
+auto a = YTensorBase({2, 3, 4}, "float32");
+std::cout << a.isContiguous() << std::endl;  // true
+
+auto b = a.transpose();
+std::cout << b.isContiguous() << std::endl;  // false
+
+// Convert to a contiguous tensor
+auto c = b.contiguous();
+std::cout << c.isContiguous() << std::endl;  // true
+```
+
+### Reference Counting
+
+```cpp
+YTensorBase a({2, 3, 4}, "float32");
+YTensorBase b = a;  // Deep copy
+
+// Modifying b does not affect a
+b.at<float>(0, 0, 0) = 1.0f;
+// a.at<float>(0, 0, 0) != 1.0f  ✅ Independent
+```
+
+---
+
+## Runtime Type Safety
+
+### Type Checking
+
+```cpp
+YTensorBase a({2, 3}, "float32");
+
+// ✅ Correct type
+float val = a.at<float>(0, 0);
+
+// ❌ Incorrect type (undefined behavior)
+// int val2 = a.at<int>(0, 0);  // ⚠️ Type mismatch
+```
+
+### Safe Access Pattern
+
+```cpp
+template <typename T>
+void process(YTensorBase& tensor) {
+    // Check type
+    std::string expected_dtype;
+    if constexpr (std::is_same_v<T, float>) {
+        expected_dtype = "float32";
+    } else if constexpr (std::is_same_v<T, int>) {
+        expected_dtype = "int32";
+    }
+    
+    if (tensor.dtype() != expected_dtype) {
+        throw std::invalid_argument("Type mismatch");
+    }
+    
+    // Safe access
+    for (size_t i = 0; i < tensor.size(); i++) {
+        auto coord = tensor.toCoord(i);
+        T& val = tensor.at<T>(coord);
+        // Process val
+    }
+}
+```
+
+---
+
+## Performance Considerations
+
+### Virtual Function Overhead
+
+`YTensorBase` uses virtual functions for polymorphism, which introduces some performance overhead:
+
+```cpp
+// YTensor: Inline optimization possible
+YTensor<float, 3> a({100, 100, 100});
+for (int i = 0; i < 100; i++) {
+    a.at(i, i, i) = 1.0f;  // Compiler can inline
+}
+
+// YTensorBase: Virtual function calls
+YTensorBase b({100, 100, 100}, "float32");
+for (int i = 0; i < 100; i++) {
+    b.at<float>(i, i, i) = 1.0f;  // Virtual function overhead
+}
+```
+
+**Benchmark** (1M accesses):
+- YTensor: ~45ms
+- YTensorBase: ~52ms (~15% overhead)
+
+### Optimization Suggestions
+
+```cpp
+// ❌ Inefficient: Frequent type checking
+YTensorBase tensor({1000, 1000}, "float32");
+for (size_t i = 0; i < tensor.size(); i++) {
+    if (tensor.dtype() == "float32") {  // Checks every time
+        auto coord = tensor.toCoord(i);
+        tensor.at<float>(coord) = 0.0f;
+    }
+}
+
+// ✅ Efficient: Check type once upfront
+if (tensor.dtype() == "float32") {
+    float* data = tensor.data<float>();
+    for (size_t i = 0; i < tensor.size(); i++) {
+        data[i] = 0.0f;  // Direct pointer access
+    }
+}
+```
+
+---
+
+## Usage Scenarios
+
+### 1. Dynamic Type Inference
+
+```cpp
+YTensorBase load_and_process(const std::string& path) {
+    auto tensor = load_from_file(path);  // Type unknown
+    
+    if (tensor.dtype() == "float32") {
+        // Float processing
+        return process_float(tensor);
+    } else if (tensor.dtype() == "int32") {
+        // Integer processing
+        return process_int(tensor);
+    }
+    
+    throw std::runtime_error("Unsupported dtype");
+}
+```
+
+### 2. Universal Containers
+
+```cpp
+class Model {
+    std::map<std::string, YTensorBase> parameters;
+    
+public:
+    void add_param(const std::string& name, const YTensorBase& param) {
+        parameters[name] = param;
+    }
+    
+    YTensorBase& get_param(const std::string& name) {
+        return parameters.at(name);
+    }
+};
+
+// Usage
+Model model;
+model.add_param("weight", YTensorBase({128, 256}, "float32"));
+model.add_param("bias", YTensorBase({256}, "float32"));
+model.add_param("mask", YTensorBase({10, 10}, "bool"));
+```
+
+### 3. Type Dispatching
+
+```cpp
+void universal_fill(YTensorBase& tensor, double value) {
+    if (tensor.dtype() == "float32") {
+        float* data = tensor.data<float>();
+        std::fill_n(data, tensor.size(), static_cast<float>(value));
+    } else if (tensor.dtype() == "int32") {
+        int* data = tensor.data<int>();
+        std::fill_n(data, tensor.size(), static_cast<int>(value));
+    } else if (tensor.dtype() == "double") {
+        double* data = tensor.data<double>();
+        std::fill_n(data, tensor.size(), value);
+    }
+}
+```
+
+---
+
+## Common Pitfalls
+
+### 1. Missing Type Template Parameter
+
+```cpp
+YTensorBase a({2, 3}, "float32");
+
+// ❌ Missing type parameter
+// auto val = a.at(0, 0);  // Compile error
+
+// ✅ Must specify the type
+auto val = a.at<float>(0, 0);
+```
+
+### 2. Type Mismatch
+
+```cpp
+YTensorBase a({2, 3}, "float32");
+
+// ❌ Incorrect type (undefined behavior)
+// int val = a.at<int>(0, 0);  // ⚠️ Reads incorrect data
+
+// ✅ Use dtype() for checking
+if (a.dtype() == "float32") {
+    float val = a.at<float>(0, 0);
+}
+```
+
+### 3. Incorrect Dimension Assumptions
+
+```cpp
+void process_3d(YTensorBase& tensor) {
+    // ❌ Assuming 3D
+    // tensor.at<float>(0, 0, 0);  // Out of bounds if it's 2D
+    
+    // ✅ Check dimensions
+    if (tensor.ndim() != 3) {
+        throw std::invalid_argument("Expected 3D tensor");
+    }
+    tensor.at<float>(0, 0, 0);
+}
+```
+
+---
+
+## API Organization
+
+The complete API of `YTensorBase` is categorized by functionality:
+
+### Construction and Memory
+- [Constructors](./construction/constructors.mdx) - Basic ways to construct.
+- [Factory Methods](./construction/factories.mdx) - zeros, ones, etc.
+- [Memory Management](./construction/memory.mdx) - clone, contiguous.
+
+### Access and Indexing
+- [Index Access](./access/indexing.mdx) - at, atData, atData_
+- [Pointer Access](./access/data_ptr.mdx) - data, data_
+- [Type Access](./access/dtype.mdx) - dtype, elementSize
+
+### Shape Operations
+- [Shape Query](./shape/query.mdx) - shape, stride, size
+- [Slice Operations](./shape/slice.mdx) - slice, slice_
+- [Reshape Operations](./shape/reshape.mdx) - view, reshape
+- [Transpose Operations](./shape/transpose.mdx) - transpose, permute
+- [Dimension Operations](./shape/dimension.mdx) - squeeze, unsqueeze
+- [Concatenate and Split](./shape/concat_split.mdx) - concat, split
+
+### Mathematical Operations
+- [Arithmetic Operations](./math/arithmetic.mdx) - +, -, *, /
+- [Broadcasting](./math/broadcast.mdx) - Broadcasting rules
+- [Matrix Multiplication](./math/matmul.mdx) - matmul
+- [Reduction Operations](./math/reduction.mdx) - sum, mean, max
+
+### Utilities
+- [Coordinate Conversion](./utilities/conversion.mdx) - toIndex, toCoord
+- [Property Queries](./utilities/properties.mdx) - isContiguous, isDisjoint
+
+---
+
+## Best Practices
+
+### 1. Prefer YTensor for Known Types
+
+```cpp
+// ✅ Type known → Use YTensor
+void process_known_type(const std::vector<float>& data) {
+    YTensor<float, 2> tensor({10, 10});
+    // Compile-time type safety
+}
+
+// ✅ Type unknown → Use YTensorBase
+void process_unknown_type(const std::string& dtype) {
+    YTensorBase tensor({10, 10}, dtype);
+    // Runtime flexibility
+}
+```
+
+### 2. Check Type Once Upfront
+
+```cpp
+// ✅ Check once at the entry point
+void process(YTensorBase& tensor) {
+    if (tensor.dtype() != "float32") {
+        throw std::invalid_argument("Expected float32");
+    }
+    
+    // Safe to use subsequently
+    float* data = tensor.data<float>();
+    for (size_t i = 0; i < tensor.size(); i++) {
+        data[i] *= 2.0f;
+    }
+}
+```
+
+### 3. Prefer Direct Pointer Access
+
+```cpp
+// ❌ Inefficient
+YTensorBase tensor({1000, 1000}, "float32");
+for (size_t i = 0; i < tensor.size(); i++) {
+    auto coord = tensor.toCoord(i);
+    tensor.at<float>(coord) = 0.0f;
+}
+
+// ✅ Efficient
+if (tensor.isContiguous()) {
+    float* data = tensor.data<float>();
+    std::fill_n(data, tensor.size(), 0.0f);
+}
+```
+
+---
+
+## Related Content
+
+- [YTensor Overview](../YTensor/overview.mdx) - Compile-time type-safe version
+- [Type System](../infos/types.mdx) - dtype registration mechanism
+- [Memory Model](../guides/memory_model.mdx) - In-depth understanding of memory layout
+- [Performance Comparison](../guides/performance_tips.mdx) - YTensor vs YTensorBase
