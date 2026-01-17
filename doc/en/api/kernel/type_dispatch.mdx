@@ -43,6 +43,26 @@ Looks up a matching C++ type `T` in `TypeListT` based on the `dtype` string, and
 *   `dispatch`: Returns `true` if a matching type is found and execution is successful; otherwise returns `false`.
 *   `dispatchOrThrow`: Throws a `std::runtime_error` exception if no matching type is found.
 
+#### Nested dtype Auto-Parsing
+
+`dispatch` now supports **automatic parsing of nested dtype strings**. When the dtype string is in a nested format (e.g., `"YTensorBase<float32>"`):
+
+1. First, attempts a direct match with the full dtype string
+2. If direct matching fails, automatically calls `getBaseDtype()` to extract the base type
+3. Uses the extracted base type (e.g., `"float32"`) for a second matching attempt
+
+This feature enables proper dispatching for tensors returned by `matView()`:
+
+```cpp
+YTensorBase tensor({3, 4, 5}, "float32");
+auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
+
+// dispatch will auto-parse "YTensorBase<float32>" -> "float32"
+yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+    std::cout << "Base type size: " << sizeof(T) << std::endl;  // Output: 4
+});
+```
+
 ### Usage Example
 
 Suppose we need to write a print function that supports all numeric types:
@@ -142,3 +162,10 @@ yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumer
 1.  **Use Generic Lambdas (C++20)**: With the `[&]<typename T>() { ... }` syntax, code is concise and readable.
 2.  **Choose Appropriate Type Lists**: Include only the types you actually support to reduce compilation time and binary size.
 3.  **Error Handling**: For operations that must succeed, prefer `dispatchOrThrow` as it provides clear error messages.
+
+---
+
+## Related Content
+
+- [Type System](../infos/types.mdx) - `yt::types` namespace and type registration
+- [YTensorBase](../YTensorBase/) - Runtime dynamic-typed tensor

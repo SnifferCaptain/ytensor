@@ -60,9 +60,20 @@ bool dispatchImpl(const std::string& dtype, Func&& func, yt::types::TypeList<T, 
 /// @param dtype 数据类型字符串（如 "float32"）
 /// @param func 模板 lambda，形如 [&]<typename DType>() { ... }
 /// @return 是否成功匹配并执行
+/// @note 如果dtype是嵌套类型（如"YTensorBase<float32>"），会自动解析并匹配内部基础类型
 template<typename TypeListT, typename Func>
 bool dispatch(const std::string& dtype, Func&& func) {
-    return dispatchImpl(dtype, std::forward<Func>(func), TypeListT{});
+    // 首先尝试直接匹配
+    if (dispatchImpl(dtype, std::forward<Func>(func), TypeListT{})) {
+        return true;
+    }
+    // 如果直接匹配失败，尝试解析嵌套类型
+    std::string baseDtype = yt::types::getBaseDtype(dtype);
+    if (baseDtype != dtype) {
+        // dtype是嵌套类型，尝试用基础类型匹配
+        return dispatchImpl(baseDtype, std::forward<Func>(func), TypeListT{});
+    }
+    return false;
 }
 
 /// @brief 带默认错误处理的分发（未匹配时抛出异常）

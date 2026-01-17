@@ -16,7 +16,8 @@ This document describes the matrix multiplication methods for the `YTensorBase` 
 ### Function Signature
 
 ```cpp
-YTensorBase matmul(const YTensorBase& other) const;
+YTensorBase matmul(const YTensorBase& other, 
+                   yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
 ```
 
 ### Parameters
@@ -24,6 +25,7 @@ YTensorBase matmul(const YTensorBase& other) const;
 | Name | Type | Description |
 | --- | --- | --- |
 | `other` | `const YTensorBase&` | The right-hand matrix. The last two dimensions must satisfy matrix multiplication rules. |
+| `backend` | `yt::infos::MatmulBackend` | Computation backend. See the backend selection table below. Defaults to system default. |
 
 ### Core Function Description
 
@@ -100,9 +102,24 @@ Treats the last two dimensions of the tensor as a 2D matrix and returns a specia
 
 - **Type**: `YTensorBase`
 - **Description**:
-  - The returned tensor has `dtype() == "YTensorBase"`.
+  - The returned tensor has `dtype() == "YTensorBase<inner_dtype>"`, where `inner_dtype` is the original tensor's dtype
   - Each "element" is a view of a 2D sub-tensor.
   - `element_size == sizeof(YTensorBase)`.
+
+### dtype Naming Convention
+
+Tensors returned by `matView()` follow a standardized dtype naming convention:
+
+```cpp
+YTensorBase tensor({3, 4, 5}, "float32");
+auto mv = tensor.matView();
+// mv.dtype() -> "YTensorBase<float32>"
+
+// Can use dispatch to automatically parse the base type
+yt::kernel::dispatch<yt::types::AllNumericTypes>(mv.dtype(), [&]<typename T>() {
+    // T will be resolved to float
+});
+```
 
 ### Usage Examples
 
@@ -130,20 +147,35 @@ YTensorBase mv_2d = mat.matView();
 
 ## Backend Selection
 
-Matrix multiplication supports multiple backends, which are selected automatically based on compilation options:
+Matrix multiplication supports multiple backends, which can be specified manually via the `backend` parameter:
 
-| Backend | Macro | Priority | Description |
+| Backend | Enum Value | Macro | Description |
 | --- | --- | --- | --- |
-| Eigen | `YT_USE_EIGEN=1` | High | Implemented using the Eigen library. |
-| Naive | Default | Low | Implemented using a standard triple loop. |
+| Naive | `MatmulBackend::Naive` | Default | Standard triple-loop implementation, no dependencies |
+| Eigen | `MatmulBackend::Eigen` | `YT_USE_EIGEN=1` | Implemented using the Eigen library |
+| AVX2 | `MatmulBackend::AVX2` | `YT_USE_AVX2=1` | Custom AVX2+FMA vectorized implementation (float32 only) |
+
+### Default Backend Selection Order
+
+The system default `yt::infos::defaultMatmulBackend` is selected automatically with the following priority:
+
+1. **AVX2** (if `YT_USE_AVX2=1` and dtype is float32)
+2. **Eigen** (if `YT_USE_EIGEN=1`)
+3. **Naive** (fallback)
+
+### Usage Examples
 
 ```cpp
-// Backend selection at compile-time
-#if YT_USE_EIGEN
-    return matmul_eigen_backend(other);
-#else
-    return matmul_naive_impl<DType>(*this, other);
-#endif
+YTensorBase a({3, 4}, "float32"), b({4, 5}, "float32");
+
+// Use default backend
+auto c1 = a.matmul(b);
+
+// Force Naive backend (for debugging or comparison)
+auto c2 = a.matmul(b, yt::infos::MatmulBackend::Naive);
+
+// Force Eigen backend
+auto c3 = a.matmul(b, yt::infos::MatmulBackend::Eigen);
 ```
 
 ---

@@ -211,13 +211,17 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
     static_assert(dim >= 1, "matView only support dim >= 1");
     using MatType = yt::YTensor<T, 2>;
     
+    // 构建规范化的dtype：YTensor<YTensor<scalar_dtype, 2>, outer_dim>
+    std::string scalarDtype = yt::types::getTypeName<T>();
+    std::string matDtype = yt::types::makeYTensorDtype(scalarDtype, 2);  // "YTensor<float32, 2>"
+    
     if constexpr (dim == 1){
         MatType mat;
         mat._shape = std::vector<int>({1, this->_shape[0]});
         mat._stride = std::vector<int>({0, this->_stride[0]});
         mat._offset = this->_offset;
         mat._element_size = sizeof(T);
-        mat._dtype = yt::types::getTypeName<T>();
+        mat._dtype = scalarDtype;
         mat._data = this->_data;
         
         yt::YTensor<MatType, 1> op;
@@ -225,7 +229,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         op._stride = std::vector<int>({0});
         op._offset = 0;
         op._element_size = sizeof(MatType);
-        op._dtype = "tensor_view";
+        op._dtype = yt::types::makeYTensorDtype(matDtype, 1);  // "YTensor<YTensor<float32, 2>, 1>"
         
         // 使用封装函数分配内存
         op._data = yt::kernel::makeSharedPlacement<MatType>(mat);
@@ -236,7 +240,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         op._stride = std::vector<int>({0});
         op._offset = 0;
         op._element_size = sizeof(MatType);
-        op._dtype = "tensor_view";
+        op._dtype = yt::types::makeYTensorDtype(matDtype, 1);  // "YTensor<YTensor<float32, 2>, 1>"
         
         // 使用封装函数分配内存
         MatType thisCopy = *this;  // 创建当前张量的副本
@@ -249,7 +253,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         op._stride = op.stride();
         op._offset = 0;
         op._element_size = sizeof(MatType);
-        op._dtype = "tensor_view";
+        op._dtype = yt::types::makeYTensorDtype(matDtype, std::max(1, dim - 2));
         int batchSize = op.size();
         
         // 使用封装函数分配数组内存
@@ -264,7 +268,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
             mat._stride = {this->_stride[dim-2], this->_stride[dim-1]};
             mat._offset = this->offset_(coord);
             mat._element_size = sizeof(T);
-            mat._dtype = yt::types::getTypeName<T>();
+            mat._dtype = scalarDtype;
             mat._data = this->_data;
             new (&dataptr[batchIdx]) MatType(mat);
         }

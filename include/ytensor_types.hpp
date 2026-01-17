@@ -70,19 +70,13 @@ using IntegerTypes = StandardIntTypes;
 /// @brief Eigen 原生支持的类型（不含扩展浮点类型）
 using EigenNativeTypes = StandardNumericTypes;
 
-/// @brief 获取数据类型名称
+// dtype 规范化命名
+
+/// @brief 获取基础数据类型名称（不含张量嵌套）
 /// @tparam T 数据类型
 /// @return 数据类型名称字符串
 template<typename T>
-std::string getTypeName() {
-    // 首先检查是否已注册自定义名称
-    auto& registry = yt::infos::getTypeRegistry();
-    auto it = registry.find(typeid(T).name());
-    if (it != registry.end()) {
-        return it->second.name;
-    }
-    
-    // 使用默认的类型名称
+std::string getBaseTypeName() {
     if constexpr (std::is_same_v<T, float>) return "float32";
     else if constexpr (std::is_same_v<T, double>) return "float64";
     else if constexpr (std::is_same_v<T, int8_t>) return "int8";
@@ -95,7 +89,6 @@ std::string getTypeName() {
     else if constexpr (std::is_same_v<T, uint64_t>) return "uint64";
     else if constexpr (std::is_same_v<T, bool>) return "bool";
     else if constexpr (std::is_same_v<T, std::string>) return "string";
-    // non std
     else if constexpr (std::is_same_v<T, yt::bfloat16>) return "bfloat16";
     else if constexpr (std::is_same_v<T, yt::float16>) return "float16";
     else if constexpr (std::is_same_v<T, yt::float8_e5m2>) return "float8_e5m2";
@@ -103,9 +96,152 @@ std::string getTypeName() {
     else if constexpr (std::is_same_v<T, yt::float8_e8m0>) return "float8_e8m0";
     else if constexpr (std::is_same_v<T, yt::float8_ue8m0>) return "float8_ue8m0";
     else {
-        // 未注册，使用默认名称
         return typeid(T).name();
     }
+}
+
+/// @brief 获取数据类型名称（支持嵌套张量类型的前向声明）
+/// @tparam T 数据类型
+/// @return 数据类型名称字符串
+template<typename T>
+std::string getTypeName();
+
+/// @brief 解析dtype字符串，提取内层类型名称
+/// @param dtype 完整的dtype字符串，如 "YTensor<float32, 2>" 或 "YTensorBase<YTensor<float32, 2>>"
+/// @return pair<外层类型名, 内层dtype字符串>，如果不是嵌套类型则返回 {"", dtype}
+inline std::pair<std::string, std::string> parseDtypeInner(const std::string& dtype) {
+    // 查找第一个 '<'
+    auto pos = dtype.find('<');
+    if (pos == std::string::npos) {
+        return {"", dtype};  // 基础类型
+    }
+    
+    std::string outerType = dtype.substr(0, pos);
+    
+    // 找到匹配的 '>'
+    int depth = 1;
+    size_t start = pos + 1;
+    size_t end = start;
+    while (end < dtype.size() && depth > 0) {
+        if (dtype[end] == '<') depth++;
+        else if (dtype[end] == '>') depth--;
+        end++;
+    }
+    
+    if (depth != 0) {
+        return {"", dtype};  // 格式错误，作为基础类型处理
+    }
+    
+    std::string inner = dtype.substr(start, end - start - 1);
+    return {outerType, inner};
+}
+
+/// @brief 从嵌套dtype中提取最内层的基础类型名称
+/// @param dtype dtype字符串
+/// @return 基础类型名称，如 "float32"
+inline std::string getBaseDtype(const std::string& dtype) {
+    auto [outer, inner] = parseDtypeInner(dtype);
+    if (outer.empty()) {
+        return dtype;  // 已经是基础类型
+    }
+    
+    // 对于YTensor<scalar, dim>格式，需要提取scalar部分
+    if (outer == "YTensor") {
+        // inner 是 "scalar_dtype, dim" 的形式
+        // 我们需要找到最后一个逗号，取前面的部分作为scalar_dtype
+        // 但要注意scalar_dtype本身可能包含逗号（如果是嵌套的YTensor）
+        // 所以需要从后向前找，且要考虑括号匹配
+        int depth = 0;
+        int lastCommaPos = -1;
+        for (int i = static_cast<int>(inner.size()) - 1; i >= 0; --i) {
+            if (inner[i] == '>') depth++;
+            else if (inner[i] == '<') depth--;
+            else if (inner[i] == ',' && depth == 0) {
+                lastCommaPos = i;
+                break;
+            }
+        }
+        
+        if (lastCommaPos != -1) {
+            std::string scalarPart = inner.substr(0, lastCommaPos);
+            // 去除尾部空格
+            scalarPart.erase(scalarPart.find_last_not_of(" ") + 1);
+            return getBaseDtype(scalarPart);  // 递归解析scalar部分
+        }
+    }
+    
+    // 对于YTensorBase<inner>格式，inner就是内层dtype
+    return getBaseDtype(inner);  // 递归解析
+}
+
+/// @brief 从YTensor dtype中提取维度
+/// @param dtype dtype字符串，如 "YTensor<float32, 2>"
+/// @return 维度值，如果不是YTensor类型则返回-1
+inline int getDtypeDim(const std::string& dtype) {
+    auto [outer, inner] = parseDtypeInner(dtype);
+    if (outer != "YTensor") {
+        return -1;
+    }
+    // inner 是 "float32, 2" 的形式，找到最后一个逗号后的数字
+    auto commaPos = inner.rfind(',');
+    if (commaPos == std::string::npos) {
+        return -1;
+    }
+    std::string dimStr = inner.substr(commaPos + 1);
+    // 去除空格
+    dimStr.erase(0, dimStr.find_first_not_of(" "));
+    dimStr.erase(dimStr.find_last_not_of(" ") + 1);
+    return std::stoi(dimStr);
+}
+
+/// @brief 从YTensor dtype中提取scalar类型
+/// @param dtype dtype字符串，如 "YTensor<float32, 2>"
+/// @return scalar类型名，如 "float32"
+inline std::string getDtypeScalar(const std::string& dtype) {
+    auto [outer, inner] = parseDtypeInner(dtype);
+    if (outer != "YTensor") {
+        return dtype;  // 不是YTensor，返回自身
+    }
+    // inner 是 "float32, 2" 的形式，找到最后一个逗号前的部分
+    auto commaPos = inner.rfind(',');
+    if (commaPos == std::string::npos) {
+        return inner;
+    }
+    std::string scalarStr = inner.substr(0, commaPos);
+    // 去除尾部空格
+    scalarStr.erase(scalarStr.find_last_not_of(" ") + 1);
+    return scalarStr;
+}
+
+/// @brief 构建YTensor的规范化dtype字符串
+/// @param scalarDtype 标量类型名称
+/// @param dim 维度
+/// @return 规范化的dtype字符串，如 "YTensor<float32, 2>"
+inline std::string makeYTensorDtype(const std::string& scalarDtype, int dim) {
+    return "YTensor<" + scalarDtype + ", " + std::to_string(dim) + ">";
+}
+
+/// @brief 构建YTensorBase的规范化dtype字符串
+/// @param innerDtype 内层类型名称
+/// @return 规范化的dtype字符串，如 "YTensorBase<float32>"
+inline std::string makeYTensorBaseDtype(const std::string& innerDtype) {
+    return "YTensorBase<" + innerDtype + ">";
+}
+
+/// @brief 获取数据类型名称
+/// @tparam T 数据类型
+/// @return 数据类型名称字符串
+template<typename T>
+std::string getTypeName() {
+    // 首先检查是否已注册自定义名称
+    auto& registry = yt::infos::getTypeRegistry();
+    auto it = registry.find(typeid(T).name());
+    if (it != registry.end()) {
+        return it->second.name;
+    }
+    
+    // 使用基础类型名称
+    return getBaseTypeName<T>();
 }
 
 /// @brief 获取数据类型大小（模板版本）

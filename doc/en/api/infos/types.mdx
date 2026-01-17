@@ -43,6 +43,58 @@ Specifically, for the BF16 type, its rounding mode is affected by the global con
 | `"int64"` | 8 | `int64_t` |
 | `"bfloat16"` | 2 | `yt::bfloat16` |
 
+## dtype Naming Convention
+
+YTensor uses a standardized dtype naming format that supports representation of nested tensor types:
+
+### Base Type Names
+Use `getBaseTypeName<T>()` to get the name of a basic C++ type:
+- `float` → `"float32"`
+- `double` → `"float64"`
+- `int32_t` → `"int32"`
+- Custom types → `typeid(T).name()` or registered name
+
+### Nested Type Format
+
+| Tensor Type | dtype Format | Example |
+| --- | --- | --- |
+| `YTensor<T, dim>` | `"YTensor<scalar_dtype, dim>"` | `"YTensor<float32, 2>"` |
+| `YTensorBase` | `"YTensorBase<inner_dtype>"` | `"YTensorBase<float32>"` |
+| Multi-level nesting | Recursive format | `"YTensor<YTensor<float32, 2>, 2>"` |
+
+### dtype Parsing Functions
+
+| Function | Purpose | Example |
+| --- | --- | --- |
+| `parseDtypeInner(dtype)` | Parse outer type and inner content | `"YTensorBase<float32>"` → `{"YTensorBase", "float32"}` |
+| `getBaseDtype(dtype)` | Recursively extract innermost base type | `"YTensor<YTensor<float32, 2>, 2>"` → `"float32"` |
+| `getDtypeDim(dtype)` | Extract YTensor dimension | `"YTensor<float32, 3>"` → `3` |
+| `getDtypeScalar(dtype)` | Extract YTensor scalar type | `"YTensor<float32, 2>"` → `"float32"` |
+| `makeYTensorDtype(scalar, dim)` | Build YTensor dtype | `("float32", 2)` → `"YTensor<float32, 2>"` |
+| `makeYTensorBaseDtype(inner)` | Build YTensorBase dtype | `("float32")` → `"YTensorBase<float32>"` |
+
+### Usage Examples
+
+```cpp
+#include "ytensor_types.hpp"
+
+// Parse nested dtype
+std::string dtype = "YTensorBase<YTensor<float32, 2>>";
+std::string baseDtype = yt::types::getBaseDtype(dtype);  // "float32"
+
+// Build dtype
+std::string ytensorDtype = yt::types::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
+
+// Use with dispatch
+YTensorBase tensor({2, 3, 4}, "float32");
+auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
+
+// dispatch will auto-parse nested types
+yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+    // T is resolved to float
+});
+```
+
 ## Non-POD Type Support
 
 For non-POD types (e.g., `std::string`, custom classes), the following should be registered:

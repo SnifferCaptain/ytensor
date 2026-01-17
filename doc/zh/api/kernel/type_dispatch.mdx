@@ -43,6 +43,26 @@ void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& o
 *   `dispatch`: 如果找到匹配类型并成功执行，返回 `true`；否则返回 `false`。
 *   `dispatchOrThrow`: 如果未找到匹配类型，抛出 `std::runtime_error` 异常。
 
+#### 嵌套类型自动解析
+
+`dispatch` 支持**嵌套 dtype 的自动解析**。当传入的 dtype 字符串是嵌套格式（如 `"YTensorBase<float32>"`）时：
+
+1. 首先尝试直接匹配完整的 dtype 字符串
+2. 如果直接匹配失败，自动调用 `getBaseDtype()` 提取基础类型
+3. 使用提取的基础类型（如 `"float32"`）进行二次匹配
+
+这一特性使得 `matView()` 返回的张量可以被正确 dispatch：
+
+```cpp
+YTensorBase tensor({3, 4, 5}, "float32");
+auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
+
+// dispatch 会自动解析 "YTensorBase<float32>" -> "float32"
+yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+    std::cout << "Base type size: " << sizeof(T) << std::endl;  // 输出: 4
+});
+```
+
 ### 使用示例
 
 假设我们需要编写一个打印函数，支持所有数值类型：
@@ -142,3 +162,10 @@ yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumer
 1.  **使用泛型 Lambda (C++20)**：配合 `[&]<typename T>() { ... }` 语法，代码最简洁。
 2.  **选择合适的 TypeList**：尽量只包含你真正支持的类型列表，以减少编译时间及二进制大小（虽然模板实例化是按需的，但错误的匹配尝试也可能有开销）。
 3.  **错误处理**：对于必须成功的操作，优先使用 `dispatchOrThrow`，它能提供清晰的错误信息。
+
+---
+
+## 相关内容
+
+- [类型系统](../infos/types.mdx) - `yt::types` 命名空间与类型注册
+- [YTensorBase](../YTensorBase/) - 运行时动态类型张量

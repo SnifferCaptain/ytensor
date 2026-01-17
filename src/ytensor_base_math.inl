@@ -433,12 +433,19 @@ inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(const std::vector<in
 // 2. 但 YTensorBase 本身不能被注册（循环依赖：YTensorBase 在 ytensor_types.hpp 之前定义）
 // 3. matView 返回的张量的元素类型就是 YTensorBase 本身，这是一个特殊情况
 // 4. 因此必须手动使用 placement new 和自定义删除器来正确管理 YTensorBase 元素的生命周期
+//
+// dtype 命名规范：
+// matView 返回的 YTensorBase 的 dtype 为 "YTensorBase<inner_dtype>"
+// 其中 inner_dtype 是原始张量的 dtype
 
 inline YTensorBase YTensorBase::matView() const {
     int dim = ndim();
     if (dim < 1) {
         throw std::runtime_error("[YTensorBase::matView] Tensor must have at least 1 dimension");
     }
+    
+    // 构建规范化的dtype
+    std::string innerDtype = yt::types::makeYTensorBaseDtype(_dtype);  // "YTensorBase<float32>"
     
     // 对于1D张量，视为1xN矩阵
     if (dim == 1) {
@@ -458,7 +465,7 @@ inline YTensorBase YTensorBase::matView() const {
         result._stride = {1};
         result._offset = 0;
         result._element_size = sizeof(YTensorBase);
-        result._dtype = "YTensorBase";
+        result._dtype = innerDtype;  // "YTensorBase<float32>"
         
         // 分配存储并放置构造YTensorBase元素
         result._data = std::shared_ptr<char[]>(
@@ -480,7 +487,7 @@ inline YTensorBase YTensorBase::matView() const {
         result._stride = {1};
         result._offset = 0;
         result._element_size = sizeof(YTensorBase);
-        result._dtype = "YTensorBase";
+        result._dtype = innerDtype;  // "YTensorBase<float32>"
         
         result._data = std::shared_ptr<char[]>(
             new char[sizeof(YTensorBase)],
@@ -509,7 +516,7 @@ inline YTensorBase YTensorBase::matView() const {
     YTensorBase result;
     result._shape = batchShape;
     result._element_size = sizeof(YTensorBase);
-    result._dtype = "YTensorBase";
+    result._dtype = innerDtype;  // "YTensorBase<float32>"
     
     // 计算stride（按连续存储）
     result._stride.resize(batchShape.size());
@@ -563,7 +570,7 @@ inline YTensorBase YTensorBase::matView() const {
 
 // ======================== matmul ========================
 
-// 模板化的naive matmul实现（零后端）
+// 模板化的naive matmul实现（零后端）- 使用broadcastInplace简化
 template<typename DType>
 inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase& other) {
     // 获取matView
@@ -575,18 +582,11 @@ inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase&
     int aw = self.shape(self.ndim() - 1);
     int bw = other.shape(other.ndim() - 1);
     
-    // 计算广播后的batch形状
-    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
-    
-    // 计算输出的batch维度数量
-    int thisBatchDim = std::max(0, self.ndim() - 2);
-    int otherBatchDim = std::max(0, other.ndim() - 2);
-    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
-    
     // 计算输出形状
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    int opBatchDim = std::max(std::max(0, self.ndim() - 2), std::max(0, other.ndim() - 2));
     std::vector<int> opShape;
-    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
-    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
+    for (int i = static_cast<int>(opBatchShape.size()) - opBatchDim; i < static_cast<int>(opBatchShape.size()); ++i) {
         opShape.push_back(opBatchShape[i]);
     }
     opShape.push_back(ah);
@@ -596,40 +596,8 @@ inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase&
     YTensorBase op(opShape, self.dtype());
     auto opMatView = op.matView();
     
-    // 广播矩阵乘法
-    size_t batchSize = opMatView.size();
-    YTensorBase* opMats = opMatView.template data<YTensorBase>();
-    YTensorBase* thisMats = thisMatView.template data<YTensorBase>();
-    YTensorBase* otherMats = otherMatView.template data<YTensorBase>();
-    
-    auto getBroadcastIdx = [](int idx, const std::vector<int>& shape, const std::vector<int>& targetShape) -> int {
-        if (shape.size() == 0) return 0;
-        std::vector<int> coord(targetShape.size());
-        int remaining = idx;
-        for (int i = static_cast<int>(targetShape.size()) - 1; i >= 0; --i) {
-            coord[i] = remaining % targetShape[i];
-            remaining /= targetShape[i];
-        }
-        int result = 0;
-        int stride = 1;
-        int offset = static_cast<int>(targetShape.size()) - static_cast<int>(shape.size());
-        for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
-            int c = coord[i + offset];
-            if (shape[i] == 1) c = 0;
-            result += c * stride;
-            stride *= shape[i];
-        }
-        return result;
-    };
-    
-    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
-        int thisIdx = getBroadcastIdx(batchIdx, thisMatView.shape(), opBatchShape);
-        int otherIdx = getBroadcastIdx(batchIdx, otherMatView.shape(), opBatchShape);
-        
-        YTensorBase& A = thisMats[thisIdx];
-        YTensorBase& B = otherMats[otherIdx];
-        YTensorBase& C = opMats[batchIdx];
-        
+    // 使用broadcastInplace处理广播和并行化
+    opMatView.broadcastInplace([ah, aw, bw](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
         for (int i = 0; i < ah; ++i) {
             for (int j = 0; j < bw; ++j) {
                 DType sum{};
@@ -639,12 +607,13 @@ inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase&
                 C.template at<DType>({i, j}) = sum;
             }
         }
-    }, static_cast<double>(ah * bw * aw));
+    }, thisMatView, otherMatView);
     
     return op;
 }
 
-inline YTensorBase YTensorBase::matmul(const YTensorBase& other) const {
+inline YTensorBase YTensorBase::matmul(const YTensorBase& other, 
+                                       yt::infos::MatmulBackend backend) const {
     // 验证维度
     if (ndim() < 1 || other.ndim() < 1) {
         throw std::runtime_error("[YTensorBase::matmul] Both tensors must have at least 1 dimension");
@@ -666,10 +635,6 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other) const {
             std::to_string(thisCols) + " vs " + std::to_string(otherRows));
     }
     
-    // 在matmul层选择后端实现
-    // 对于所有 FloatSpec 类型（bfloat16, float16, float8_e4m3等），统一 cast 到 float32 执行
-    // 这样可以充分利用 AVX2 后端的性能优化
-    
     // 检查是否是需要转换的扩展浮点类型
     bool needsCastToFloat32 = (_dtype == "bfloat16" || _dtype == "float16" || 
                                _dtype == "float8_e5m2" || _dtype == "float8_e4m3" || 
@@ -679,29 +644,35 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other) const {
         // 转换为 float32 执行 matmul，再转回原类型
         YTensorBase thisF32 = this->cast("float32");
         YTensorBase otherF32 = other.cast("float32");
-        YTensorBase resultF32 = thisF32.matmul(otherF32);
+        YTensorBase resultF32 = thisF32.matmul(otherF32, backend);
         return resultF32.cast(_dtype);
     }
     
+    // 根据backend选择实现
+    switch (backend) {
+        case yt::infos::MatmulBackend::Naive:
+            return matmul_naive_backend(other);
+            
+        case yt::infos::MatmulBackend::AVX2:
 #if YT_USE_AVX2
-    if (_dtype == "float32") {
-        return matmul_avx2_backend(other);
-    }
+            if (_dtype == "float32") {
+                return matmul_avx2_backend(other);
+            }
 #endif
+            // AVX2不可用或非float32时fallthrough到Eigen
+            [[fallthrough]];
+            
+        case yt::infos::MatmulBackend::Eigen:
 #if YT_USE_EIGEN
-    return matmul_eigen_backend(other);
+            return matmul_eigen_backend(other);
 #else
-    // 无优化后端时使用naive实现
-    YTensorBase result(_shape, _dtype); 
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,
-        [&]<typename DType>() {
-            result = matmul_naive_impl<DType>(*this, other);
-        }, "matmul");
-    return result;
+            // Eigen不可用时fallthrough到Naive
+            [[fallthrough]];
 #endif
-    
-    // 不应该到达这里
-    throw std::runtime_error("[YTensorBase::matmul] Unsupported dtype: " + _dtype);
+            
+        default:
+            return matmul_naive_backend(other);
+    }
 }
 
 inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) const {
@@ -743,139 +714,55 @@ inline void YTensorBase::throwShapeNotMatch(const std::string& opName, const std
 // ======================== Eigen Support ========================
 #if YT_USE_EIGEN
 
-// Eigen类型映射宏 - 使用Stride支持非连续数据
-// OuterStride: 行间距离（对于RowMajor）
-// InnerStride: 列间距离（对于RowMajor）
-#define YT_EIGEN_STRIDED_MAP(Scalar, rows, cols, data, outerStride, innerStride) \
-    Eigen::Map<Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, \
-               0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>( \
-        data, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(outerStride, innerStride))
-
-#define YT_EIGEN_CONST_STRIDED_MAP(Scalar, rows, cols, data, outerStride, innerStride) \
-    Eigen::Map<const Eigen::Matrix<Scalar, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, \
-               0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>( \
-        data, rows, cols, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(outerStride, innerStride))
-
-// 辅助函数：获取广播索引
-inline int _getBroadcastIdx(int idx, const std::vector<int>& shape, const std::vector<int>& targetShape) {
-    if (shape.size() == 0) return 0;
-    std::vector<int> coord(targetShape.size());
-    int remaining = idx;
-    for (int i = static_cast<int>(targetShape.size()) - 1; i >= 0; --i) {
-        coord[i] = remaining % targetShape[i];
-        remaining /= targetShape[i];
-    }
-    int result = 0;
-    int stride = 1;
-    int offset = static_cast<int>(targetShape.size()) - static_cast<int>(shape.size());
-    for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
-        int c = coord[i + offset];
-        if (shape[i] == 1) c = 0;
-        result += c * stride;
-        stride *= shape[i];
-    }
-    return result;
-}
-
-// 模板化的matmul Eigen批量乘法实现
+// Eigen类型别名
 template<typename T>
-inline void matmul_eigen_batch_impl(
-    YTensorBase* thisMats, YTensorBase* otherMats, YTensorBase* opMats,
-    const std::vector<int>& thisMatViewShape, const std::vector<int>& otherMatViewShape,
-    const std::vector<int>& opBatchShape,
-    int ah, int aw, int bw, size_t batchSize
-) {
-    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
-        int thisIdx = _getBroadcastIdx(batchIdx, thisMatViewShape, opBatchShape);
-        int otherIdx = _getBroadcastIdx(batchIdx, otherMatViewShape, opBatchShape);
-        
-        YTensorBase& A = thisMats[thisIdx];
-        YTensorBase& B = otherMats[otherIdx];
-        YTensorBase& C = opMats[batchIdx];
-        
-        // 使用Stride Map支持非连续数据
-        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, ah, aw, A.template data<T>(), A.stride_(0), A.stride_(1));
-        auto eigenB = YT_EIGEN_CONST_STRIDED_MAP(T, aw, bw, B.template data<T>(), B.stride_(0), B.stride_(1));
-        auto eigenC = YT_EIGEN_STRIDED_MAP(T, ah, bw, C.template data<T>(), C.stride_(0), C.stride_(1));
-        
-        eigenC.noalias() = eigenA * eigenB;
-    }, static_cast<double>(ah * bw * aw));
+using EigenStridedMap = Eigen::Map<Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 
+                                   0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>;
+
+template<typename T>
+using EigenConstStridedMap = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 
+                                        0, Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>>;
+
+/// @brief 从YTensorBase创建Eigen Map
+template<typename T>
+inline auto toEigenMap(YTensorBase& mat) {
+    return EigenStridedMap<T>(mat.template data<T>(), mat.shape(0), mat.shape(1), 
+                              Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(mat.stride_(0), mat.stride_(1)));
 }
 
-// 模板化的Eigen matmul后端实现
-template<typename DType>
-inline YTensorBase matmul_eigen_impl(const YTensorBase& self, const YTensorBase& other) {
-    // 获取matView
-    auto thisMatView = self.matView();
-    auto otherMatView = other.matView();
-    
-    // 获取矩阵维度
-    int ah = (self.ndim() >= 2) ? self.shape(self.ndim() - 2) : 1;
-    int aw = self.shape(self.ndim() - 1);
-    int bw = other.shape(other.ndim() - 1);
-    
-    // 计算广播后的batch形状
-    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
-    
-    // 计算输出的batch维度数量
-    int thisBatchDim = std::max(0, self.ndim() - 2);
-    int otherBatchDim = std::max(0, other.ndim() - 2);
-    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
-    
-    // 计算输出形状
-    std::vector<int> opShape;
-    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
-    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
-        opShape.push_back(opBatchShape[i]);
-    }
-    opShape.push_back(ah);
-    opShape.push_back(bw);
-    
-    // 创建输出tensor
-    YTensorBase op(opShape, self.dtype());
-    auto opMatView = op.matView();
-    
-    size_t batchSize = opMatView.size();
-    YTensorBase* opMats = opMatView.template data<YTensorBase>();
-    YTensorBase* thisMats = thisMatView.template data<YTensorBase>();
-    YTensorBase* otherMats = otherMatView.template data<YTensorBase>();
-    
-    auto thisShape = thisMatView.shape();
-    auto otherShape = otherMatView.shape();
-    
-    matmul_eigen_batch_impl<DType>(thisMats, otherMats, opMats, thisShape, otherShape, opBatchShape, ah, aw, bw, batchSize);
-    
-    return op;
+template<typename T>
+inline auto toEigenConstMap(const YTensorBase& mat) {
+    return EigenConstStridedMap<T>(mat.template data<T>(), mat.shape(0), mat.shape(1), 
+                                   Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(mat.stride_(0), mat.stride_(1)));
 }
 
-// 保留原始接口（直接调用模板实现）
+/// @brief Eigen后端主接口 - 简化版，借鉴YTensor设计
 inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) const {
-    int selfDim = ndim();
-    int otherDim = other.ndim();
-    int aw = shape(selfDim - 1);
-    int bw = other.shape(otherDim - 1);
+    int selfDim = ndim(), otherDim = other.ndim();
+    int ah = (selfDim >= 2) ? shape(selfDim - 2) : 1;
+    int aw = shape(selfDim - 1), bw = other.shape(otherDim - 1);
     
-    // ==================== Fastpath检测 ====================
-    if (selfDim > 2) {
-        bool rightIs2D = (otherDim <= 2);
-        if (!rightIs2D) {
-            rightIs2D = true;
-            for (int i = 0; i < otherDim - 2; ++i) {
-                if (other.shape(i) != 1) { rightIs2D = false; break; }
-            }
-        }
-        if (rightIs2D) {
-            int contiguousStart = isContiguousFrom(0, -1);
-            if (contiguousStart < selfDim - 1) {
-                // 可以使用fastpath - 用dispatch包装
-                YTensorBase result(_shape, _dtype);
-                yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype,
-                    [&]<typename DType>() {
+    YTensorBase result;
+    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype,
+        [&]<typename DType>() {
+            // ==================== Fastpath检测 ====================
+            // fastpath: [..., m, k] @ [k, n]，左张量除最后一维外连续
+            if (selfDim > 2) {
+                bool rightIs2D = (otherDim <= 2);
+                if (!rightIs2D) {
+                    rightIs2D = true;
+                    for (int i = 0; i < otherDim - 2; ++i) {
+                        if (other.shape(i) != 1) { rightIs2D = false; break; }
+                    }
+                }
+                if (rightIs2D) {
+                    int contiguousStart = isContiguousFrom(0, -1);
+                    if (contiguousStart < selfDim - 1) {
+                        // 使用fastpath
                         int outerSize = 1, innerRows = 1;
                         for (int i = 0; i < contiguousStart; ++i) outerSize *= shape(i);
                         for (int i = contiguousStart; i < selfDim - 1; ++i) innerRows *= shape(i);
                         
-                        // 准备输出
                         std::vector<int> opShape;
                         for (int i = 0; i < selfDim - 1; ++i) opShape.push_back(shape(i));
                         opShape.push_back(bw);
@@ -883,12 +770,14 @@ inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) c
                         
                         // 右矩阵2D view
                         YTensorBase right2D;
-                        right2D._shape = {aw, bw}; right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
+                        right2D._shape = {aw, bw}; 
+                        right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
                         right2D._offset = other._offset; right2D._data = other._data;
                         right2D._element_size = sizeof(DType); right2D._dtype = _dtype;
                         
                         int innerStride = (contiguousStart == 0) ? aw : stride_(contiguousStart);
                         int opInnerStride = (contiguousStart == 0) ? bw : op.stride_(contiguousStart);
+                        auto eigenB = toEigenConstMap<DType>(right2D);
                         
                         for (int outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
                             int leftOffset = 0, opOffset = 0;
@@ -900,244 +789,122 @@ inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) c
                                     opOffset += coord * op.stride_(i);
                                 }
                             }
-                            YTensorBase leftFlat, opFlat;
-                            leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, stride_(selfDim - 1)};
-                            leftFlat._offset = _offset + leftOffset; leftFlat._data = _data;
-                            leftFlat._element_size = sizeof(DType); leftFlat._dtype = _dtype;
-                            opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
-                            opFlat._offset = opOffset; opFlat._data = op._data;
-                            opFlat._element_size = sizeof(DType); opFlat._dtype = _dtype;
-                            
-                            auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(DType, innerRows, aw, leftFlat.template data<DType>(), leftFlat.stride_(0), leftFlat.stride_(1));
-                            auto eigenB = YT_EIGEN_CONST_STRIDED_MAP(DType, aw, bw, right2D.template data<DType>(), right2D.stride_(0), right2D.stride_(1));
-                            auto eigenC = YT_EIGEN_STRIDED_MAP(DType, innerRows, bw, opFlat.template data<DType>(), opFlat.stride_(0), opFlat.stride_(1));
+                            // 直接创建Eigen Map
+                            EigenConstStridedMap<DType> eigenA(this->data<DType>() + leftOffset, innerRows, aw,
+                                Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(innerStride, stride_(selfDim - 1)));
+                            EigenStridedMap<DType> eigenC(op.data<DType>() + opOffset, innerRows, bw,
+                                Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(opInnerStride, 1));
                             eigenC.noalias() = eigenA * eigenB;
                         }
                         result = op;
-                    }, "matmul_eigen_backend_fastpath");
-                return result;
+                        return;
+                    }
+                }
             }
-        }
-    }
-    
-    // ==================== 普通路径 ====================
-    // 注意：bfloat16/float16/float8_* 等扩展类型已在 matmul() 入口处统一转换为 float32 处理
-    // 此处只需处理 Eigen 原生支持的类型
-    
-    YTensorBase result(_shape, _dtype);
-    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype,
-        [&]<typename DType>() {
-            result = matmul_eigen_impl<DType>(*this, other);
+            
+            // ==================== 普通路径（使用broadcastInplace简化） ====================
+            auto thisMatView = matView();
+            auto otherMatView = other.matView();
+            
+            // 计算输出形状
+            std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+            int opBatchDim = std::max(std::max(0, selfDim - 2), std::max(0, otherDim - 2));
+            std::vector<int> opShape;
+            for (int i = static_cast<int>(opBatchShape.size()) - opBatchDim; i < static_cast<int>(opBatchShape.size()); ++i) {
+                opShape.push_back(opBatchShape[i]);
+            }
+            opShape.push_back(ah); opShape.push_back(bw);
+            
+            YTensorBase op(opShape, _dtype);
+            auto opMatView = op.matView();
+            
+            // 使用broadcastInplace处理广播和并行化，捕获DType进行Eigen操作
+            opMatView.broadcastInplace([](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
+                toEigenMap<DType>(C).noalias() = toEigenConstMap<DType>(A) * toEigenConstMap<DType>(B);
+            }, thisMatView, otherMatView);
+            
+            result = op;
         }, "matmul_eigen_backend");
     return result;
 }
 
-// 模板化的applyEigenOp实现
-template<typename T, typename Func>
-inline YTensorBase _applyEigenOpImpl(
-    const YTensorBase& self, Func&& func, int rows, int cols
-) {
-    auto thisMatView = self.matView();
-    size_t batchSize = thisMatView.size();
-    YTensorBase* thisMats = thisMatView.data<YTensorBase>();
-    
-    // 推断输出形状
-    auto eigenMat0 = YT_EIGEN_CONST_STRIDED_MAP(T, rows, cols, thisMats[0].template data<T>(), 
-                                                thisMats[0].stride_(0), thisMats[0].stride_(1));
-    auto result0 = func(eigenMat0);
-    int outRows = static_cast<int>(result0.rows());
-    int outCols = static_cast<int>(result0.cols());
-    
-    // 构建输出形状
-    std::vector<int> outShape;
-    for (int i = 0; i < self.ndim() - 2; ++i) {
-        outShape.push_back(self.shape(i));
-    }
-    outShape.push_back(outRows);
-    outShape.push_back(outCols);
-    
-    YTensorBase op(outShape, yt::types::getTypeName<T>());
-    auto opMatView = op.matView();
-    YTensorBase* opMats = opMatView.data<YTensorBase>();
-    
-    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
-        YTensorBase& A = thisMats[batchIdx];
-        YTensorBase& C = opMats[batchIdx];
-        
-        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, rows, cols, A.template data<T>(), A.stride_(0), A.stride_(1));
-        auto eigenC = YT_EIGEN_STRIDED_MAP(T, outRows, outCols, C.template data<T>(), C.stride_(0), C.stride_(1));
-        
-        eigenC = func(eigenA);
-    }, static_cast<double>(rows * cols));
-    
-    return op;
-}
-
+/// @brief 通用Eigen单元操作 - 对每个2D矩阵应用func
 template<typename Func>
 inline YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opName) const {
-    int dim = ndim();
-    if (dim < 2) {
-        throw std::runtime_error("[YTensorBase::" + opName + "] Tensor must have at least 2 dimensions");
+    if (ndim() < 2) throw std::runtime_error("[YTensorBase::" + opName + "] requires at least 2 dimensions");
+    
+    // 扩展浮点类型转换为float32处理
+    if (_dtype == "bfloat16" || _dtype == "float16" || _dtype.find("float8") != std::string::npos) {
+        return this->cast("float32").applyEigenOp(std::forward<Func>(func), opName).cast(_dtype);
     }
     
-    int rows = _shape[dim - 2];
-    int cols = _shape[dim - 1];
-    
-    // 类型分发
-    if (_dtype == "float32") {
-        return _applyEigenOpImpl<float>(*this, std::forward<Func>(func), rows, cols);
-    } else if (_dtype == "float64") {
-        return _applyEigenOpImpl<double>(*this, std::forward<Func>(func), rows, cols);
-    } else if (_dtype == "int32") {
-        return _applyEigenOpImpl<int32_t>(*this, std::forward<Func>(func), rows, cols);
-    } else if (_dtype == "int64") {
-        return _applyEigenOpImpl<int64_t>(*this, std::forward<Func>(func), rows, cols);
-    } else if (_dtype == "bfloat16") {
-        // bfloat16: 转换为float32执行
-        YTensorBase thisF32 = YTensorBase(this->shape(), "float32");
-        size_t thisSize = this->size();
-        const yt::bfloat16* thisBf16 = this->data<yt::bfloat16>();
-        float* thisF32Data = thisF32.data<float>();
-        for (size_t i = 0; i < thisSize; ++i) thisF32Data[i] = static_cast<float>(thisBf16[i]);
+    YTensorBase result;
+    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
+        auto thisMatView = matView();
+        YTensorBase* mats = thisMatView.template data<YTensorBase>();
         
-        YTensorBase opF32 = _applyEigenOpImpl<float>(thisF32, std::forward<Func>(func), rows, cols);
+        // 推断输出形状
+        auto result0 = func(toEigenConstMap<T>(mats[0]));
+        int outRows = static_cast<int>(result0.rows()), outCols = static_cast<int>(result0.cols());
         
-        // 转回bfloat16
-        YTensorBase op(opF32.shape(), "bfloat16");
-        size_t opSize = op.size();
-        const float* opF32Data = opF32.data<float>();
-        yt::bfloat16* opBf16Data = op.data<yt::bfloat16>();
-        for (size_t i = 0; i < opSize; ++i) opBf16Data[i] = yt::bfloat16(opF32Data[i]);
-        return op;
-    } else {
-        throw std::runtime_error("[YTensorBase::" + opName + "] Unsupported dtype: " + _dtype);
-    }
+        std::vector<int> outShape(_shape.begin(), _shape.end() - 2);
+        outShape.push_back(outRows); outShape.push_back(outCols);
+        
+        YTensorBase op(outShape, _dtype);
+        auto opMatView = op.matView();
+        YTensorBase* opMats = opMatView.template data<YTensorBase>();
+        
+        yt::kernel::parallelFor(0, static_cast<int>(thisMatView.size()), [&](int i) {
+            toEigenMap<T>(opMats[i]) = func(toEigenConstMap<T>(mats[i]));
+        }, static_cast<double>(shape(-2) * shape(-1)));
+        
+        result = op;
+    }, opName);
+    return result;
 }
 
-// 模板化的applyEigenBinaryOp实现
-template<typename T, typename Func>
-inline YTensorBase _applyEigenBinaryOpImpl(
-    const YTensorBase& self, const YTensorBase& other, Func&& func,
-    int aRows, int aCols, int bRows, int bCols
-) {
-    auto thisMatView = self.matView();
-    auto otherMatView = other.matView();
-    
-    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
-    
-    int thisBatchDim = std::max(0, self.ndim() - 2);
-    int otherBatchDim = std::max(0, other.ndim() - 2);
-    int opBatchDim = std::max(thisBatchDim, otherBatchDim);
-    
-    size_t batchSize = 1;
-    for (int s : opBatchShape) batchSize *= s;
-    
-    YTensorBase* thisMats = thisMatView.data<YTensorBase>();
-    YTensorBase* otherMats = otherMatView.data<YTensorBase>();
-    
-    auto thisShape = thisMatView.shape();
-    auto otherShape = otherMatView.shape();
-    
-    // 推断输出形状
-    int thisIdx0 = _getBroadcastIdx(0, thisShape, opBatchShape);
-    int otherIdx0 = _getBroadcastIdx(0, otherShape, opBatchShape);
-    YTensorBase& A0 = thisMats[thisIdx0];
-    YTensorBase& B0 = otherMats[otherIdx0];
-    
-    auto eigenA0 = YT_EIGEN_CONST_STRIDED_MAP(T, aRows, aCols, A0.template data<T>(), A0.stride_(0), A0.stride_(1));
-    auto eigenB0 = YT_EIGEN_CONST_STRIDED_MAP(T, bRows, bCols, B0.template data<T>(), B0.stride_(0), B0.stride_(1));
-    auto result0 = func(eigenA0, eigenB0);
-    int outRows = static_cast<int>(result0.rows());
-    int outCols = static_cast<int>(result0.cols());
-    
-    // 构建输出形状
-    std::vector<int> opShape;
-    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
-    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) {
-        opShape.push_back(opBatchShape[i]);
-    }
-    opShape.push_back(outRows);
-    opShape.push_back(outCols);
-    
-    YTensorBase op(opShape, yt::types::getTypeName<T>());
-    auto opMatView = op.matView();
-    YTensorBase* opMats = opMatView.data<YTensorBase>();
-    
-    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
-        int thisIdx = _getBroadcastIdx(batchIdx, thisShape, opBatchShape);
-        int otherIdx = _getBroadcastIdx(batchIdx, otherShape, opBatchShape);
-        
-        YTensorBase& A = thisMats[thisIdx];
-        YTensorBase& B = otherMats[otherIdx];
-        YTensorBase& C = opMats[batchIdx];
-        
-        auto eigenA = YT_EIGEN_CONST_STRIDED_MAP(T, aRows, aCols, A.template data<T>(), A.stride_(0), A.stride_(1));
-        auto eigenB = YT_EIGEN_CONST_STRIDED_MAP(T, bRows, bCols, B.template data<T>(), B.stride_(0), B.stride_(1));
-        auto eigenC = YT_EIGEN_STRIDED_MAP(T, outRows, outCols, C.template data<T>(), C.stride_(0), C.stride_(1));
-        
-        eigenC = func(eigenA, eigenB);
-    }, static_cast<double>(aRows * aCols + bRows * bCols));
-    
-    return op;
-}
-
+/// @brief 通用Eigen二元操作 - 支持广播（使用broadcastInplace简化）
 template<typename Func>
 inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Func&& func, const std::string& opName) const {
-    int dim = ndim();
-    int otherDim = other.ndim();
-    if (dim < 2 || otherDim < 2) {
-        throw std::runtime_error("[YTensorBase::" + opName + "] Both tensors must have at least 2 dimensions");
+    if (ndim() < 2 || other.ndim() < 2) throw std::runtime_error("[YTensorBase::" + opName + "] requires at least 2 dimensions");
+    if (_dtype != other._dtype) throw std::runtime_error("[YTensorBase::" + opName + "] dtype mismatch");
+    
+    // 扩展浮点类型转换为float32处理
+    if (_dtype == "bfloat16" || _dtype == "float16" || _dtype.find("float8") != std::string::npos) {
+        return this->cast("float32").applyEigenBinaryOp(other.cast("float32"), std::forward<Func>(func), opName).cast(_dtype);
     }
     
-    if (_dtype != other._dtype) {
-        throw std::runtime_error("[YTensorBase::" + opName + "] dtype mismatch: " + _dtype + " vs " + other._dtype);
-    }
-    
-    int aRows = _shape[dim - 2];
-    int aCols = _shape[dim - 1];
-    int bRows = other._shape[otherDim - 2];
-    int bCols = other._shape[otherDim - 1];
-    
-    // 类型分发
-    if (_dtype == "float32") {
-        return _applyEigenBinaryOpImpl<float>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
-    } else if (_dtype == "float64") {
-        return _applyEigenBinaryOpImpl<double>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
-    } else if (_dtype == "int32") {
-        return _applyEigenBinaryOpImpl<int32_t>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
-    } else if (_dtype == "int64") {
-        return _applyEigenBinaryOpImpl<int64_t>(*this, other, std::forward<Func>(func), aRows, aCols, bRows, bCols);
-    } else if (_dtype == "bfloat16") {
-        // bfloat16: 转换为float32执行
-        YTensorBase thisF32 = YTensorBase(this->shape(), "float32");
-        YTensorBase otherF32 = YTensorBase(other.shape(), "float32");
+    YTensorBase result;
+    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
+        auto thisMatView = matView(), otherMatView = other.matView();
+        YTensorBase *thisMats = thisMatView.template data<YTensorBase>();
+        YTensorBase *otherMats = otherMatView.template data<YTensorBase>();
         
-        size_t thisSize = this->size();
-        size_t otherSize = other.size();
-        const yt::bfloat16* thisBf16 = this->data<yt::bfloat16>();
-        const yt::bfloat16* otherBf16 = other.data<yt::bfloat16>();
-        float* thisF32Data = thisF32.data<float>();
-        float* otherF32Data = otherF32.data<float>();
+        std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
         
-        for (size_t i = 0; i < thisSize; ++i) thisF32Data[i] = static_cast<float>(thisBf16[i]);
-        for (size_t i = 0; i < otherSize; ++i) otherF32Data[i] = static_cast<float>(otherBf16[i]);
+        // 推断输出形状
+        auto result0 = func(toEigenConstMap<T>(thisMats[0]), toEigenConstMap<T>(otherMats[0]));
+        int outRows = static_cast<int>(result0.rows()), outCols = static_cast<int>(result0.cols());
         
-        YTensorBase opF32 = _applyEigenBinaryOpImpl<float>(thisF32, otherF32, std::forward<Func>(func), aRows, aCols, bRows, bCols);
+        int opBatchDim = std::max(std::max(0, ndim() - 2), std::max(0, other.ndim() - 2));
+        std::vector<int> opShape;
+        for (int i = static_cast<int>(opBatchShape.size()) - opBatchDim; i < static_cast<int>(opBatchShape.size()); ++i) {
+            opShape.push_back(opBatchShape[i]);
+        }
+        opShape.push_back(outRows); opShape.push_back(outCols);
         
-        // 转回bfloat16
-        YTensorBase op(opF32.shape(), "bfloat16");
-        size_t opSize = op.size();
-        const float* opF32Data = opF32.data<float>();
-        yt::bfloat16* opBf16Data = op.data<yt::bfloat16>();
-        for (size_t i = 0; i < opSize; ++i) opBf16Data[i] = yt::bfloat16(opF32Data[i]);
-        return op;
-    } else {
-        throw std::runtime_error("[YTensorBase::" + opName + "] Unsupported dtype: " + _dtype);
-    }
+        YTensorBase op(opShape, _dtype);
+        auto opMatView = op.matView();
+        
+        // 使用broadcastInplace简化广播和循环
+        opMatView.broadcastInplace([&func](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
+            toEigenMap<T>(C) = func(toEigenConstMap<T>(A), toEigenConstMap<T>(B));
+        }, thisMatView, otherMatView);
+        
+        result = op;
+    }, opName);
+    return result;
 }
-
-#undef YT_EIGEN_STRIDED_MAP
-#undef YT_EIGEN_CONST_STRIDED_MAP
 
 #endif // YT_USE_EIGEN
 
@@ -1224,7 +991,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
         }
     }
 
-    // ==================== 普通路径 ====================
+    // ==================== 普通路径（使用broadcastInplace简化） ====================
     auto thisMatView = matView();
     auto otherMatView = other.matView();
     std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
@@ -1238,21 +1005,9 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
     
     YTensorBase op(opShape, "float32");
     auto opMatView = op.matView();
-    size_t batchSize = opMatView.size();
-    YTensorBase* opMats = opMatView.data<YTensorBase>();
-    YTensorBase* thisMats = thisMatView.data<YTensorBase>();
-    YTensorBase* otherMats = otherMatView.data<YTensorBase>();
     
-    auto thisShape = thisMatView.shape();
-    auto otherShape = otherMatView.shape();
-
-    yt::kernel::parallelFor(0, static_cast<int>(batchSize), [&](int batchIdx) {
-        int thisIdx = _getBroadcastIdx(batchIdx, thisShape, opBatchShape);
-        int otherIdx = _getBroadcastIdx(batchIdx, otherShape, opBatchShape);
-        YTensorBase& A = thisMats[thisIdx];
-        YTensorBase& B = otherMats[otherIdx];
-        YTensorBase& C = opMats[batchIdx];
-        
+    // 使用broadcastInplace处理广播和并行化
+    opMatView.broadcastInplace([](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
         yt::kernel::gemm::matmul(
             A.data<float>(), B.data<float>(), C.data<float>(),
             A.shape(0), B.shape(1), A.shape(1),
@@ -1260,7 +1015,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
             static_cast<int64_t>(B.stride_(0)), static_cast<int64_t>(B.stride_(1)),
             static_cast<int64_t>(C.stride_(0)), static_cast<int64_t>(C.stride_(1))
         );
-    });
+    }, thisMatView, otherMatView);
     
     return op;
 }

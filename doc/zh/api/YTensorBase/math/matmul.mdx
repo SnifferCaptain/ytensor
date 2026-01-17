@@ -16,7 +16,8 @@
 ### 函数签名
 
 ```cpp
-YTensorBase matmul(const YTensorBase& other) const;
+YTensorBase matmul(const YTensorBase& other, 
+                   yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
 ```
 
 ### 参数说明
@@ -24,6 +25,7 @@ YTensorBase matmul(const YTensorBase& other) const;
 | 参数名 | 类型 | 说明 |
 | --- | --- | --- |
 | `other` | `const YTensorBase&` | 右矩阵，最后两维必须满足矩阵乘法规则 |
+| `backend` | `yt::infos::MatmulBackend` | 计算后端，可选值见下方后端选择表。默认使用系统默认后端 |
 
 ### 核心功能描述
 
@@ -100,9 +102,24 @@ YTensorBase matView() const;
 
 - **类型**: `YTensorBase`
 - **说明**:
-  - 返回的 `dtype() == "YTensorBase"`
+  - 返回的 `dtype()` 为 `"YTensorBase<inner_dtype>"`，其中 `inner_dtype` 是原始张量的 dtype
   - 每个"元素"是一个 2D 子张量视图
   - `element_size == sizeof(YTensorBase)`
+
+### dtype 命名规范
+
+`matView()` 返回的张量遵循规范化的 dtype 命名：
+
+```cpp
+YTensorBase tensor({3, 4, 5}, "float32");
+auto mv = tensor.matView();
+// mv.dtype() -> "YTensorBase<float32>"
+
+// 可以使用 dispatch 自动解析基础类型
+yt::kernel::dispatch<yt::types::AllNumericTypes>(mv.dtype(), [&]<typename T>() {
+    // T 会被解析为 float
+});
+```
 
 ### 使用示例
 
@@ -130,20 +147,35 @@ YTensorBase mv_2d = mat.matView();
 
 ## 后端选择
 
-矩阵乘法支持多个后端，根据编译选项自动选择：
+矩阵乘法支持多个后端，可以通过 `backend` 参数手动指定：
 
-| 后端 | 宏 | 优先级 | 说明 |
+| 后端 | 枚举值 | 宏 | 说明 |
 | --- | --- | --- | --- |
-| Eigen | `YT_USE_EIGEN=1` | 高 | 使用 Eigen 库实现 |
-| Naive | 默认 | 低 | 朴素三重循环实现 |
+| Naive | `MatmulBackend::Naive` | 默认可用 | 朴素三重循环实现，无依赖 |
+| Eigen | `MatmulBackend::Eigen` | `YT_USE_EIGEN=1` | 使用 Eigen 库实现 |
+| AVX2 | `MatmulBackend::AVX2` | `YT_USE_AVX2=1` | 自定义 AVX2+FMA 向量化实现（仅 float32） |
+
+### 默认后端选择顺序
+
+系统默认后端 `yt::infos::defaultMatmulBackend` 按以下优先级自动选择：
+
+1. **AVX2**（如果 `YT_USE_AVX2=1` 且 dtype 为 float32）
+2. **Eigen**（如果 `YT_USE_EIGEN=1`）
+3. **Naive**（fallback）
+
+### 使用示例
 
 ```cpp
-// 编译时选择后端
-#if YT_USE_EIGEN
-    return matmul_eigen_backend(other);
-#else
-    return matmul_naive_impl<DType>(*this, other);
-#endif
+YTensorBase a({3, 4}, "float32"), b({4, 5}, "float32");
+
+// 使用默认后端
+auto c1 = a.matmul(b);
+
+// 强制使用 Naive 后端（用于调试或对比）
+auto c2 = a.matmul(b, yt::infos::MatmulBackend::Naive);
+
+// 强制使用 Eigen 后端
+auto c3 = a.matmul(b, yt::infos::MatmulBackend::Eigen);
 ```
 
 ---

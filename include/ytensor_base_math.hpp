@@ -62,9 +62,11 @@ YT_YTENSORBASE_CMP_OPERATOR_DEF(!=)
 
 /// @brief 对张量的最后两个维度进行广播矩阵乘法运算
 /// @param other 右张量输入，最后两个维度的列数必须与this最后两个维度的行数相等
+/// @param backend 计算后端，默认使用系统默认后端
 /// @return 矩阵乘法结果张量
 /// @note 广播规则应用于除最后两维之外的维度
-YTensorBase matmul(const YTensorBase& other) const;
+YTensorBase matmul(const YTensorBase& other, 
+                   yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
 
 /// @brief 矩阵视图，将张量的最后两个维度视为2D矩阵作为"标量"
 /// @return 返回一个scalar类型为YTensorBase的YTensorBase，每个"元素"是一个2D子张量视图

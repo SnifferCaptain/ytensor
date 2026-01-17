@@ -43,6 +43,58 @@ YTensor 支持 `float` (fp32), `double` (fp64), 和 `bfloat16` (bf16)。
 | `"int64"` | 8 | `int64_t` |
 | `"bfloat16"` | 2 | `yt::bfloat16` |
 
+## dtype 命名规范
+
+YTensor 采用规范化的 dtype 命名格式，支持嵌套张量类型的表示：
+
+### 基础类型名
+使用 `getBaseTypeName<T>()` 获取基础 C++ 类型的名称：
+- `float` → `"float32"`
+- `double` → `"float64"`
+- `int32_t` → `"int32"`
+- 自定义类型 → `typeid(T).name()` 或注册名称
+
+### 嵌套类型格式
+
+| 张量类型 | dtype 格式 | 示例 |
+| --- | --- | --- |
+| `YTensor<T, dim>` | `"YTensor<scalar_dtype, dim>"` | `"YTensor<float32, 2>"` |
+| `YTensorBase` | `"YTensorBase<inner_dtype>"` | `"YTensorBase<float32>"` |
+| 多层嵌套 | 递归格式 | `"YTensor<YTensor<float32, 2>, 2>"` |
+
+### dtype 解析函数
+
+| 函数 | 功能 | 示例 |
+| --- | --- | --- |
+| `parseDtypeInner(dtype)` | 解析外层类型和内层内容 | `"YTensorBase<float32>"` → `{"YTensorBase", "float32"}` |
+| `getBaseDtype(dtype)` | 递归提取最内层基础类型 | `"YTensor<YTensor<float32, 2>, 2>"` → `"float32"` |
+| `getDtypeDim(dtype)` | 提取 YTensor 的维度 | `"YTensor<float32, 3>"` → `3` |
+| `getDtypeScalar(dtype)` | 提取 YTensor 的 scalar 类型 | `"YTensor<float32, 2>"` → `"float32"` |
+| `makeYTensorDtype(scalar, dim)` | 构建 YTensor dtype | `("float32", 2)` → `"YTensor<float32, 2>"` |
+| `makeYTensorBaseDtype(inner)` | 构建 YTensorBase dtype | `("float32")` → `"YTensorBase<float32>"` |
+
+### 使用示例
+
+```cpp
+#include "ytensor_types.hpp"
+
+// 解析嵌套 dtype
+std::string dtype = "YTensorBase<YTensor<float32, 2>>";
+std::string baseDtype = yt::types::getBaseDtype(dtype);  // "float32"
+
+// 构建 dtype
+std::string ytensorDtype = yt::types::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
+
+// 配合 dispatch 使用
+YTensorBase tensor({2, 3, 4}, "float32");
+auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
+
+// dispatch 会自动解析嵌套类型
+yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+    // T 被解析为 float
+});
+```
+
 ## 非 POD 类型支持
 
 对于非 POD 类型（如 `std::string`、自定义类），需要注册：
