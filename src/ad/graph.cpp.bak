@@ -1,10 +1,8 @@
 #include "../../include/ad/graph.hpp"
-#include "../../include/ad/ops.hpp"
 #include "../../example/ymodel2-s-2/json.hpp"
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
-#include <iostream>
 
 using json = nlohmann::json;
 
@@ -14,19 +12,6 @@ namespace ad {
 int Graph::addNode(const std::string& name, NodeType type) {
     int id = next_node_id++;
     auto node = std::make_shared<Node>(id, name, type);
-    nodes[id] = node;
-    return id;
-}
-
-int Graph::addOpNode(const std::string& name, const std::string& op_type) {
-    int id = next_node_id++;
-    auto node = std::make_shared<Node>(id, name, NodeType::Op);
-    node->op_type = op_type;
-    // 创建算子实例
-    node->op = OpRegistry::instance().create(op_type);
-    if (!node->op) {
-        std::cerr << "Warning: Operator '" << op_type << "' not registered, node will not execute" << std::endl;
-    }
     nodes[id] = node;
     return id;
 }
@@ -105,7 +90,12 @@ std::string nodeTypeToString(NodeType type) {
         case NodeType::Parameter: return "Parameter";
         case NodeType::Constant: return "Constant";
         case NodeType::Output: return "Output";
-        case NodeType::Op: return "Op";
+        case NodeType::Linear: return "Linear";
+        case NodeType::RMSNorm: return "RMSNorm";
+        case NodeType::Embedding: return "Embedding";
+        case NodeType::Attention: return "Attention";
+        case NodeType::FFN: return "FFN";
+        case NodeType::Add: return "Add";
         default: return "Custom";
     }
 }
@@ -115,7 +105,12 @@ NodeType stringToNodeType(const std::string& str) {
     if (str == "Parameter") return NodeType::Parameter;
     if (str == "Constant") return NodeType::Constant;
     if (str == "Output") return NodeType::Output;
-    if (str == "Op") return NodeType::Op;
+    if (str == "Linear") return NodeType::Linear;
+    if (str == "RMSNorm") return NodeType::RMSNorm;
+    if (str == "Embedding") return NodeType::Embedding;
+    if (str == "Attention") return NodeType::Attention;
+    if (str == "FFN") return NodeType::FFN;
+    if (str == "Add") return NodeType::Add;
     return NodeType::Custom;
 }
 
@@ -128,9 +123,6 @@ std::string Graph::toJSON() const {
         nodeJson["id"] = id;
         nodeJson["name"] = node->name;
         nodeJson["type"] = nodeTypeToString(node->type);
-        if (node->type == NodeType::Op) {
-            nodeJson["op_type"] = node->op_type;
-        }
         nodeJson["attrs"] = node->attrs;
         nodeJson["inputs"] = node->input_ids;
         nodeJson["outputs"] = node->output_ids;
@@ -156,50 +148,50 @@ Graph Graph::fromJSON(const std::string& jsonStr) {
     Graph graph;
     json j = json::parse(jsonStr);
     
-    // 创建ID映射
-    std::unordered_map<int, int> oldToNew;
-    
     if (j.contains("nodes")) {
         for (const auto& nodeJson : j["nodes"]) {
-            int oldId = nodeJson["id"];
+            int id = nodeJson["id"];
             std::string name = nodeJson["name"];
             NodeType type = stringToNodeType(nodeJson["type"]);
             
-            int newId;
-            if (type == NodeType::Op && nodeJson.contains("op_type")) {
-                std::string op_type = nodeJson["op_type"];
-                newId = graph.addOpNode(name, op_type);
-            } else {
-                newId = graph.addNode(name, type);
-            }
-            
-            oldToNew[oldId] = newId;
-            auto node = graph.nodes[newId];
-            
+            auto node = std::make_shared<Node>(id, name, type);
             if (nodeJson.contains("attrs")) {
                 for (auto it = nodeJson["attrs"].begin(); it != nodeJson["attrs"].end(); ++it) {
                     node->attrs[it.key()] = it.value();
                 }
             }
+            graph.nodes[id] = node;
+            graph.next_node_id = std::max(graph.next_node_id, id + 1);
         }
     }
     
     if (j.contains("edges")) {
         for (const auto& edgeJson : j["edges"]) {
-            int oldFrom = edgeJson["from"];
-            int oldTo = edgeJson["to"];
+            int id = edgeJson["id"];
+            int from = edgeJson["from"];
+            int to = edgeJson["to"];
             
-            int newFrom = oldToNew[oldFrom];
-            int newTo = oldToNew[oldTo];
+            auto edge = std::make_shared<Edge>(id, from, to);
+            if (edgeJson.contains("name")) {
+                edge->name = edgeJson["name"];
+            }
             
-            graph.addEdge(newFrom, newTo);
+            graph.edges[id] = edge;
+            if (graph.nodes.count(from)) {
+                graph.nodes[from]->output_ids.push_back(to);
+            }
+            if (graph.nodes.count(to)) {
+                graph.nodes[to]->input_ids.push_back(from);
+            }
+            
+            graph.next_edge_id = std::max(graph.next_edge_id, id + 1);
         }
     }
     
     return graph;
 }
 
-// 执行图 - 前向传播
+// 执行图 - 这是核心执行逻辑
 std::unordered_map<int, std::shared_ptr<YTensorBase>> Graph::execute(
     const std::unordered_map<std::string, std::shared_ptr<YTensorBase>>& inputs
 ) {
@@ -236,41 +228,19 @@ std::unordered_map<int, std::shared_ptr<YTensorBase>> Graph::execute(
             }
         }
         
-        // 处理输出节点
+        // 根据节点类型执行操作
+        // 注意：完整实现需要所有算子的执行逻辑
+        // 这里只是框架，具体算子需要逐个实现
+        
         if (node->type == NodeType::Output) {
             if (!nodeInputs.empty()) {
                 nodeOutputs[nodeId] = nodeInputs[0];
             }
-            continue;
         }
-        
-        // 处理算子节点
-        if (node->type == NodeType::Op && node->op) {
-            try {
-                auto outputs = node->op->forward(nodeInputs, node->attrs, node->ctx.get());
-                if (!outputs.empty()) {
-                    nodeOutputs[nodeId] = outputs[0];
-                }
-            } catch (const std::exception& e) {
-                std::cerr << "Error executing node " << node->name << " (" << node->op_type << "): " 
-                         << e.what() << std::endl;
-                throw;
-            }
-        }
+        // TODO: 实现其他算子
     }
     
     return nodeOutputs;
-}
-
-// 反向传播
-void Graph::backward(
-    const std::unordered_map<std::string, std::shared_ptr<YTensorBase>>& grad_outputs
-) {
-    // TODO: 实现完整的反向传播
-    // 1. 按反向拓扑顺序遍历
-    // 2. 对每个节点调用其算子的backward方法
-    // 3. 累积梯度
-    throw std::runtime_error("Backward not yet fully implemented");
 }
 
 } // namespace ad

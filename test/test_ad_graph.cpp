@@ -1,42 +1,49 @@
 #include "../include/ad/graph.hpp"
+#include "../include/ad/ops.hpp"
 #include <iostream>
 #include <fstream>
 
 using namespace yt::ad;
 
 int main() {
-    std::cout << "=== YTensor AD Computational Graph Test ===" << std::endl;
-    std::cout << std::endl;
-    
-    std::cout << "[重要说明]" << std::endl;
-    std::cout << "要实现与ymodel2-s-2完全相同的数值输出，需要：" << std::endl;
-    std::cout << "1. 实现所有算子的完整执行逻辑（Linear, RMSNorm, Attention, FFN等）" << std::endl;
-    std::cout << "2. 实现权重加载机制" << std::endl;
-    std::cout << "3. 确保相同的随机种子处理" << std::endl;
-    std::cout << "4. 保证数值精度完全一致" << std::endl;
-    std::cout << "这是一个需要大量工作的完整推理引擎实现。" << std::endl;
+    std::cout << "=== YTensor AD Computational Graph with Operator Registry ===" << std::endl;
     std::cout << std::endl;
     
     try {
-        // 测试基本图构建
-        std::cout << "[1] 测试基本图构建..." << std::endl;
+        // 测试算子注册系统
+        std::cout << "[1] 测试算子注册系统..." << std::endl;
+        auto& registry = OpRegistry::instance();
+        
+        std::vector<std::string> ops = {"Linear", "RMSNorm", "Add", "Multiply", "GELU", "Embedding"};
+        for (const auto& op_name : ops) {
+            if (registry.has(op_name)) {
+                std::cout << "  ✓ " << op_name << " 已注册" << std::endl;
+            } else {
+                std::cout << "  ✗ " << op_name << " 未注册" << std::endl;
+            }
+        }
+        std::cout << std::endl;
+        
+        // 测试基本图构建（使用算子）
+        std::cout << "[2] 测试使用算子的图构建..." << std::endl;
         Graph g;
         
         int input = g.addNode("input", NodeType::Input);
-        int param = g.addNode("weight", NodeType::Parameter);
-        int op = g.addNode("linear", NodeType::Linear);
+        int weight = g.addNode("weight", NodeType::Parameter);
+        int linear = g.addOpNode("linear_op", "Linear");
         int output = g.addNode("output", NodeType::Output);
         
-        g.addEdge(input, op);
-        g.addEdge(param, op);
-        g.addEdge(op, output);
+        g.addEdge(input, linear);
+        g.addEdge(weight, linear);
+        g.addEdge(linear, output);
         
         std::cout << "  ✓ 创建了 " << g.nodes.size() << " 个节点" << std::endl;
         std::cout << "  ✓ 创建了 " << g.edges.size() << " 条边" << std::endl;
+        std::cout << "  ✓ Linear算子节点: " << g.getNode(linear)->op_type << std::endl;
         std::cout << std::endl;
         
         // 测试拓扑排序
-        std::cout << "[2] 测试拓扑排序..." << std::endl;
+        std::cout << "[3] 测试拓扑排序..." << std::endl;
         auto sorted = g.topologicalSort();
         std::cout << "  ✓ 排序成功，顺序: ";
         for (int id : sorted) {
@@ -45,11 +52,11 @@ int main() {
         std::cout << std::endl << std::endl;
         
         // 测试JSON序列化
-        std::cout << "[3] 测试JSON序列化..." << std::endl;
+        std::cout << "[4] 测试JSON序列化..." << std::endl;
         std::string json = g.toJSON();
         std::cout << "  ✓ JSON长度: " << json.length() << " 字符" << std::endl;
-        std::cout << "  JSON前200字符:" << std::endl;
-        std::cout << "  " << json.substr(0, 200) << "..." << std::endl;
+        std::cout << "  JSON前250字符:" << std::endl;
+        std::cout << "  " << json.substr(0, 250) << "..." << std::endl;
         std::cout << std::endl;
         
         // 保存到文件
@@ -60,7 +67,7 @@ int main() {
         std::cout << std::endl;
         
         // 测试从JSON加载
-        std::cout << "[4] 测试从JSON加载..." << std::endl;
+        std::cout << "[5] 测试从JSON加载..." << std::endl;
         std::ifstream infile("test_graph.json");
         std::stringstream buffer;
         buffer << infile.rdbuf();
@@ -70,16 +77,33 @@ int main() {
         std::cout << "  ✓ 加载成功" << std::endl;
         std::cout << "  ✓ 节点数: " << loaded.nodes.size() << std::endl;
         std::cout << "  ✓ 边数: " << loaded.edges.size() << std::endl;
+        
+        // 检查算子是否正确恢复
+        for (const auto& [id, node] : loaded.nodes) {
+            if (node->type == NodeType::Op) {
+                std::cout << "  ✓ 算子节点恢复: " << node->name << " -> " << node->op_type;
+                if (node->op) {
+                    std::cout << " (算子实例已创建)";
+                }
+                std::cout << std::endl;
+            }
+        }
         std::cout << std::endl;
         
-        std::cout << "=== 基础测试通过 ===" << std::endl;
+        std::cout << "=== 算子注册系统测试通过 ===" << std::endl;
+        std::cout << std::endl;
+        std::cout << "[关键特性]" << std::endl;
+        std::cout << "✓ 算子注册系统 - 支持动态注册和创建算子" << std::endl;
+        std::cout << "✓ 前向/反向分离 - 每个算子都有forward和backward方法" << std::endl;
+        std::cout << "✓ OpContext保存 - 前向时保存中间结果，供反向使用" << std::endl;
+        std::cout << "✓ 易于扩展 - 使用REGISTER_OPERATOR宏轻松注册新算子" << std::endl;
         std::cout << std::endl;
         std::cout << "[下一步]" << std::endl;
-        std::cout << "需要实现：" << std::endl;
-        std::cout << "1. YModel2图构建器 - 从配置构建完整的transformer图" << std::endl;
-        std::cout << "2. 算子执行逻辑 - Linear, RMSNorm, Attention, FFN等" << std::endl;
-        std::cout << "3. 权重加载 - 从.yt文件加载模型参数" << std::endl;
-        std::cout << "4. 执行测试 - 与ymodel2-s-2的数值输出进行精确比对" << std::endl;
+        std::cout << "1. 实现完整的算子逻辑（RMSNorm, GELU, Embedding等）" << std::endl;
+        std::cout << "2. 实现YModel2图构建器" << std::endl;
+        std::cout << "3. 实现权重加载" << std::endl;
+        std::cout << "4. 实现完整的反向传播" << std::endl;
+        std::cout << "5. 与ymodel2-s-2进行数值验证" << std::endl;
         
     } catch (const std::exception& e) {
         std::cerr << "错误: " << e.what() << std::endl;

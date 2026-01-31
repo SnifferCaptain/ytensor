@@ -5,6 +5,7 @@
 ***************/
 
 #include "../../ytensor.hpp"
+#include "operator.hpp"
 #include <string>
 #include <vector>
 #include <memory>
@@ -26,13 +27,7 @@ enum class NodeType {
     Constant,   // 常量
     Output,     // 输出
     // 操作符
-    Linear,
-    RMSNorm,
-    Embedding,
-    Attention,
-    FFN,
-    Add,
-    // 其他操作
+    Op,         // 通用算子（使用operator registry）
     Custom
 };
 
@@ -42,17 +37,24 @@ public:
     int id;
     std::string name;
     NodeType type;
+    std::string op_type;  // 当type==Op时，指定算子类型（如"Linear", "RMSNorm"等）
     std::unordered_map<std::string, std::string> attrs;
     
     // 数据存储（用于参数节点）
     std::shared_ptr<YTensorBase> data;
+    
+    // 算子实例（运行时创建）
+    std::shared_ptr<Operator> op;
+    
+    // 算子上下文（用于保存前向传播的中间结果）
+    std::shared_ptr<OpContext> ctx;
     
     // 连接
     std::vector<int> input_ids;   // 输入节点ID
     std::vector<int> output_ids;  // 输出节点ID
     
     Node(int id_, const std::string& name_, NodeType type_)
-        : id(id_), name(name_), type(type_) {}
+        : id(id_), name(name_), type(type_), ctx(std::make_shared<OpContext>()) {}
 };
 
 // 边 - 表示数据流
@@ -81,6 +83,7 @@ public:
     
     // 添加节点
     int addNode(const std::string& name, NodeType type);
+    int addOpNode(const std::string& name, const std::string& op_type);
     
     // 添加边
     int addEdge(int from, int to);
@@ -96,9 +99,14 @@ public:
     std::string toJSON() const;
     static Graph fromJSON(const std::string& json);
     
-    // 执行图
+    // 执行图（前向传播）
     std::unordered_map<int, std::shared_ptr<YTensorBase>> execute(
         const std::unordered_map<std::string, std::shared_ptr<YTensorBase>>& inputs
+    );
+    
+    // 反向传播
+    void backward(
+        const std::unordered_map<std::string, std::shared_ptr<YTensorBase>>& grad_outputs
     );
 };
 
