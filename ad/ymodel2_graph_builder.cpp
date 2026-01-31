@@ -59,7 +59,8 @@ ComputationGraph YModel2GraphBuilder::buildYModel2Graph(
         // Attention QKV projection (split into qkv_0 and qkv_1 for LoRA)
         int qkv0Weight = graph.addNode(layerPrefix + "attn.qkv.0.weight", NodeType::Parameter);
         auto qkv0Node = graph.getNode(qkv0Weight);
-        int qkv_hidden = hidden_size / 4;  // LoRA低秩分解
+        // LoRA低秩分解: 使用hidden_size/4作为中间维度进行降维
+        int qkv_hidden = hidden_size / 4;
         qkv0Node->setAttribute("shape", "[" + std::to_string(qkv_hidden) + ", " + std::to_string(hidden_size) + "]");
         
         int qkv1Weight = graph.addNode(layerPrefix + "attn.qkv.1.weight", NodeType::Parameter);
@@ -109,6 +110,7 @@ ComputationGraph YModel2GraphBuilder::buildYModel2Graph(
         // FFN
         int upWeight = graph.addNode(layerPrefix + "ffn.up.weight", NodeType::Parameter);
         auto upNode = graph.getNode(upWeight);
+        // YModel2使用gate和up合并的权重，因此维度是intermediate_size * 2
         upNode->setAttribute("shape", "[" + std::to_string(intermediate_size * 2) + ", " + std::to_string(hidden_size) + "]");
         
         int downWeight = graph.addNode(layerPrefix + "ffn.down.weight", NodeType::Parameter);

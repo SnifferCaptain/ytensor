@@ -58,10 +58,9 @@ std::shared_ptr<YTensorBase> GraphExecutor::executeNode(std::shared_ptr<Node> no
             if (inputTensors.size() != 2) {
                 throw std::runtime_error("Add requires 2 inputs");
             }
-            // 简单实现：假设形状兼容
-            auto result = std::make_shared<YTensorBase>(*inputTensors[0]);
-            // TODO: 实现加法操作
-            return result;
+            // 基础实现：直接返回第一个输入作为占位
+            // TODO: 实现实际的加法操作
+            return inputTensors[0];
         }
         
         case NodeType::Output: {
@@ -73,11 +72,12 @@ std::shared_ptr<YTensorBase> GraphExecutor::executeNode(std::shared_ptr<Node> no
         }
         
         default:
-            // 其他节点类型暂时不实现，返回空指针
+            // 其他节点类型暂未实现
+            // 在生产环境中，应该抛出异常而不是返回占位值
             std::cout << "Warning: Node type " << nodeTypeToString(type) 
-                     << " not implemented yet" << std::endl;
+                     << " not implemented, returning first input as placeholder" << std::endl;
             if (!inputTensors.empty()) {
-                return inputTensors[0];  // 暂时直接返回第一个输入
+                return inputTensors[0];
             }
             return nullptr;
     }

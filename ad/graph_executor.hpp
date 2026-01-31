@@ -13,6 +13,8 @@ namespace yt {
 namespace ad {
 
 // 计算图执行器
+// 注意：当前执行器是一个基础实现，主要用于演示图的执行流程
+// 大部分算子的实际计算逻辑尚未实现，需要根据具体需求补充
 class GraphExecutor {
 public:
     GraphExecutor(const ComputationGraph& graph) : graph_(graph) {}

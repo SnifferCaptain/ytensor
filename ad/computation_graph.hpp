@@ -130,10 +130,10 @@ public:
             }
         }
         
-        // 拓扑排序
-        while (!queue.empty()) {
-            int current = queue.back();
-            queue.pop_back();
+        // 拓扑排序 (使用FIFO顺序)
+        size_t front = 0;
+        while (front < queue.size()) {
+            int current = queue[front++];
             result.push_back(current);
             
             auto node = nodes_.at(current);
