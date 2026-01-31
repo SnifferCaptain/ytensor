@@ -2,6 +2,19 @@
 
 > 现代 C++20 轻量级多维张量库 —— header-only，极简集成，科研/竞赛/工程皆宜
 
+## 新增功能：自动微分与计算图
+
+YTensor 现在支持基于计算图的自动微分功能！
+
+- 🔀 **计算图构建**：使用节点(Node)和边(Edge)表示计算流程
+- 💾 **JSON序列化**：计算图可序列化为JSON格式，便于存储和传输
+- 🔄 **运行时灵活性**：避免编译时确定，支持动态构建模型
+- 📊 **YModel2示例**：包含完整的语言模型计算图构建示例
+
+详见 [ad/README.md](ad/README.md)
+
+---
+
 ## 特性亮点
 
 - 🧩 **Header-only**：只需 `ytensor_single.hpp`，零第三方依赖，直接 `#include` 即用
@@ -285,6 +298,17 @@ io.close();
 
 ```tree
 ./
+├─ ad/                                              | 自动微分与计算图模块 ✨
+│  ├─ ad.hpp                                        | 主头文件
+│  ├─ graph_node.hpp/cpp                            | 节点类定义
+│  ├─ graph_edge.hpp/cpp                            | 边类定义
+│  ├─ computation_graph.hpp/cpp                     | 计算图类
+│  ├─ graph_executor.hpp/cpp                        | 图执行器
+│  ├─ ymodel2_graph_builder.hpp/cpp                 | YModel2图构建器
+│  ├─ test_graph.cpp                                | 测试程序
+│  ├─ test_integration.cpp                          | 集成测试程序
+│  ├─ CMakeLists.txt                                | 构建配置
+│  └─ README.md                                     | 模块文档
 ├─ example/                                         | 示例代码
 │  ├─ convert/                                      | 数据格式转换脚本
 │  │   ├─ __init__.py                               |
