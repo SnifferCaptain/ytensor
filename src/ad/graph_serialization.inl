@@ -165,6 +165,15 @@ inline void GraphSerializer::serializeNode(const std::shared_ptr<GraphNode>& nod
     builder.addKey("name");
     builder.addString(node->getName());
     
+    // 序列化节点类型
+    builder.addKey("nodeType");
+    switch(node->getNodeType()) {
+        case NodeType::Operator: builder.addString("operator"); break;
+        case NodeType::Parameter: builder.addString("parameter"); break;
+        case NodeType::Input: builder.addString("input"); break;
+        case NodeType::Constant: builder.addString("constant"); break;
+    }
+    
     // 序列化输入边ID列表
     builder.addKey("inputEdges");
     builder.beginArray();

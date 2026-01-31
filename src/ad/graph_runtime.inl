@@ -11,13 +11,13 @@ namespace yt {
 namespace ad {
 
 inline std::shared_ptr<GraphNode> ComputationGraph::createNode(
-    const std::string& nodeId, const std::string& opType) {
+    const std::string& nodeId, const std::string& opType, NodeType nodeType) {
     
     if (nodes_.find(nodeId) != nodes_.end()) {
         throw std::runtime_error("Node with ID '" + nodeId + "' already exists");
     }
     
-    auto node = std::make_shared<GraphNode>(nodeId, opType);
+    auto node = std::make_shared<GraphNode>(nodeId, opType, nodeType);
     nodes_[nodeId] = node;
     return node;
 }
@@ -128,7 +128,34 @@ inline void ComputationGraph::executeNode(const std::string& nodeId) {
         return;  // 节点已执行，跳过
     }
     
-    // 获取算子执行器
+    // 参数节点和常量节点不需要执行，直接标记为已执行
+    if (node->getNodeType() == NodeType::Parameter || node->getNodeType() == NodeType::Constant) {
+        // 将节点数据传递到输出边
+        if (node->hasData() && !node->getOutputEdges().empty()) {
+            for (auto& edge : node->getOutputEdges()) {
+                edge->setTensor(node->getData());
+            }
+        }
+        node->setExecuted(true);
+        return;
+    }
+    
+    // 输入节点：从输入边读取数据，传递到输出边
+    if (node->getNodeType() == NodeType::Input) {
+        auto inputEdges = node->getInputEdges();
+        auto outputEdges = node->getOutputEdges();
+        if (!inputEdges.empty() && !outputEdges.empty()) {
+            if (inputEdges[0]->hasTensor()) {
+                for (auto& edge : outputEdges) {
+                    edge->setTensor(inputEdges[0]->getTensor());
+                }
+            }
+        }
+        node->setExecuted(true);
+        return;
+    }
+    
+    // 算子节点：执行计算
     auto it = operators_.find(node->getOpType());
     if (it == operators_.end()) {
         throw std::runtime_error("Operator '" + node->getOpType() + "' not registered");

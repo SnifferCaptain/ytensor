@@ -6,8 +6,8 @@
 namespace yt {
 namespace ad {
 
-inline GraphNode::GraphNode(const std::string& nodeId, const std::string& opType)
-    : nodeId_(nodeId), opType_(opType), name_(nodeId) {
+inline GraphNode::GraphNode(const std::string& nodeId, const std::string& opType, NodeType nodeType)
+    : nodeId_(nodeId), opType_(opType), name_(nodeId), nodeType_(nodeType) {
 }
 
 inline void GraphNode::addInputEdge(std::shared_ptr<GraphEdge> edge) {

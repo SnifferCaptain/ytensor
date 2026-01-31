@@ -18,7 +18,15 @@ namespace ad {
 class GraphEdge;
 class ComputationGraph;
 
-/// @brief 计算图节点类，表示计算图中的一个算子
+/// @brief 节点类型枚举
+enum class NodeType {
+    Operator,      // 算子节点（如add, mul, matmul等）
+    Parameter,     // 参数节点（如权重、偏置）
+    Input,         // 输入节点
+    Constant       // 常量节点
+};
+
+/// @brief 计算图节点类，表示计算图中的一个节点（算子、参数、输入或常量）
 class GraphNode {
 public:
     /// @brief 默认构造函数
@@ -26,16 +34,21 @@ public:
 
     /// @brief 构造一个计算图节点
     /// @param nodeId 节点的唯一标识符
-    /// @param opType 算子类型（如 "add", "mul", "matmul", "relu" 等）
-    GraphNode(const std::string& nodeId, const std::string& opType);
+    /// @param opType 算子类型（如 "add", "mul", "matmul", "relu" 等）或节点类型
+    /// @param nodeType 节点类型（默认为Operator）
+    GraphNode(const std::string& nodeId, const std::string& opType, NodeType nodeType = NodeType::Operator);
 
     /// @brief 获取节点ID
     /// @return 节点的唯一标识符
     std::string getId() const { return nodeId_; }
 
-    /// @brief 获取算子类型
+    /// @brief 获取算子类型或节点类型描述
     /// @return 算子类型字符串
     std::string getOpType() const { return opType_; }
+
+    /// @brief 获取节点类型
+    /// @return 节点类型
+    NodeType getNodeType() const { return nodeType_; }
 
     /// @brief 设置节点名称（可选，用于调试和可视化）
     /// @param name 节点名称
@@ -91,13 +104,32 @@ public:
     /// @brief 重置节点执行状态
     void reset() { executed_ = false; }
 
+    /// @brief 设置节点数据（用于参数节点和常量节点）
+    /// @param tensor 张量数据
+    void setData(const YTensorBase& tensor) { data_ = tensor; hasData_ = true; }
+
+    /// @brief 获取节点数据
+    /// @return 张量数据的引用
+    YTensorBase& getData() { return data_; }
+
+    /// @brief 获取节点数据（const版本）
+    /// @return 张量数据的const引用
+    const YTensorBase& getData() const { return data_; }
+
+    /// @brief 检查节点是否有数据
+    /// @return 如果有数据返回true
+    bool hasData() const { return hasData_; }
+
 private:
     std::string nodeId_;                                      // 节点唯一标识符
-    std::string opType_;                                      // 算子类型
+    std::string opType_;                                      // 算子类型或节点类型描述
     std::string name_;                                        // 节点名称（可选）
+    NodeType nodeType_ = NodeType::Operator;                  // 节点类型
     std::vector<std::shared_ptr<GraphEdge>> inputEdges_;     // 输入边列表
     std::vector<std::shared_ptr<GraphEdge>> outputEdges_;    // 输出边列表
-    std::unordered_map<std::string, std::any> parameters_;   // 节点参数
+    std::unordered_map<std::string, std::any> parameters_;   // 节点参数（用于算子配置）
+    YTensorBase data_;                                        // 节点数据（用于参数和常量节点）
+    bool hasData_ = false;                                    // 是否有数据
     bool executed_ = false;                                   // 是否已执行
 };
 

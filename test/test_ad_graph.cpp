@@ -14,6 +14,7 @@ public:
     ComputationGraph graph;
     
     // 构建一个简单的 FFN 层计算图: y = gelu(x @ W1) @ W2
+    // 现在 W1 和 W2 是参数节点，不是边
     void build() {
         std::cout << "构建计算图..." << std::endl;
         
@@ -21,28 +22,32 @@ public:
         registerOperators();
         
         // 创建节点
-        auto input_node = graph.createNode("input", "input");
-        auto matmul1_node = graph.createNode("matmul1", "matmul");
-        auto gelu_node = graph.createNode("gelu", "gelu");
-        auto matmul2_node = graph.createNode("matmul2", "matmul");
-        auto output_node = graph.createNode("output", "output");
+        auto input_node = graph.createNode("input", "input", NodeType::Input);
+        auto w1_node = graph.createNode("w1", "parameter", NodeType::Parameter);
+        auto w2_node = graph.createNode("w2", "parameter", NodeType::Parameter);
+        auto matmul1_node = graph.createNode("matmul1", "matmul", NodeType::Operator);
+        auto gelu_node = graph.createNode("gelu", "gelu", NodeType::Operator);
+        auto matmul2_node = graph.createNode("matmul2", "matmul", NodeType::Operator);
+        auto output_node = graph.createNode("output", "output", NodeType::Operator);
         
         // 设置节点名称
-        input_node->setName("输入层");
+        input_node->setName("输入节点");
+        w1_node->setName("权重参数W1");
+        w2_node->setName("权重参数W2");
         matmul1_node->setName("第一层矩阵乘法");
         gelu_node->setName("GELU激活");
         matmul2_node->setName("第二层矩阵乘法");
-        output_node->setName("输出层");
+        output_node->setName("输出节点");
         
-        // 创建边连接  
-        auto x_edge = graph.createEdge("x", nullptr, input_node);           // 输入数据
-        auto x_out = graph.createEdge("x_out", input_node, matmul1_node);   // 从input到matmul1
-        auto w1_edge = graph.createEdge("w1", nullptr, matmul1_node);       // 权重1
-        auto h1_edge = graph.createEdge("h1", matmul1_node, gelu_node);     // 中间结果1
-        auto h2_edge = graph.createEdge("h2", gelu_node, matmul2_node);     // 激活后结果
-        auto w2_edge = graph.createEdge("w2", nullptr, matmul2_node);       // 权重2
-        auto y_edge = graph.createEdge("y", matmul2_node, output_node);     // 输出
-        auto out_edge = graph.createEdge("out", output_node, nullptr);      // 最终输出
+        // 创建边连接：现在 w1 和 w2 是节点，需要通过边连接到算子
+        auto x_edge = graph.createEdge("x", nullptr, input_node);              // 外部输入 -> input节点
+        auto x_to_mm1 = graph.createEdge("x_to_mm1", input_node, matmul1_node); // input -> matmul1
+        auto w1_to_mm1 = graph.createEdge("w1_to_mm1", w1_node, matmul1_node); // w1参数 -> matmul1
+        auto h1_edge = graph.createEdge("h1", matmul1_node, gelu_node);        // matmul1 -> gelu
+        auto h2_edge = graph.createEdge("h2", gelu_node, matmul2_node);        // gelu -> matmul2
+        auto w2_to_mm2 = graph.createEdge("w2_to_mm2", w2_node, matmul2_node); // w2参数 -> matmul2
+        auto y_edge = graph.createEdge("y", matmul2_node, output_node);        // matmul2 -> output
+        auto out_edge = graph.createEdge("out", output_node, nullptr);         // output -> 外部输出
         
         std::cout << "计算图构建完成！" << std::endl;
         std::cout << "  节点数: " << graph.nodeCount() << std::endl;
@@ -50,15 +55,6 @@ public:
     }
     
     void registerOperators() {
-        // 输入算子：直接传递输入
-        graph.registerOperator("input", [](const GraphNode& node,
-                                           const std::vector<std::shared_ptr<GraphEdge>>& inputs,
-                                           std::vector<std::shared_ptr<GraphEdge>>& outputs) {
-            if (!inputs.empty() && !outputs.empty()) {
-                outputs[0]->setTensor(inputs[0]->getTensor());
-            }
-        });
-        
         // 输出算子：直接传递输出
         graph.registerOperator("output", [](const GraphNode& node,
                                             const std::vector<std::shared_ptr<GraphEdge>>& inputs,
@@ -122,8 +118,15 @@ public:
         
         std::cout << "\n节点列表:" << std::endl;
         for (const auto& [id, node] : graph.getNodes()) {
+            std::string nodeTypeStr;
+            switch(node->getNodeType()) {
+                case NodeType::Operator: nodeTypeStr = "算子"; break;
+                case NodeType::Parameter: nodeTypeStr = "参数"; break;
+                case NodeType::Input: nodeTypeStr = "输入"; break;
+                case NodeType::Constant: nodeTypeStr = "常量"; break;
+            }
             std::cout << "  [" << id << "] " << node->getName() 
-                      << " (类型: " << node->getOpType() << ")" << std::endl;
+                      << " (类型: " << nodeTypeStr << ", op: " << node->getOpType() << ")" << std::endl;
             std::cout << "    输入边: ";
             for (const auto& edge : node->getInputEdges()) {
                 std::cout << edge->getId() << " ";
@@ -142,13 +145,13 @@ public:
             if (edge->getFromNode()) {
                 std::cout << edge->getFromNode()->getId();
             } else {
-                std::cout << "<INPUT>";
+                std::cout << "<EXTERNAL_INPUT>";
             }
             std::cout << " -> ";
             if (edge->getToNode()) {
                 std::cout << edge->getToNode()->getId();
             } else {
-                std::cout << "<OUTPUT>";
+                std::cout << "<EXTERNAL_OUTPUT>";
             }
             std::cout << std::endl;
         }
@@ -159,11 +162,15 @@ public:
     YTensorBase forward(const YTensorBase& x, const YTensorBase& w1, const YTensorBase& w2) {
         std::cout << "执行前向传播..." << std::endl;
         
-        // 准备输入
+        // 设置参数节点的数据
+        auto w1_node = graph.getNode("w1");
+        auto w2_node = graph.getNode("w2");
+        w1_node->setData(w1);
+        w2_node->setData(w2);
+        
+        // 准备输入（只有外部输入x）
         std::unordered_map<std::string, YTensorBase> inputs = {
-            {"x", x},
-            {"w1", w1},
-            {"w2", w2}
+            {"x", x}
         };
         
         // 执行计算图

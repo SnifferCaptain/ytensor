@@ -36,9 +36,10 @@ public:
 
     /// @brief 创建一个新节点
     /// @param nodeId 节点ID（必须唯一）
-    /// @param opType 算子类型
+    /// @param opType 算子类型或节点描述
+    /// @param nodeType 节点类型（默认为Operator）
     /// @return 节点指针
-    std::shared_ptr<GraphNode> createNode(const std::string& nodeId, const std::string& opType);
+    std::shared_ptr<GraphNode> createNode(const std::string& nodeId, const std::string& opType, NodeType nodeType = NodeType::Operator);
 
     /// @brief 创建一个新边
     /// @param edgeId 边ID（必须唯一）
