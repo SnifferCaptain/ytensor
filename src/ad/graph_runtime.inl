@@ -7,8 +7,8 @@
 #include <queue>
 #include <sstream>
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 inline std::shared_ptr<GraphNode> ComputationGraph::createNode(
     const std::string& nodeId, const std::string& opType, NodeType nodeType) {

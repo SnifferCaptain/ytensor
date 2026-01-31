@@ -16,8 +16,8 @@
 #include "graph_edge.hpp"
 #include "../ytensor_base.hpp"
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 // 算子执行函数类型定义
 // 输入：节点指针，输入边列表，输出边列表

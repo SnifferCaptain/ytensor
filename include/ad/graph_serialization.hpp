@@ -13,8 +13,8 @@
 
 #include "graph_runtime.hpp"
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 /// @brief 简单的JSON构建器类（用于序列化）
 class JsonBuilder {

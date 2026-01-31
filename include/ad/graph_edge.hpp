@@ -9,8 +9,8 @@
 #include <memory>
 #include "../ytensor_base.hpp"
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 // 前向声明
 class GraphNode;

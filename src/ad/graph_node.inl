@@ -3,8 +3,8 @@
 * @brief: 计算图节点的实现
 ***************/
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 inline GraphNode::GraphNode(const std::string& nodeId, const std::string& opType, NodeType nodeType)
     : nodeId_(nodeId), opType_(opType), name_(nodeId), nodeType_(nodeType) {

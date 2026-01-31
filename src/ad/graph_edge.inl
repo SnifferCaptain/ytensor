@@ -3,8 +3,8 @@
 * @brief: 计算图边的实现
 ***************/
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 inline GraphEdge::GraphEdge(const std::string& edgeId,
                             std::shared_ptr<GraphNode> fromNode,

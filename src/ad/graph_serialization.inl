@@ -6,8 +6,8 @@
 #include <iomanip>
 #include <typeinfo>
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 // JsonBuilder 实现
 inline void JsonBuilder::beginObject() {

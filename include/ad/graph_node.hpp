@@ -11,8 +11,8 @@
 #include <unordered_map>
 #include <any>
 
-namespace yt {
-namespace ad {
+namespace yt{
+namespace ad{
 
 // 前向声明
 class GraphEdge;
