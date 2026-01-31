@@ -14,5 +14,5 @@ build
 doc/index.html
 doc/build.py
 doc/template.html
-ad/build/
-*.json
+test/build/
+test/*.json
