@@ -326,7 +326,7 @@ io.close();
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
 │  ├─ ytensor_core.hpp                              | YTensor核心类
 │  └─ ytensor_types.hpp                             | 类型相关
-├─ lib/                                             | 预实例化静态库
+├─ lib/                                             | 预实例化静态库 【规划中】
 │  ├─ instantiate_config.def                        | 实例化配置文件
 │  ├─ ytensor_instantiate.cpp                       | 实例化实现
 │  ├─ CMakeLists.txt                                | 构建配置
@@ -344,15 +344,17 @@ io.close();
 │  └─ ytensor.inl                                   | YTensor实现[已废弃]
 └─ ytensor.hpp                                      | 主头文件，包含所有必要的头文件
 ```
-> YTensor 版本：0.5【非正式】  
+> YTensor 版本：0.6【非正式】  
 **注意： 当前版本仍在快速迭代中，部分不常用或底层API 可能会有较大变动，请密切关注更新日志。**
 
 ---
 
 ## 最新更新
 
-- 数据类型现在有了规范格式。
-- 精简了YTensorBase的后端代码，添加矩阵乘法的后端选项。
+- 优化了avx2指令集sgemv的速度，现在能在单核4.2GHz的zen3+架构CPU上达到约20~35GFlops的连续性能，以及15%到50%损耗的非连续性能。
+- 为bf16等库内浮点数添加了更多支持，可以使用OpenMP的更多功能。
+- 优化了非POD类型的支持，现在可以直接存储std::string等类型的张量到文件。
+
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！
