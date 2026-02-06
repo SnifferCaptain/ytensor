@@ -598,3 +598,31 @@ public:
 };
 
 } // namespace std
+
+#ifdef _OPENMP
+
+// float16
+#pragma omp declare reduction(+ : yt::float16 : omp_out = omp_out + omp_in) initializer(omp_priv = yt::float16(0.0f))
+#pragma omp declare reduction(* : yt::float16 : omp_out = omp_out * omp_in) initializer(omp_priv = yt::float16(1.0f))
+#pragma omp declare reduction(min : yt::float16 : omp_out = (omp_out < omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float16(std::numeric_limits<float>::max()))
+#pragma omp declare reduction(max : yt::float16 : omp_out = (omp_out > omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float16(std::numeric_limits<float>::lowest()))
+
+// float8_e5m2
+#pragma omp declare reduction(+ : yt::float8_e5m2 : omp_out = omp_out + omp_in) initializer(omp_priv = yt::float8_e5m2(0.0f))
+#pragma omp declare reduction(* : yt::float8_e5m2 : omp_out = omp_out * omp_in) initializer(omp_priv = yt::float8_e5m2(1.0f))
+#pragma omp declare reduction(min : yt::float8_e5m2 : omp_out = (omp_out < omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e5m2(std::numeric_limits<float>::max()))
+#pragma omp declare reduction(max : yt::float8_e5m2 : omp_out = (omp_out > omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e5m2(std::numeric_limits<float>::lowest()))
+
+// float8_e4m3
+#pragma omp declare reduction(+ : yt::float8_e4m3 : omp_out = omp_out + omp_in) initializer(omp_priv = yt::float8_e4m3(0.0f))
+#pragma omp declare reduction(* : yt::float8_e4m3 : omp_out = omp_out * omp_in) initializer(omp_priv = yt::float8_e4m3(1.0f))
+#pragma omp declare reduction(min : yt::float8_e4m3 : omp_out = (omp_out < omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e4m3(std::numeric_limits<float>::max()))
+#pragma omp declare reduction(max : yt::float8_e4m3 : omp_out = (omp_out > omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e4m3(std::numeric_limits<float>::lowest()))
+
+// float8_e8m0 (无符号)
+#pragma omp declare reduction(+ : yt::float8_e8m0 : omp_out = omp_out + omp_in) initializer(omp_priv = yt::float8_e8m0(0.0f))
+#pragma omp declare reduction(* : yt::float8_e8m0 : omp_out = omp_out * omp_in) initializer(omp_priv = yt::float8_e8m0(1.0f))
+#pragma omp declare reduction(min : yt::float8_e8m0 : omp_out = (omp_out < omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e8m0(std::numeric_limits<float>::max()))
+#pragma omp declare reduction(max : yt::float8_e8m0 : omp_out = (omp_out > omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::float8_e8m0(0.0f))
+
+#endif // _OPENMP

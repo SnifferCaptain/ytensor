@@ -19,7 +19,7 @@
 #include "../include/kernel/broadcast.hpp"
 #include "../include/kernel/type_dispatch.hpp"
 #if YT_USE_AVX2
-#include "../include/kernel/gemm.hpp"
+#include "../include/kernel/gemm/sgemm.hpp"
 #endif
 
 namespace yt{

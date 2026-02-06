@@ -1,66 +1,56 @@
-# Global Constants
+# Constants and Configuration
 
-This document describes the global constants and configurations in the `yt::infos` namespace.
+This document lists global constants and configuration items in the `yt::infos` namespace.
 
-## File Format Constants
+## Mathematical Constants
 
-```cpp
-static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
-static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
-```
-
-## Random Number Generation
+Predefined constants corresponding to types (if the type supports it):
 
 ```cpp
-inline std::mt19937 gen = std::mt19937(std::random_device{}());
-inline std::mutex rngMutex;
+namespace yt::infos {
+    // Epsilon (machine precision)
+    constexpr double EPSILON = 1e-6; 
+    
+    // PI
+    constexpr double PI = 3.14159265358979323846;
+}
 ```
 
-Locks are required during use:
-```cpp
-std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
-// Use yt::infos::gen
-```
+## Global Configuration
 
-## Rounding Modes
+### BF16 Rounding Mode
 
-```cpp
-enum class RoundMode {
-    nearest = 0,     // Round to nearest
-    nearestEven = 1, // Banker's rounding (default)
-    truncate = 2     // Direct truncation
-};
-
-static constexpr RoundMode roundMode = RoundMode::nearestEven;
-```
-
-:::note
-This rounding mode mainly affects the conversion and calculation precision for the **BF16 (bfloat16)** type.
-`nearestEven` (banker's rounding) generally provides better statistical unbiasedness than simple rounding or truncation.
-:::
-
-## Parallelization Threshold
+This configuration affects the type conversion behavior of `bfloat16`.
 
 ```cpp
-static constexpr double minParOps = 29609.;  // Minimum number of operations for parallelization
+namespace yt::infos {
+    // Control bfloat16 rounding mode
+    // true: Round to nearest even number (Round-to-Nearest-Even) - Default behavior
+    // false: Truncate (retaining high 16 bits) - Faster but less precise
+    inline bool& bf16_rounding_mode() {
+        static bool mode = true;
+        return mode;
+    }
+}
 ```
 
-## Operation Cost Constants
+**Usage**:
 
 ```cpp
-// Floating-point operations
-static constexpr double flopAdd = 1.;
-static constexpr double flopMul = 1.;
-static constexpr double flopDiv = 1.;
-
-// Integer operations
-static constexpr double ilopAdd = 3.38;
-static constexpr double ilopMul = 3.38;
+// Set to truncate mode (global effect)
+yt::infos::bf16_rounding_mode() = false;
 ```
 
----
+### Random Seed
+
+Used to initialize the pseudo-random number generator for `YTensor`.
+
+*Note: Currently, different factory functions might use independent internal generators, but this constant may be used for globally resetting seeds in the future.*
+
+*(See implementation of `YTensorFactory` for details)* 
+
+--- 
 
 ## Related Content
 
-- [Backend System](./backend.mdx) - MatmulBackend configuration
-- [Type Registration](./types.mdx) - TypeRegItem structure
+- [Type System](./types.mdx) - bfloat16 type definition

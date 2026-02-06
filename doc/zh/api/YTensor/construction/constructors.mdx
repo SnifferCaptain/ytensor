@@ -12,11 +12,11 @@ YTensor();
 
 ### 核心功能描述
 
-创建一个空的张量，所有维度大小为 0，不分配数据内存。
+创建一个默认张量，所有维度大小初始化为 1 (例如 `[1, 1, ..., 1]`)，以增强代码鲁棒性。不分配数据内存。
 
 ### 返回值
 
-- 返回一个形状为 `[0, 0, ..., 0]`（dim个0）的空张量
+- 返回一个形状为 `[1, 1, ..., 1]`（dim个1）的张量
 
 ### 使用示例
 
@@ -28,8 +28,8 @@ void example() {
     yt::YTensor<float, 3> empty;
     
     // 查看形状
-    std::cout << empty.shape()[0] << std::endl;  // 输出: 0
-    std::cout << empty.size() << std::endl;      // 输出: 0
+    std::cout << empty.shape()[0] << std::endl;  // 输出: 1
+    std::cout << empty.size() << std::endl;      // 输出: 1
     
     // 可以后续使用 reserve() 分配空间
     empty.reserve(2, 3, 4);
@@ -40,7 +40,7 @@ void example() {
 ### 注意事项
 
 :::warning
-空张量不能直接访问元素，必须先使用 `reserve()` 方法分配空间。
+默认张量虽然形状为 1，但可能未分配数据内存（或仅分配占位符）。请在使用前确保正确分配空间 (`reserve` 或赋值)。
 :::
 
 ---
@@ -339,7 +339,7 @@ void example() {
 
 | 构造方式 | 示例 | 内存分配 | 适用场景 |
 | --- | --- | --- | --- |
-| 默认构造 | `YTensor<float, 2>()` | 否 | 延迟初始化 |
+| 默认构造 | `YTensor<float, 2>()` | 否 | 延迟初始化 (维度置1) |
 | 可变参数 | `YTensor<float, 2>(3, 4)` | 是 | 最常用，推荐 |
 | vector | `YTensor<float, 2>(shape)` | 是 | 动态形状 |
 | 初始化列表 | `YTensor<float, 2>{3, 4}` | 是 | 简洁语法 |
@@ -357,7 +357,7 @@ void example() {
 int main() {
     // 1. 默认构造
     yt::YTensor<float, 2> empty;
-    std::cout << "Empty size: " << empty.size() << std::endl;  // 0
+    std::cout << "Empty size: " << empty.size() << std::endl;  // 1
     
     // 2. 可变参数构造（推荐）
     yt::YTensor<float, 2> matrix(3, 4);

@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <tuple>
 #include <functional>
+#include <vector>
 #include <memory>
 
 namespace yt::infos{
@@ -68,6 +69,9 @@ namespace yt::infos{
         std::function<void(void*)> destructor = nullptr;           // 调用析构函数
         std::function<void(void*, const void*)> copyConstruct = nullptr;  // placement new + 拷贝构造
         std::function<void(void*)> defaultConstruct = nullptr;     // placement new + 默认构造
+        // IO序列化支持（用于非POD类型的文件存储）
+        std::function<std::vector<char>(const void*)> serialize = nullptr;      // 对象 -> 字节序列
+        std::function<void(void*, const char*, size_t)> deserialize = nullptr;  // 字节序列 -> 对象
     };
 
     /// @brief 类型注册表
@@ -120,12 +124,6 @@ namespace yt::infos{
     #endif
     ;
 
-    /// @brief 控制是否启用YTensorBase模板显式实例化（预创建常用类型模板）
-    /// 优点：减少编译时间，可能提升运行时性能（减少模板实例化开销）
-    /// 设为0则不预创建，所有模板按需实例化
-    #ifndef YT_PREINSTANTIATE_TEMPLATES
-        #define YT_PREINSTANTIATE_TEMPLATES 1
-    #endif
 }// namespace yt::infos
 
 /////////////// extern includes ///////////////

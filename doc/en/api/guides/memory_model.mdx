@@ -6,7 +6,7 @@ This guide provides an in-depth look at YTensor's memory model, including views,
 
 ### 1. Shared Memory (Views)
 
-Most shape operations return a **view**, sharing the underlying memory with the original tensor:
+Most shape operations return **views**, which share the underlying memory with the original tensor:
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4);
@@ -15,17 +15,17 @@ auto a = YTensor<float, 2>::ones(3, 4);
 auto b = a.slice(0, 0, 2);       // Slice
 auto c = a.transpose();           // Transpose
 auto d = a.permute({1, 0});       // Permute dimensions
-auto e = a.view(12);              // Reshape (requires contiguity)
+auto e = a.view(12);              // Reshape (requires contiguous)
 auto f = a.unsqueeze(0);          // Add dimension
 
-// Modifying a view affects the original tensor
+// Modifying the view affects the original tensor
 b.at(0, 0) = 99.0f;
 std::cout << a.at(0, 0);  // Output: 99.0
 ```
 
 ### 2. Shallow Copy
 
-Assignment and copy constructors are **shallow copies** by default:
+Assignment and copy construction are **shallow copies** by default:
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4);
@@ -51,21 +51,21 @@ std::cout << a.at(0, 0);  // Output: 1.0 (unaffected)
 
 ## Contiguity
 
-### What is Contiguity?
+### What is Contiguous?
 
-A contiguous tensor's memory layout follows row-major (C-style) order, where the logical stride matches the actual physical stride.
+A contiguous tensor's memory layout follows row-major (C-style) order, where logical stride matches physical stride.
 
-### Detecting Contiguity
+### Checking Contiguity
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4);
 std::cout << a.isContiguous();  // true
 
 auto t = a.transpose();
-std::cout << t.isContiguous();  // false (transposing breaks contiguity)
+std::cout << t.isContiguous();  // false (transpose breaks contiguity)
 ```
 
-### Converting to Contiguous
+### Making Contiguous
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4).transpose();
@@ -79,7 +79,7 @@ a.contiguous_();
 
 ### Contiguity and view()
 
-`view()` requires the tensor to be contiguous; otherwise, it throws an exception:
+`view()` requires the tensor to be contiguous, otherwise it throws an exception:
 
 ```cpp
 auto t = tensor.transpose();
@@ -87,7 +87,7 @@ auto t = tensor.transpose();
 
 // ✅ Correct approach
 auto v = t.contiguous().view(new_shape);
-// Or use reshape() (handles contiguity automatically)
+// Or use reshape() (automatically handles contiguity)
 auto v = t.reshape(new_shape);
 ```
 
@@ -96,17 +96,17 @@ auto v = t.reshape(new_shape);
 ## Memory Layout
 
 ```
-YTensorBase internal structure:
+YTensorBase Internal Structure:
 +------------------+
-|  _data           | → shared_ptr pointing to actual data block
+|  _data           | → shared_ptr points to actual data block
 +------------------+
 |  _offset         |   Start offset of the view in the data block
 +------------------+
 |  _shape[]        |   Size of each dimension
 +------------------+
-|  _stride[]       |   Stride of each dimension (physical memory stride)
+|  _stride[]       |   Stride of each dimension (offset required to move to next element)
 +------------------+
-|  _element_size   |   Bytes per single element
+|  _element_size   |   Size of a single element in bytes
 +------------------+
 |  _dtype          |   Type name string
 +------------------+
@@ -114,9 +114,9 @@ YTensorBase internal structure:
 
 ---
 
-## Summary of Memory Behavior by Operation
+## Memory Behavior Summary
 
-| Operation | Returns | Shared Memory |
+| Operation | Return Type | Shared Memory |
 | --- | --- | --- |
 | `slice()` | View | ✅ Yes |
 | `transpose()` | View | ✅ Yes |
@@ -129,12 +129,12 @@ YTensorBase internal structure:
 | `contiguous()` | View or New Tensor | Depends on contiguity |
 | `concat()` | New Tensor | ❌ No |
 | Arithmetic `+`,`-`,`*`,`/` | New Tensor | ❌ No |
-| In-place `+=`,`-=` etc. | Self Reference | ✅ Yes (modifies original) |
+| In-place ops `+=`,`-=` etc. | Self Reference | ✅ Yes (modifies original data) |
 
 ---
 
 ## Related Content
 
-- [Shape Operation: Reshape](../YTensor/shape/reshape.mdx) - contiguous, view details
-- [Shape Operation: Slicing](../YTensor/shape/slice.mdx) - slice view behavior
-- [Common Pitfalls](./common_pitfalls.mdx) - Avoid memory-related errors
+- [Shape Ops: Reshape](../YTensor/shape/reshape.mdx) - contiguous, view details
+- [Shape Ops: Slice](../YTensor/shape/slice.mdx) - slice view behavior
+- [Common Pitfalls](./common_pitfalls.mdx) - Avoiding memory errors

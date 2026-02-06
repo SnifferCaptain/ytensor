@@ -620,6 +620,141 @@ inline bool YTensorIO::writeIndex(std::vector<uint64_t> offsets) {
     return true;
 }
 
+// ============ Save 后端 ============
+
+/// @brief 保存POD类型张量（dense格式）
+/// @param tensor 要保存的张量（必须是连续的）
+/// @param info 张量信息（将被填充）
+/// @return 压缩后的数据
+inline std::vector<char> YTensorIO::encDense(const yt::YTensorBase& tensor) {
+    size_t dataSize = tensor.size() * tensor.elementSize();
+    std::vector<char> rawData(dataSize);
+    std::memcpy(rawData.data(), tensor.contiguous().data(), dataSize);
+    return compressData(rawData);
+}
+
+/// @brief 保存非POD类型张量（map格式）
+/// @param tensor 要保存的张量（必须是连续的）
+/// @param info 张量信息（将被填充）
+/// @return 压缩后的数据，如果失败返回空vector且info.tensorType为空
+inline std::vector<char> YTensorIO::encMap(const yt::YTensorBase& tensor) {
+    auto typeInfoOpt = yt::types::getTypeInfo(tensor.dtype());
+    if (!typeInfoOpt || !typeInfoOpt->get().serialize) {
+        if (verbose) {
+            std::cerr << "Error: Non-POD type '" << tensor.dtype() 
+                      << "' has no serialize function registered. Cannot save to file." << std::endl;
+        }
+        return {};
+    }
+    
+    const auto& typeInfo = typeInfoOpt->get();
+    auto serialize = typeInfo.serialize;
+    
+    size_t elemCount = tensor.size();
+    size_t elemSize = tensor.elementSize();
+    const char* srcData = reinterpret_cast<const char*>(tensor.data());
+    
+    // 序列化所有元素，同时计算偏移量
+    std::vector<uint64_t> offsets(elemCount);
+    std::vector<char> serializedData;
+    
+    for (size_t i = 0; i < elemCount; ++i) {
+        offsets[i] = static_cast<uint64_t>(serializedData.size());
+        auto serialized = serialize(srcData + i * elemSize);
+        serializedData.insert(serializedData.end(), serialized.begin(), serialized.end());
+    }
+    
+    // 拼接：先是偏移量数组，再是序列化数据
+    std::vector<char> rawData(elemCount * sizeof(uint64_t) + serializedData.size());
+    std::memcpy(rawData.data(), offsets.data(), elemCount * sizeof(uint64_t));
+    std::memcpy(rawData.data() + elemCount * sizeof(uint64_t), serializedData.data(), serializedData.size());
+    
+    return compressData(rawData);
+}
+
+/// @brief 加载POD类型张量（dense格式）
+/// @param tensor 输出张量
+/// @param info 张量信息
+/// @param rawData 解压后的原始数据
+/// @return 是否成功
+inline bool YTensorIO::loadDense(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
+    std::vector<int> shape(info.shape.begin(), info.shape.end());
+    tensor = yt::YTensorBase(shape, info.typeName);
+    if (!rawData.empty()) {
+        std::memcpy(tensor.data(), rawData.data(), rawData.size());
+    }
+    return true;
+}
+
+/// @brief 加载非POD类型张量（map格式）
+/// @param tensor 输出张量
+/// @param info 张量信息
+/// @param rawData 解压后的原始数据
+/// @return 是否成功
+inline bool YTensorIO::loadMap(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
+    auto typeInfoOpt = yt::types::getTypeInfo(info.typeName);
+    if (!typeInfoOpt) {
+        if (verbose) {
+            std::cerr << "Error: Type '" << info.typeName << "' is not registered" << std::endl;
+        }
+        return false;
+    }
+    
+    const auto& typeInfo = typeInfoOpt->get();
+    auto deserialize = typeInfo.deserialize;
+    
+    if (!deserialize) {
+        if (verbose) {
+            std::cerr << "Error: Non-POD type '" << info.typeName 
+                      << "' has no deserialize function registered. Cannot load from file." << std::endl;
+        }
+        return false;
+    }
+    
+    // 计算元素个数
+    std::vector<int> shape(info.shape.begin(), info.shape.end());
+    size_t elemCount = 1;
+    for (int s : shape) elemCount *= s;
+    
+    // 解析偏移量数组
+    if (rawData.size() < elemCount * sizeof(uint64_t)) {
+        if (verbose) {
+            std::cerr << "Error: Map data corrupted (offset array too small)" << std::endl;
+        }
+        return false;
+    }
+    
+    const uint64_t* offsets = reinterpret_cast<const uint64_t*>(rawData.data());
+    const char* serializedData = rawData.data() + elemCount * sizeof(uint64_t);
+    size_t serializedDataSize = rawData.size() - elemCount * sizeof(uint64_t);
+    
+    // 创建张量（会调用defaultConstruct）
+    tensor = yt::YTensorBase(shape, info.typeName);
+    
+    // 反序列化每个元素
+    char* dstData = reinterpret_cast<char*>(tensor.data());
+    size_t elemSize = tensor.elementSize();
+    
+    // 如果有析构函数，先析构默认构造的对象
+    auto destructor = typeInfo.destructor;
+    
+    for (size_t i = 0; i < elemCount; ++i) {
+        size_t elemStart = offsets[i];
+        size_t elemEnd = (i + 1 < elemCount) ? offsets[i + 1] : serializedDataSize;
+        size_t elemLen = elemEnd - elemStart;
+        
+        // 析构默认构造的对象
+        if (destructor) {
+            destructor(dstData + i * elemSize);
+        }
+        
+        // 反序列化
+        deserialize(dstData + i * elemSize, serializedData + elemStart, elemLen);
+    }
+    
+    return true;
+}
+
 inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& name) {
     if (!_file.is_open() || _fileMode == yt::io::Read) {
         if (verbose) {
@@ -651,7 +786,6 @@ inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& na
     info.name = tensorName;
     info.typeName = tensor.dtype();
     info.typeSize = static_cast<int32_t>(tensor.elementSize());
-    info.tensorType = "dense";
     
     // 获取形状
     auto shape = contiguousTensor.shape();
@@ -663,22 +797,31 @@ inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& na
     // 准备并压缩张量数据
     info.compressMethod = checkCompressMethod(yt::io::compressMethod);
     
-    // 获取原始数据
-    size_t dataSize = contiguousTensor.size() * contiguousTensor.elementSize();
-    std::vector<char> rawData(dataSize);
-    std::memcpy(rawData.data(), contiguousTensor.data(), dataSize);
+    // 检查是否为非POD类型，选择对应的保存后端
+    auto typeInfoOpt = yt::types::getTypeInfo(tensor.dtype());
+    bool isPOD = !typeInfoOpt || typeInfoOpt->get().isPOD;
     
-    // 压缩数据
-    auto compressedData = compressData(rawData);
-    if (compressedData.empty() && dataSize > 0) {
+    std::vector<char> compressedData;
+    if (isPOD) {
+        info.tensorType = "dense";
+        compressedData = encDense(contiguousTensor);
+    } else {
+        info.tensorType = "map";
+        compressedData = encMap(contiguousTensor);
+        if (info.tensorType.empty()) {
+            return false;  // encMap 失败
+        }
+    }
+    
+    if (compressedData.empty() && info.uncompressedSize > 0) {
         if (verbose) {
             std::cerr << "Error: Failed to compress tensor data" << std::endl;
         }
         return false;
     }
     
-    info.compressedSize = static_cast<uint64_t>(compressedData.size());  
-    info.uncompressedSize = dataSize;
+    info.compressedSize = static_cast<uint64_t>(compressedData.size());
+    info.uncompressedSize = contiguousTensor.size() * contiguousTensor.elementSize();
     
     // dataOffset 将在 close 函数中重新计算
     
@@ -719,8 +862,6 @@ inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
         }
         return false;
     }
-
-    std::vector<int> shape(info.shape.begin(), info.shape.end());
     
     std::vector<char> rawData;
     
@@ -741,24 +882,12 @@ inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
         return false; // Decompression failed
     }
     
-    // 检查tensorSize是否与解压的数据大小匹配
-    if (info.uncompressedSize != rawData.size()) {
-        if (verbose) {
-            std::cerr << "Error: YTensorBase data size mismatch. Expected " << info.uncompressedSize 
-                      << ", got " << rawData.size() <<
-                       ". Please check your file." << std::endl;
-        }
-        return false; // Decompressed data size mismatch
+    // 根据tensorType选择加载后端
+    if (info.tensorType == "map") {
+        return loadMap(tensor, info, rawData);
+    } else {
+        return loadDense(tensor, info, rawData);
     }
-    
-    // 使用文件中的 dtype 创建张量
-    tensor = yt::YTensorBase(shape, info.typeName);
-    
-    // Copy decompressed data to tensor
-    if (!rawData.empty()) {
-        std::memcpy(tensor.data(), rawData.data(), rawData.size());
-    }
-    return true;
 }
 
 // 模板方法实现：加载 YTensor<T, dim>

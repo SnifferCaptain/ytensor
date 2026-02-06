@@ -47,6 +47,16 @@ static YTensorBase concat(const std::vector<YTensorBase>& tensors, int axis = 0)
 3. 所有张量的 `dtype()` 必须相同
 4. 除拼接轴外，所有张量在其他维度上的大小必须相同
 
+### 数据类型支持
+
+`concat` 支持所有已注册的数据类型，包括：
+- **POD 类型** (如 `float`, `int`): 使用高效的 `memcpy`。
+- **非 POD 类型** (如 `std::string`): 使用注册的 `copyConstruct` 进行深拷贝。
+
+:::note
+对于非 POD 类型，必须确保该类型已通过 `yt::types::registerType` 正确注册，并提供了拷贝构造函数。
+:::
+
 ### 使用示例
 
 ```cpp

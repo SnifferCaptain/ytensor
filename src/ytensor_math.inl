@@ -10,7 +10,7 @@
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
 #if YT_USE_AVX2
-#include "../include/kernel/gemm.hpp"
+#include "../include/kernel/gemm/sgemm.hpp"
 #endif
 
 template <typename T, int dim>
@@ -72,6 +72,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
             }, other);                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), std::string(#OP) + "=");                        \
+            return *this;                                                                             \
         }                                                                                             \
     }
                                                                                                       
@@ -138,6 +139,7 @@ auto yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
     else {
         std::string typeName = typeid(T).name();
         throwOperatorNotSupport(typeName, "%");
+        return yt::kernel::broadcast([](const T& a, const T&) { return a; }, *this, other);
     }
 }
 
@@ -161,6 +163,7 @@ yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator%=(const yt::Y
     else {
         std::string typeName = typeid(T).name();
         throwOperatorNotSupport(typeName, "%=");
+        return const_cast<yt::YTensor<T, std::max(dim, dim1)>&>(*reinterpret_cast<const yt::YTensor<T, std::max(dim, dim1)>*>(this)); /* unreachable */
     }
 }
 
@@ -179,6 +182,7 @@ auto yt::YTensor<T, dim>::operator%(const T& other) const {
     else {
         std::string typeName = typeid(T).name();
         throwOperatorNotSupport(typeName, "%");
+        return yt::kernel::broadcast([](const T& a, const T&) { return a; }, *this, other); /* unreachable */
     }
 }
 
@@ -202,6 +206,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator%=(const T& other){
     else {
         std::string typeName = typeid(T).name();
         throwOperatorNotSupport(typeName, "%=");
+        return *this; /* unreachable */
     }
 }
 
@@ -316,7 +321,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) 
         #pragma omp parallel for simd  proc_bind(close)
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
-            T sum = 0;
+            T sum = T(0);
             #pragma omp simd reduction(+:sum)
             for (int j = 0; j < _shape[axis]; j++) {
                 auto subCoord = coord;
@@ -329,7 +334,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) 
         #pragma omp simd
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
-            T sum = 0;
+            T sum = T(0);
             #pragma omp simd reduction(+:sum)
             for (int j = 0; j < _shape[axis]; j++) {
                 auto subCoord = coord;
@@ -383,7 +388,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requir
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             auto base = this->offset(coord);
-            T sum = 0;
+            T sum = T(0);
             #pragma omp simd reduction(+:sum)
             for (size_t j = 0; j < offsets.size(); j++) {
                 sum += this->atData_(base + offsets[j]);
@@ -395,7 +400,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requir
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             auto base = this->offset(coord);
-            T sum = 0;
+            T sum = T(0);
             #pragma omp simd reduction(+:sum)
             for (size_t j = 0; j < offsets.size(); j++) {
                 sum += this->atData_(base + offsets[j]);
@@ -408,7 +413,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requir
 
 template <typename T, int dim>
 T yt::YTensor<T, dim>::sum(int) const requires (dim == 1) {
-    T sum = 0;
+    T sum = T(0);
     int max = this->size();
     if (max * 1. > yt::infos::minParOps){
         #pragma omp parallel for reduction(+:sum) proc_bind(close)
@@ -436,7 +441,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::mean(int axis) const requires (dim > 1)
     yt::kernel::parallelFor(0, max, [&](int i){
         // 使用Welford算法进行均值计算
         auto coord = op.toCoord(i);
-        T mean = 0;
+        T mean = T(0);
         for (int j = 0; j < axisLen; j++) {
             auto subCoord = coord;
             subCoord[axis] = j;
@@ -472,10 +477,10 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::mean(std::vector<int> axes) const requi
 template <typename T, int dim>
 T yt::YTensor<T, dim>::mean(int) const requires (dim == 1) {
     int n = this->size();
-    if (n == 0) return static_cast<T>(0);
+    if (n == 0) return T(0);
     
     // 使用Welford算法进行均值计算，提高数值稳定性
-    T mean_val = 0;
+    T mean_val = T(0);
     for (int i = 0; i < n; i++) {
         T x = this->at(i);
         mean_val += (x - mean_val) / static_cast<T>(i + 1);

@@ -297,3 +297,10 @@ inline yt::bfloat16::operator float() const {
 inline uint16_t yt::bfloat16::to_bits() const {
     return m_value;
 }
+
+#ifdef _OPENMP
+#pragma omp declare reduction(+ : yt::bfloat16 : omp_out = omp_out + omp_in) initializer(omp_priv = yt::bfloat16(0.0f))
+#pragma omp declare reduction(* : yt::bfloat16 : omp_out = omp_out * omp_in) initializer(omp_priv = yt::bfloat16(1.0f))
+#pragma omp declare reduction(min : yt::bfloat16 : omp_out = (omp_out < omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::bfloat16(std::numeric_limits<float>::max()))
+#pragma omp declare reduction(max : yt::bfloat16 : omp_out = (omp_out > omp_in) ? omp_out : omp_in) initializer(omp_priv = yt::bfloat16(std::numeric_limits<float>::lowest()))
+#endif // _OPENMP

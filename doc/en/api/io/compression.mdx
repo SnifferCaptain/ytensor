@@ -1,82 +1,30 @@
-# Compression Methods
+# Compression
 
-This document describes the compression configuration options in the `yt::io` namespace.
+YTensor uses **Zlib** for data compression.
 
-## Global Configuration
+## Strategy
 
-```cpp
-namespace yt::io {
-    static int8_t compressLevel = Z_DEFAULT_COMPRESSION;
-    static std::string compressMethod = "";
-    static bool verbose = false;
-}
-```
-
-## Compression Levels
+When saving a tensor, you can select whether to compress:
 
 ```cpp
-yt::io::compressLevel = Z_DEFAULT_COMPRESSION;  // Default level
-yt::io::compressLevel = Z_BEST_SPEED;           // Best speed
-yt::io::compressLevel = Z_BEST_COMPRESSION;     // Best compression
+io.save(tensor, "name", true);  // Enable compression (Default)
+io.save(tensor, "name", false); // Disable compression
 ```
 
-## Compression Methods
+### Compression Implementation
 
-| Method | Description |
-| --- | --- |
-| `""` | No compression |
-| `"zlib"` | Compress with zlib |
-| `"zlibfloat"` | Optimized compression for floating point numbers |
+*   **Only Payload Data is compressed**.
+*   The Tensor Header and File Index are always uncompressed plain text/binary for quick scanning.
+*   Compression is performed per-tensor chunk.
 
-:::warning
-**zlib for Floating-point Numbers**
+### Performance Trade-off
 
-The standard `zlib` compression algorithm usually performs poorly on floating-point data (and may even lead to an increase in size) because the binary representation of floating-point numbers has high entropy.
-For floating-point tensors, it is recommended to use the `"zlibfloat"` method or keep it empty (no compression).
-:::
+| Feature | `compress=true` | `compress=false` |
+| --- | --- | --- |
+| **Space** | 30% - 90% (depends on sparsity) | 100% (raw data) |
+| **Write Speed** | Slower (CPU bound) | Fastest (IO bound) |
+| **Read Speed** | Slower (Decompression overhead) | Fastest (Direct read) |
 
-```cpp
-yt::io::compressMethod = "zlib";  // Enable compression
-```
-
-## Helper Functions
-
-```cpp
-// Check and correct compression method
-std::string checkCompressMethod(const std::string& method);
-
-// Compress data
-template<typename T>
-std::vector<char> compressData(const std::vector<T>& input);
-
-// Decompress data
-std::vector<char> decompressData(const std::vector<char>& input, 
-                                  size_t decompressedSize = 0,
-                                  const std::string& method = "");
-```
-
-## Usage Example
-
-```cpp
-#include "ytensor_io.hpp"
-
-void save_compressed() {
-    // Set compression
-    yt::io::compressMethod = "zlib";
-    yt::io::compressLevel = 6;
-    
-    auto tensor = yt::YTensor<float, 2>::randn({100, 100});
-    
-    yt::io::YTensorIO writer;
-    writer.open("compressed.yt", yt::io::Write);
-    writer.save(tensor, "data");
-    writer.close();
-}
-```
-
----
-
-## Related Content
-
-- [YTensorIO](./YTensorIO.mdx) - IO class
-- [File Format](./file_format.mdx) - .yt file specification
+**Recommendation**:
+*   For disk storage: **Enable** (space is expensive).
+*   For IPC / Temp files: **Disable** (latency is critical).

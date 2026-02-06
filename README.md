@@ -308,7 +308,8 @@ io.close();
 │  │   └─ backward.hpp                              | google堆栈追踪库，可以移除，方便调试用
 │  ├─ kernel/                                       | 内核实现
 │  │   ├─ broadcast.hpp                             | 广播运算
-│  │   ├─ gemm.hpp                                  | 矩阵乘法
+│  │   ├─ gemm                                      | 矩阵乘法
+│  │   │   └─ sgemm.hpp                             | 单精度矩阵乘法
 │  │   ├─ math_utils.hpp                            | 数学工具[待完善]
 │  │   ├─ matmul_single.hpp [deprecated]            | 单个矩阵乘法[已经弃用，来自sgemm.c]
 │  │   ├─ memory_utils.hpp                          | 内存分配
@@ -323,8 +324,13 @@ io.close();
 │  ├─ ytensor_infos.hpp                             | 全局设置信息
 │  ├─ ytensor_io.hpp                                | 文件存储系统
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
-│  ├─ ytensor_preinstantiate.hpp                    | 预实例化[待完善]
+│  ├─ ytensor_core.hpp                              | YTensor核心类
 │  └─ ytensor_types.hpp                             | 类型相关
+├─ lib/                                             | 预实例化静态库
+│  ├─ instantiate_config.def                        | 实例化配置文件
+│  ├─ ytensor_instantiate.cpp                       | 实例化实现
+│  ├─ CMakeLists.txt                                | 构建配置
+│  └─ README.md                                     | 使用说明
 ├─ single-header/                                   | 单头文件版本
 │  ├─ ytensor_single.hpp                            | 单头文件版本的YTensor，包含所有功能
 │  └─ packer.py                                     | 单头文件打包脚本

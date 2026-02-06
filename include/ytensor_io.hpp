@@ -79,7 +79,7 @@ struct TensorInfo {
     uint64_t dataOffset;                // 在文件中的偏移
     uint64_t compressedSize;            // 压缩后的数据大小
     std::string compressMethod;         // 压缩算法
-    uint64_t uncompressedSize;          // 原始数据大小（通过shape计算得到，单位是字节）
+    uint64_t uncompressedSize;          // 原始张量数据大小（通过shape计算得到，单位是字节，不等于解压后的字节数）
     std::vector<char> compressedData;   // 为空表示数据在磁盘，使用dataOffset读取；不为空表示数据在内存中，且原dataOffset失效。
 };
 
@@ -158,6 +158,18 @@ protected:
     /// @param tensorStructureOffsets 张量结构体的文件偏移量
     /// @return 如果成功，返回true；否则返回false。
     bool writeIndex(std::vector<uint64_t> tensorStructureOffsets);
+
+    /// @brief 保存POD类型张量（dense格式）
+    static std::vector<char> encDense(const yt::YTensorBase& tensor);
+    
+    /// @brief 保存非POD类型张量（map格式）
+    static std::vector<char> encMap(const yt::YTensorBase& tensor);
+    
+    /// @brief 加载POD类型张量（dense格式）
+    static bool loadDense(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData);
+    
+    /// @brief 加载非POD类型张量（map格式）
+    static bool loadMap(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData);
 
 protected:
     std::fstream _file;                     // 文件流

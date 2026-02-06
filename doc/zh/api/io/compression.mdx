@@ -26,13 +26,10 @@ yt::io::compressLevel = Z_BEST_COMPRESSION;     // 最高压缩率
 | --- | --- |
 | `""` | 不压缩 |
 | `"zlib"` | 使用 zlib 压缩 |
-| `"zlibfloat"` | 浮点数优化压缩 |
 
-:::warning
-**zlib 对浮点数的支持**
-
-标准的 `zlib` 压缩算法对浮点数数据的压缩效果通常较差（甚至可能导致体积增大），因为浮点数的二进制表示具有高熵特性。
-对于浮点数张量，建议使用 `"zlibfloat"` 方法，或保留为空（不压缩）。
+:::info
+**压缩建议**
+浮点数不适合压缩，但是像 `string` 这种就比较适合。
 :::
 
 ```cpp
@@ -41,19 +38,82 @@ yt::io::compressMethod = "zlib";  // 启用压缩
 
 ## 辅助函数
 
-```cpp
-// 检查并修正压缩方法
-std::string checkCompressMethod(const std::string& method);
+这些函数处于 `yt::io` 命名空间下，用于手动处理数据的压缩与解压。
 
-// 压缩数据
+### checkCompressMethod
+
+检查给定的压缩方法名称是否有效。
+
+```cpp
+std::string checkCompressMethod(const std::string& method);
+```
+
+- **功能**: 验证 `method` 字符串是否被支持（当前仅支持 `"zlib"`）。
+- **参数**: `method` - 待检查的压缩方法名。
+- **返回值**: 如果方法有效（如 `"zlib"`），返回该方法名；如果无效或为空，返回空字符串 `""`（表示不压缩）。
+- **示例**:
+  ```cpp
+  auto m = yt::io::checkCompressMethod("zlib"); // 返回 "zlib"
+  auto m2 = yt::io::checkCompressMethod("lz4"); // 返回 "" (不支持)
+  ```
+
+### compressData
+
+将原始数据进行压缩。
+
+```cpp
 template<typename T>
 std::vector<char> compressData(const std::vector<T>& input);
-
-// 解压数据
-std::vector<char> decompressData(const std::vector<char>& input, 
-                                  size_t decompressedSize = 0,
-                                  const std::string& method = "");
 ```
+
+- **功能**: 使用当前全局配置 (`yt::io::compressMethod`, `yt::io::compressLevel`) 压缩 `input` 数据。
+- **参数**: `input` - 待压缩的数据向量。
+- **返回值**: 压缩后的字节流。如果未启用压缩，则返回数据的原始字节拷贝。
+- **示例**:
+  ```cpp
+  std::vector<int> data = {1, 2, 3, 4, 5};
+  yt::io::compressMethod = "zlib";
+  auto compressed = yt::io::compressData(data);
+  ```
+
+### decompressData
+
+将压缩数据解压回原始字节流。
+
+```cpp
+// 1. 从内存解压
+std::vector<char> decompressData(
+    const std::vector<char>& input,
+    size_t decompressedSize = 0,
+    const std::string& method = ""
+);
+```
+
+- **功能**: 解压内存中的数据。
+- **参数**:
+  - `input`: 压缩后的数据。
+  - `decompressedSize`: 解压后的预期大小（字节）。若为 0，则根据内部逻辑推断（通常需要正确设置）。
+  - `method`: 压缩方法名。若为空，则尝试自动检测或不解压。
+- **返回值**: 解压后的原始**字节**数据（`char` 向量）。使用者通常需要将其 `reinterpret_cast` 为原始类型。
+
+```cpp
+// 2. 从文件解压
+std::vector<char> decompressData(
+    std::fstream& file,
+    size_t compressedSize,
+    size_t decompressedSize = 0,
+    bool seek = true,
+    const std::string& method = ""
+);
+```
+
+- **功能**: 直接从文件流中读取并解压数据。
+- **参数**:
+  - `file`: 已打开的文件流对象。
+  - `compressedSize`: 压缩数据在文件中的长度。
+  - `decompressedSize`: 预期解压后的大小。
+  - `seek`: 是否在读取前移动文件指针（通常设为 true）。
+  - `method`: 压缩方法。
 
 ## 使用示例
 

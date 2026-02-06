@@ -124,12 +124,12 @@ bool save(const yt::YTensor<T, dim>& tensor, const std::string& name);
 ### 使用示例
 
 ```cpp
-auto t = yt::YTensor<float, 2>::eye(3);
+auto t = yt::YTensor<float, 2>::ones(3, 3);
 yt::io::YTensorIO io;
 io.open("data.yt", yt::io::Write);
 
-// 保存张量，命名为 "identity_matrix"
-io.save(t, "identity_matrix");
+// 保存张量，命名为 "my_tensor"
+io.save(t, "my_tensor");
 
 io.close();
 ```
@@ -139,10 +139,12 @@ io.close();
 *   必须在 `yt::io::Write` 或 `yt::io::Append` 模式下调用。
 *   张量名称不能与文件中已有的张量重复（追加模式下需特别注意）。
 
-:::warning
-**非 POD 类型支持限制**
-目前的 IO 系统主要针对 POD (Plain Old Data) 类型（如 `float`, `int`, `double`）设计。虽然支持 `string` 或其他复杂类型，但可能无法跨平台或跨版本兼容。
-建议仅对数值型张量使用 IO 功能。
+:::info
+**非 POD 类型支持**
+从 v0.1 版本开始，YTensor IO 支持非 POD 类型（如 `std::string`）的存储。
+这需要该类型在注册时提供了 `serialize` 和 `deserialize` 回调函数。详情请参考 [类型注册](../infos/types.mdx)。
+
+**注意**：由于当前实现限制，`serialize` 生成的数据大小不应显著大于对象的内存大小（`sizeof(T)`），否则在读取时可能会因缓冲区预分配不足而导致失败。建议仅存储短字符串或小型结构体。
 :::
 
 ---

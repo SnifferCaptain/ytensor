@@ -12,17 +12,17 @@
 
 其标准数学公式为：
 
-$$
-\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V
-$$
+```
+Attention(Q, K, V) = softmax(Q * K^T / sqrt(d_k)) * V
+```
 
-在此处，`scale` 参数对应公式中的 $\frac{1}{\sqrt{d_k}}$（通常为 `1 / sqrt(head_dim)`）。如果提供了 mask，则在 softmax 之前应用 mask（通常将 mask 位置设为负无穷）。
+在此处，`scale` 参数对应公式中的 `1 / sqrt(d_k)`（通常为 `1 / sqrt(head_dim)`）。如果提供了 mask，则在 softmax 之前应用 mask（通常将 mask 位置设为负无穷）。
 
 等价于执行以下步骤：
-1. 计算 $S = Q \times K^T \times \text{scale}$
-2. 若有 mask，则 $S = S + \text{mask}$
-3. 计算 $P = \text{softmax}(S)$
-4. 输出 $O = P \times V$
+1. 计算 S = Q * K^T * scale
+2. 若有 mask，则 S = S + mask
+3. 计算 P = softmax(S)
+4. 输出 O = P * V
 
 ## 函数签名
 

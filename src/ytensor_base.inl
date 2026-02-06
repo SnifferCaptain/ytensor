@@ -317,8 +317,12 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     // 检查类型是否相同
     bool sameType = (_dtype == src._dtype);
     
-    // 如果类型相同且两者都是完全连续且无重叠，直接memcpy
-    if (sameType && this->isContiguous() && src.isContiguous() && !mayOverlap) {
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    bool isPOD = !typeInfoOpt || typeInfoOpt->get().isPOD;
+    
+    // 如果类型相同且两者都是完全连续且无重叠且是POD类型，直接memcpy
+    if (sameType && this->isContiguous() && src.isContiguous() && !mayOverlap && isPOD) {
         std::memcpy(_data.get() + _offset * dstElemSize, 
                     src._data.get() + src._offset * srcElemSize, 
                     static_cast<size_t>(total) * dstElemSize);
@@ -336,22 +340,53 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
         
         // 复制源数据到临时缓冲区（处理非连续情况）
         if (src.isContiguous()) {
-            std::memcpy(tempBuffer.get(), srcBasePtr + src._offset * srcElemSize, 
-                        static_cast<size_t>(total) * srcElemSize);
+            if (isPOD) {
+                std::memcpy(tempBuffer.get(), srcBasePtr + src._offset * srcElemSize, 
+                            static_cast<size_t>(total) * srcElemSize);
+            } else {
+                // 非POD：使用copyConstruct
+                auto copyConstruct = typeInfoOpt->get().copyConstruct;
+                if (!copyConstruct) {
+                    throw std::runtime_error("copy_: non-POD type has no copyConstruct registered");
+                }
+                for (int i = 0; i < total; ++i) {
+                    copyConstruct(tempBuffer.get() + i * srcElemSize, 
+                                  srcBasePtr + (src._offset + i) * srcElemSize);
+                }
+            }
         } else {
             auto srcLogicStride = src.stride();
-            yt::kernel::parallelFor(0, total, [&](int index) {
-                size_t srcIndex = src._offset;
-                size_t remaining = static_cast<size_t>(index);
-                for (int i = 0; i < d; i++) {
-                    int coord = static_cast<int>((remaining / srcLogicStride[i]) % src._shape[i]);
-                    srcIndex += coord * src._stride[i];
-                    remaining = remaining % srcLogicStride[i];
+            if (isPOD) {
+                yt::kernel::parallelFor(0, total, [&](int index) {
+                    size_t srcIndex = src._offset;
+                    size_t remaining = static_cast<size_t>(index);
+                    for (int i = 0; i < d; i++) {
+                        int coord = static_cast<int>((remaining / srcLogicStride[i]) % src._shape[i]);
+                        srcIndex += coord * src._stride[i];
+                        remaining = remaining % srcLogicStride[i];
+                    }
+                    std::memcpy(tempBuffer.get() + index * srcElemSize, 
+                                srcBasePtr + srcIndex * srcElemSize, 
+                                srcElemSize);
+                });
+            } else {
+                // 非POD：使用copyConstruct（不能并行，因为copyConstruct可能不是线程安全的）
+                auto copyConstruct = typeInfoOpt->get().copyConstruct;
+                if (!copyConstruct) {
+                    throw std::runtime_error("copy_: non-POD type has no copyConstruct registered");
                 }
-                std::memcpy(tempBuffer.get() + index * srcElemSize, 
-                            srcBasePtr + srcIndex * srcElemSize, 
-                            srcElemSize);
-            });
+                for (int index = 0; index < total; ++index) {
+                    size_t srcIndex = src._offset;
+                    size_t remaining = static_cast<size_t>(index);
+                    for (int i = 0; i < d; i++) {
+                        int coord = static_cast<int>((remaining / srcLogicStride[i]) % src._shape[i]);
+                        srcIndex += coord * src._stride[i];
+                        remaining = remaining % srcLogicStride[i];
+                    }
+                    copyConstruct(tempBuffer.get() + index * srcElemSize, 
+                                  srcBasePtr + srcIndex * srcElemSize);
+                }
+            }
         }
         srcBasePtr = tempBuffer.get();
     }
@@ -387,17 +422,40 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
         return srcIndex;
     };
     
-    // 如果类型相同，使用memcpy
+    // 如果类型相同
     if (sameType) {
-        yt::kernel::parallelFor(0, total, [&](int index) {
-            size_t dstIndex = calcDstIndex(index);
-            size_t srcIndex = calcSrcIndex(index);
-            std::memcpy(dstBasePtr + dstIndex * dstElemSize, 
-                        srcBasePtr + srcIndex * srcElemSize, 
-                        dstElemSize);
-        });
+        if (isPOD) {
+            // POD类型：使用memcpy
+            yt::kernel::parallelFor(0, total, [&](int index) {
+                size_t dstIndex = calcDstIndex(index);
+                size_t srcIndex = calcSrcIndex(index);
+                std::memcpy(dstBasePtr + dstIndex * dstElemSize, 
+                            srcBasePtr + srcIndex * srcElemSize, 
+                            dstElemSize);
+            });
+        } else {
+            // 非POD类型：使用拷贝赋值（先析构再拷贝构造）
+            auto copyConstruct = typeInfoOpt->get().copyConstruct;
+            auto destructor = typeInfoOpt->get().destructor;
+            if (!copyConstruct) {
+                throw std::runtime_error("copy_: non-POD type has no copyConstruct registered");
+            }
+            for (int index = 0; index < total; ++index) {
+                size_t dstIndex = calcDstIndex(index);
+                size_t srcIndex = calcSrcIndex(index);
+                if (destructor) {
+                    destructor(dstBasePtr + dstIndex * dstElemSize);
+                }
+                copyConstruct(dstBasePtr + dstIndex * dstElemSize, 
+                              srcBasePtr + srcIndex * srcElemSize);
+            }
+        }
     } else {
         // 类型不同，需要类型转换
+        // 注意：非POD类型之间的类型转换不支持
+        if (!isPOD) {
+            throw std::runtime_error("copy_: type conversion not supported for non-POD types");
+        }
         // 使用 dispatch2 进行双类型分发
         yt::kernel::dispatch2OrThrow<yt::types::AllNumericTypes, yt::types::AllNumericTypes>(
             src._dtype, _dtype,
@@ -1043,6 +1101,16 @@ inline YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<in
 
 inline YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype) {
     YTensorBase op(shape, dtype);
+    
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(dtype);
+    if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
+        // 非POD类型：构造函数已调用defaultConstruct，不应再用memset覆盖
+        // 保持默认构造状态即可
+        return op;
+    }
+    
+    // POD类型：直接memset清零
     size_t total = op.size();
     size_t bytes = total * op.elementSize();
     if (op._data) std::memset(op._data.get(), 0, bytes);
@@ -1141,6 +1209,10 @@ inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, 
     // 创建结果张量
     YTensorBase result(resultShape, first.dtype());
     
+    // 检查是否为非POD类型
+    auto typeInfoOpt = yt::types::getTypeInfo(first.dtype());
+    bool isPOD = !typeInfoOpt || typeInfoOpt->get().isPOD;
+    
     // 逐个复制数据 - 需要正确处理非连续的 slice
     int offset = 0;
     size_t elemSize = first._element_size;
@@ -1164,17 +1236,40 @@ inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, 
         char* resultData = result._data.get();
         const char* srcData = src._data.get() + src._offset * elemSize;
         
-        for (size_t blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
-            // 计算 result 中的起始位置
-            // 在 result 中，每个块的起始偏移 = blockIdx * (totalAxisSize * blockSize) + offset * blockSize
-            size_t resultOffset = blockIdx * resultShape[axis] * blockSize + offset * blockSize;
+        if (isPOD) {
+            // POD类型：使用memcpy
+            for (size_t blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
+                size_t resultOffset = blockIdx * resultShape[axis] * blockSize + offset * blockSize;
+                size_t srcBlockOffset = blockIdx * axisSize * blockSize;
+                
+                std::memcpy(resultData + resultOffset * elemSize,
+                            srcData + srcBlockOffset * elemSize,
+                            axisSize * blockSize * elemSize);
+            }
+        } else {
+            // 非POD类型：使用copyConstruct
+            const auto& typeInfo = typeInfoOpt->get();
+            auto copyConstruct = typeInfo.copyConstruct;
+            auto destructor = typeInfo.destructor;
             
-            // 在 src 中，每个块的大小 = axisSize * blockSize
-            size_t srcBlockOffset = blockIdx * axisSize * blockSize;
+            if (!copyConstruct) {
+                throw std::runtime_error("[YTensorBase::concat] non-POD type has no copyConstruct registered");
+            }
             
-            std::memcpy(resultData + resultOffset * elemSize,
-                        srcData + srcBlockOffset * elemSize,
-                        axisSize * blockSize * elemSize);
+            for (size_t blockIdx = 0; blockIdx < numBlocks; ++blockIdx) {
+                size_t resultOffset = blockIdx * resultShape[axis] * blockSize + offset * blockSize;
+                size_t srcBlockOffset = blockIdx * axisSize * blockSize;
+                
+                // 逐元素拷贝构造
+                for (size_t i = 0; i < static_cast<size_t>(axisSize) * blockSize; ++i) {
+                    // 先析构默认构造的对象
+                    if (destructor) {
+                        destructor(resultData + (resultOffset + i) * elemSize);
+                    }
+                    copyConstruct(resultData + (resultOffset + i) * elemSize,
+                                  srcData + (srcBlockOffset + i) * elemSize);
+                }
+            }
         }
         
         offset += axisSize;

@@ -408,6 +408,56 @@ void registerType(const std::string& typeName, std::function<std::string(const v
     registry[typeid(T).name()] = std::move(item);
 }
 
+/// @brief registerType overload that accepts serialize/deserialize functions for IO support
+/// @tparam T 要注册的类型
+/// @param typeName 自定义类型名称
+/// @param formatter 格式化函数（用于打印）
+/// @param serialize 序列化函数：将对象转换为字节数组
+/// @param deserialize 反序列化函数：从字节数组恢复对象
+template<typename T>
+void registerType(const std::string& typeName,
+                  std::function<std::string(const void*)> formatter,
+                  std::function<std::vector<char>(const void*)> serialize,
+                  std::function<void(void*, const char*, size_t)> deserialize) {
+    auto& registry = yt::infos::getTypeRegistry();
+    int32_t typeSize = getTypeSize<T>();
+    
+    if (!formatter) {
+        if constexpr (yt::concepts::HAVE_OSTREAM<T>) {
+            formatter = [](const void* data) {
+                std::ostringstream oss;
+                const T* p = reinterpret_cast<const T*>(data);
+                oss << *p;
+                return oss.str();
+            };
+        }
+    }
+    
+    yt::infos::TypeRegItem item;
+    item.name = typeName;
+    item.size = typeSize;
+    item.toString = formatter;
+    item.isPOD = std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>;
+    item.serialize = serialize;
+    item.deserialize = deserialize;
+    
+    if (!item.isPOD) {
+        item.destructor = [](void* ptr) {
+            reinterpret_cast<T*>(ptr)->~T();
+        };
+        item.copyConstruct = [](void* dest, const void* src) {
+            new (dest) T(*reinterpret_cast<const T*>(src));
+        };
+        if constexpr (std::is_default_constructible_v<T>) {
+            item.defaultConstruct = [](void* dest) {
+                new (dest) T();
+            };
+        }
+    }
+    
+    registry[typeid(T).name()] = std::move(item);
+}
+
 /// @brief 将任意 dtype 的单个元素（原始数据指针）格式化为字符串，用于打印
 /// @param data 指向元素起始位置的原始指针
 /// @param dtype 元素类型名称（如 "float32"）

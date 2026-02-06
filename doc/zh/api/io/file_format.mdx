@@ -1,78 +1,187 @@
 # .yt 文件格式
 
-本文档介绍 YTensor 的二进制文件格式规范。
+本文档介绍 YTensor 的二进制文件格式（`.yt`）规范。本文档旨在提供足够的细节，使读者能够根据此规范自行实现 `.yt` 文件的解析器。
 
-## 文件标识
+## 1. 基础规范
 
-```cpp
-static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
-static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
-```
+- **字节序**: 所有多字节数值（`int32`, `uint64` 等）均采用 **小端序（Little-Endian）** 存储。
+- **字符串编码**: UTF-8。
+- **对齐**: 无强制对齐要求，数据紧密排列。
 
-## 文件结构
+## 2. 基础数据类型描述
 
-```
-+------------------+
-|   文件头 (Header) |
-+------------------+
-|   元数据 (JSON)   |
-+------------------+
-|   张量索引        |
-+------------------+
-|   张量数据 1      |
-+------------------+
-|   张量数据 2      |
-+------------------+
-|   ...             |
-+------------------+
-```
+为了描述文件结构，定义以下基础类型：
 
-## 文件头格式
+### 2.1 string
 
-| 偏移 | 大小 | 内容 |
-| --- | --- | --- |
-| 0 | 8 字节 | Magic: "YTENSORF" |
-| 8 | 1 字节 | 版本号 |
-| 9 | ... | 元数据长度 + JSON |
+变长字符串，由 **长度前缀** 和 **内容** 组成。
 
-## 张量索引
+| 组成 | 类型 | 字节数 | 说明 |
+|------|------|--------|------|
+| 长度 | `uint32_t` | 4 | 字符串内容的字节数 N |
+| 内容 | `char[]` | N | UTF-8 编码的文本内容（无 Null 结尾） |
 
-每个张量的索引包含：
-- 张量名称
-- 元素类型
-- 形状
-- 数据偏移
-- 压缩信息
+### 2.2 array[T]
 
-## 使用示例
+变长数组，由 **元素计数** 和 **连续元素** 组成。
 
-```cpp
-#include "ytensor_io.hpp"
-
-void verify_file() {
-    yt::io::YTensorIO reader;
-    reader.open("data.yt", yt::io::Read);
-    
-    // 验证文件格式
-    if (!reader.validateFile()) {
-        std::cerr << "Invalid file format!" << std::endl;
-        return;
-    }
-    
-    // 列出所有张量
-    auto names = reader.getTensorNames();
-    for (const auto& name : names) {
-        std::cout << "Tensor: " << name << std::endl;
-    }
-    
-    reader.close();
-}
-```
+| 组成 | 类型 | 字节数 | 说明 |
+|------|------|--------|------|
+| 计数 | `uint64_t` | 8 | 数组元素的个数 M |
+| 内容 | `T[]` | M * sizeof(T) | 紧密排列的元素序列 |
 
 ---
 
-## 相关内容
+## 3. 文件整体结构
 
-- [YTensorIO](./YTensorIO.mdx) - IO 类
-- [TensorInfo](./tensor_info.mdx) - 张量信息
-- [压缩方法](./compression.mdx) - 压缩配置
+`.yt` 文件由三部分组成，按顺序排列：
+
+1.  **文件头 (Header)**
+2.  **张量数据区 (Data Area)**
+3.  **索引表 (Footer/Index Table)**
+
+解析建议：通常建议先读取 **文件头** 验证格式，然后读取文件末尾的 **索引表** 获取所有张量的位置，最后根据偏移量随机读取 **张量数据**。
+
+---
+
+## 4. 详细结构定义
+
+### 4.1 文件头 (Header)
+
+文件的前 13+N 字节。
+
+| 偏移 (Offset) | 字段名 | 类型 | 说明 | 固定值/备注 |
+|---|---|---|---|---|
+| 0 | Magic | `char[8]` | 文件标识魔数 | `"YTENSORF"` |
+| 8 | Version | `uint8_t` | 格式版本号 | 当前为 `0` |
+| 9 | MetadataLen | `uint32_t` | 元数据长度 (L) | JSON 字符串的长度 |
+| 13 | Metadata | `char[L]` | 全局元数据 | JSON 格式字符串 |
+
+### 4.2 张量数据区 (Data Area)
+
+紧接在 Metadata 之后。包含多个连续或不连续的 **张量记录 (Tensor Record)**。
+只有通过 **索引表** 才能准确找到每个张量记录的起始位置。
+
+**单条张量记录 (Tensor Record) 结构：**
+
+| 顺序 | 字段名 | 类型 | 说明 | 示例 |
+|---|---|---|---|---|
+| 1 | Name | `string` | 张量名称 (Key) | `"weights"` |
+| 2 | DType | `string` | 元素类型名称 | `"float32"` |
+| 3 | ElemSize | `int32_t` | 单个元素的字节数 | `4` (for float32) |
+| 4 | TensorType | `string` | 张量存储类型 | `"dense"`, `"sparse"` |
+| 5 | Shape | `array[int32]`| 维度形状 | `[2, 3, 4]` |
+| 6 | Compress | `string` | 压缩算法 | `""` (无) 或 `"zlib"` |
+| 7 | Data | `array[byte]` | 张量内容的字节流 | 见下文数据布局 |
+
+> **注意**: `Data` 字段本身是一个 `array[byte]`，这意味着它以一个 8 字节的 `uint64_t` (数据长度) 开始，这也是压缩后的数据长度（如果启用了压缩）。
+
+### 4.3 索引表 (Footer)
+
+位于文件 **末尾**。解析器应从文件末尾向前读取。
+
+结构如下（从前向后在内存中的逻辑）：
+
+```
+[ Offset Table (N * 8 bytes) ] [ Tensor Count (4 bytes) ] [ EOF ]
+```
+
+| 位置 (相对于 EOF) | 大小 | 类型 | 说明 |
+|---|---|---|---|
+| -4 | 4 | `uint32_t` | **张量数量 N** |
+| -(4 + N*8) | N * 8 | `uint64_t[]`| **偏移表**：N 个偏移量，每个指向一个 张量记录 的起始字节 (Magic 后的绝对偏移) |
+
+**解析步骤：**
+1.  `seek` 到 `FileSize - 4`。
+2.  读取 `uint32_t` 得到张量数量 `N`。
+3.  `seek` 到 `FileSize - 4 - (N * 8)`。
+4.  读取 `N` 个 `uint64_t`，得到每个张量在文件中的绝对起始偏移量。
+
+---
+
+## 5. 载荷数据 (Payload) 布局
+
+张量记录中的 `Data` 部分（解压后）根据 `TensorType` 的不同有不同的布局：
+
+### 5.1 Dense 类型 (默认)
+
+最普通的密集张量。
+数据内容为：**行主序 (C-Order)** 排列的所有元素的原始字节。
+
+- **总字节数** = 元素总数 × ElemSize
+- **内容**: `[Elem(0,0,...)] [Elem(0,0,...1)] ...`
+
+### 5.2 Sparse 类型 (COO)
+
+稀疏张量。数据内容包含两部分：索引和值。
+存储格式序列化如下：
+
+1.  **Indices**: `array[uint64_t]` (展平的坐标索引)
+2.  **Values**: `array[T]` (非零元素的值)
+
+此时 `ElemSize` 仍指代 T 的大小。
+
+### 5.3 Map 类型
+
+用于存储非 POD 对象（如字符串列表）。`ElemSize` 固定为 `TypeSize` (通常由类型决定)。
+
+数据内容序列化如下（紧密排列，无额外的长度前缀）：
+
+1.  **Offsets**: `uint64_t[N]` 
+    *   前 N 个元素的起始偏移量（相对于 Values 部分的起始位置）。
+    *   第 i 个元素的长度可以通过 `offsets[i+1] - offsets[i]` 计算（最后一个元素截止到数据末尾）。
+2.  **Values**: 字节流 (所有对象序列化数据的拼接)
+
+**注意**: N 等于张量的元素总数，由 Header 中的 `Shape` 计算得出。读取时先根据 Shape 计算 N，读取 N*8 字节的 Offsets，剩余部分即为 Values。
+
+---
+
+## 6. 实现参考 (伪代码)
+
+任何语言的解析器都应遵循类似逻辑：
+
+```python
+def read_yt_file(path):
+    f = open(path, "rb")
+    
+    # 1. 校验 Header
+    magic = f.read(8)
+    if magic != b"YTENSORF": raise Error
+    version = read_uint8(f)
+    meta_len = read_uint32(f)
+    metadata = f.read(meta_len) # JSON
+    
+    # 2. 读取 Index
+    f.seek(-4, SEEK_END)
+    count = read_uint32(f)
+    
+    f.seek(-(4 + count * 8), SEEK_END)
+    offsets = []
+    for _ in range(count):
+        offsets.append(read_uint64(f))
+        
+    # 3. 读取 Tensor (示例读取第一个)
+    f.seek(offsets[0], SEEK_SET)
+    
+    name = read_string(f)
+    dtype_name = read_string(f)
+    elem_size = read_int32(f)
+    tensor_type = read_string(f)
+    
+    # 读取 shape (array[int32])
+    shape_dim = read_uint64(f) 
+    shape = [read_int32(f) for _ in range(shape_dim)]
+    
+    compress_method = read_string(f)
+    
+    # 读取 data (array[byte])
+    data_len = read_uint64(f)
+    raw_data = f.read(data_len)
+    
+    if compress_method == "zlib":
+        real_data = zlib.decompress(raw_data)
+    else:
+        real_data = raw_data
+        
+    return construct_tensor(name, dtype_name, shape, real_data)
+```

@@ -1,6 +1,6 @@
 #pragma once
 /***************
- * @file gemm.hpp
+ * @file sgemm.hpp
  * @brief 高性能GEMM矩阵乘法实现，支持自动布局检测
  * @author SnifferCaptain
  * @date 2025-12-31
@@ -17,7 +17,7 @@
  * - 支持任意步幅
  ***************/
 
-#include "../ytensor_infos.hpp"
+#include "../../ytensor_infos.hpp"
 
 #if YT_USE_AVX2
 
@@ -931,109 +931,389 @@ inline void outer_product_simd(const float* A, const float* B, float* C,
     }
 }
 
+// ============================================================================
+// 高性能GEMV内核 - 针对m=1的优化（行向量 × 矩阵）
+// C[1×n] = A[1×k] @ B[k×n]
+// 支持行主序和列主序B矩阵，支持OpenMP并行
+// ============================================================================
+
+// 高性能多列点积内核
+// 同时处理4列，每列使用2个累加器隐藏FMA延迟
+inline void gemv_dot_4cols(const float* __restrict A, 
+                           const float* __restrict B0, const float* __restrict B1,
+                           const float* __restrict B2, const float* __restrict B3,
+                           int k, float* sums) {
+    // 8个累加器：每列2个
+    __m256 acc00 = _mm256_setzero_ps(), acc01 = _mm256_setzero_ps();
+    __m256 acc10 = _mm256_setzero_ps(), acc11 = _mm256_setzero_ps();
+    __m256 acc20 = _mm256_setzero_ps(), acc21 = _mm256_setzero_ps();
+    __m256 acc30 = _mm256_setzero_ps(), acc31 = _mm256_setzero_ps();
+    
+    int p = 0;
+    // 主循环：每次处理16个k值，每列2个累加器
+    for (; p + 16 <= k; p += 16) {
+        __m256 a0 = _mm256_loadu_ps(A + p);
+        __m256 a1 = _mm256_loadu_ps(A + p + 8);
+        
+        acc00 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B0 + p), acc00);
+        acc01 = _mm256_fmadd_ps(a1, _mm256_loadu_ps(B0 + p + 8), acc01);
+        acc10 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B1 + p), acc10);
+        acc11 = _mm256_fmadd_ps(a1, _mm256_loadu_ps(B1 + p + 8), acc11);
+        acc20 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B2 + p), acc20);
+        acc21 = _mm256_fmadd_ps(a1, _mm256_loadu_ps(B2 + p + 8), acc21);
+        acc30 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B3 + p), acc30);
+        acc31 = _mm256_fmadd_ps(a1, _mm256_loadu_ps(B3 + p + 8), acc31);
+    }
+    
+    // 处理8元素尾部
+    for (; p + 8 <= k; p += 8) {
+        __m256 a0 = _mm256_loadu_ps(A + p);
+        acc00 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B0 + p), acc00);
+        acc10 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B1 + p), acc10);
+        acc20 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B2 + p), acc20);
+        acc30 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B3 + p), acc30);
+    }
+    
+    // 合并累加器并水平求和
+    acc00 = _mm256_add_ps(acc00, acc01);
+    acc10 = _mm256_add_ps(acc10, acc11);
+    acc20 = _mm256_add_ps(acc20, acc21);
+    acc30 = _mm256_add_ps(acc30, acc31);
+    
+    sums[0] = hsum_ps_avx(acc00);
+    sums[1] = hsum_ps_avx(acc10);
+    sums[2] = hsum_ps_avx(acc20);
+    sums[3] = hsum_ps_avx(acc30);
+    
+    // 标量尾部
+    for (; p < k; ++p) {
+        float a_val = A[p];
+        sums[0] += a_val * B0[p];
+        sums[1] += a_val * B1[p];
+        sums[2] += a_val * B2[p];
+        sums[3] += a_val * B3[p];
+    }
+}
+
+// 单列点积
+inline float gemv_dot_1col(const float* __restrict A, const float* __restrict B, int k) {
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    
+    int p = 0;
+    for (; p + 16 <= k; p += 16) {
+        __m256 a0 = _mm256_loadu_ps(A + p);
+        __m256 a1 = _mm256_loadu_ps(A + p + 8);
+        acc0 = _mm256_fmadd_ps(a0, _mm256_loadu_ps(B + p), acc0);
+        acc1 = _mm256_fmadd_ps(a1, _mm256_loadu_ps(B + p + 8), acc1);
+    }
+    for (; p + 8 <= k; p += 8) {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(A + p), _mm256_loadu_ps(B + p), acc0);
+    }
+    
+    acc0 = _mm256_add_ps(acc0, acc1);
+    float sum = hsum_ps_avx(acc0);
+    for (; p < k; ++p) sum += A[p] * B[p];
+    return sum;
+}
+
+// 列主序B的GEMV内核
+inline void gemv_row_colmajor_kernel(const float* __restrict A, const float* __restrict B, 
+                                     float* __restrict C, int n, int k, float alpha, float beta,
+                                     int64_t csa, int64_t csb) {
+    // 非连续A的回退路径
+    if (csa != 1) {
+        for (int j = 0; j < n; ++j) {
+            float sum = 0.0f;
+            const float* b_col = B + j * csb;
+            for (int p = 0; p < k; ++p) {
+                sum += A[p * csa] * b_col[p];
+            }
+            C[j] = alpha * sum + beta * C[j];
+        }
+        return;
+    }
+
+    // 使用4列作为基础块
+    const int n4 = (n / 4) * 4;
+
+#ifdef _OPENMP
+    // 多线程版本
+    #pragma omp parallel num_threads(g_num_threads) if(g_num_threads > 1 && n >= 64)
+    {
+        #pragma omp for schedule(static) nowait
+        for (int j = 0; j < n4; j += 4) {
+            float sums[4];
+            gemv_dot_4cols(A, B + j * csb, B + (j+1) * csb,
+                          B + (j+2) * csb, B + (j+3) * csb, k, sums);
+            if (beta == 0.0f) {
+                C[j] = alpha * sums[0];
+                C[j+1] = alpha * sums[1];
+                C[j+2] = alpha * sums[2];
+                C[j+3] = alpha * sums[3];
+            } else {
+                C[j] = alpha * sums[0] + beta * C[j];
+                C[j+1] = alpha * sums[1] + beta * C[j+1];
+                C[j+2] = alpha * sums[2] + beta * C[j+2];
+                C[j+3] = alpha * sums[3] + beta * C[j+3];
+            }
+        }
+        
+        // 处理剩余列
+        #pragma omp single
+        for (int j = n4; j < n; ++j) {
+            float sum = gemv_dot_1col(A, B + j * csb, k);
+            C[j] = beta == 0.0f ? alpha * sum : alpha * sum + beta * C[j];
+        }
+    }
+#else
+    // 单线程版本
+    int j = 0;
+    
+    for (; j < n4; j += 4) {
+        float sums[4];
+        gemv_dot_4cols(A, B + j * csb, B + (j+1) * csb, B + (j+2) * csb, B + (j+3) * csb, k, sums);
+        if (beta == 0.0f) {
+            C[j] = alpha * sums[0];
+            C[j+1] = alpha * sums[1];
+            C[j+2] = alpha * sums[2];
+            C[j+3] = alpha * sums[3];
+        } else {
+            C[j] = alpha * sums[0] + beta * C[j];
+            C[j+1] = alpha * sums[1] + beta * C[j+1];
+            C[j+2] = alpha * sums[2] + beta * C[j+2];
+            C[j+3] = alpha * sums[3] + beta * C[j+3];
+        }
+    }
+    
+    // 处理剩余列
+    for (; j < n; ++j) {
+        float sum = gemv_dot_1col(A, B + j * csb, k);
+        C[j] = beta == 0.0f ? alpha * sum : alpha * sum + beta * C[j];
+    }
+#endif
+}
+
+// 行主序B的GEMV内核：流式遍历k
+// 这是访存友好的实现，B的每行只读取一次
+inline void gemv_row_rowmajor_kernel(const float* __restrict A, const float* __restrict B, 
+                                     float* __restrict C, int n, int k, float alpha, float beta) {
+    // 初始化C
+    if (beta == 0.0f) {
+        memset(C, 0, n * sizeof(float));
+    } else if (beta != 1.0f) {
+        __m256 vbeta = _mm256_set1_ps(beta);
+        int j = 0;
+        for (; j + 8 <= n; j += 8) {
+            _mm256_storeu_ps(C + j, _mm256_mul_ps(vbeta, _mm256_loadu_ps(C + j)));
+        }
+        for (; j < n; ++j) C[j] *= beta;
+    }
+    
+    // 流式遍历k：C += A[p] * B[p, :]
+    // 将k展开4次以获得更好的指令级并行
+    int p = 0;
+    for (; p + 4 <= k; p += 4) {
+        float a0 = alpha * A[p];
+        float a1 = alpha * A[p + 1];
+        float a2 = alpha * A[p + 2];
+        float a3 = alpha * A[p + 3];
+        __m256 va0 = _mm256_broadcast_ss(&a0);
+        __m256 va1 = _mm256_broadcast_ss(&a1);
+        __m256 va2 = _mm256_broadcast_ss(&a2);
+        __m256 va3 = _mm256_broadcast_ss(&a3);
+        
+        const float* b0 = B + p * n;
+        const float* b1 = B + (p + 1) * n;
+        const float* b2 = B + (p + 2) * n;
+        const float* b3 = B + (p + 3) * n;
+        
+        int j = 0;
+        for (; j + 32 <= n; j += 32) {
+            __m256 c0 = _mm256_loadu_ps(C + j);
+            __m256 c1 = _mm256_loadu_ps(C + j + 8);
+            __m256 c2 = _mm256_loadu_ps(C + j + 16);
+            __m256 c3 = _mm256_loadu_ps(C + j + 24);
+            
+            c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
+            c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
+            c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
+            c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
+            
+            c1 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 8), c1);
+            c1 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 8), c1);
+            c1 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 8), c1);
+            c1 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 8), c1);
+            
+            c2 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 16), c2);
+            c2 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 16), c2);
+            c2 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 16), c2);
+            c2 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 16), c2);
+            
+            c3 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 24), c3);
+            c3 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 24), c3);
+            c3 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 24), c3);
+            c3 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 24), c3);
+            
+            _mm256_storeu_ps(C + j, c0);
+            _mm256_storeu_ps(C + j + 8, c1);
+            _mm256_storeu_ps(C + j + 16, c2);
+            _mm256_storeu_ps(C + j + 24, c3);
+        }
+        for (; j + 8 <= n; j += 8) {
+            __m256 c0 = _mm256_loadu_ps(C + j);
+            c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
+            c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
+            c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
+            c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
+            _mm256_storeu_ps(C + j, c0);
+        }
+        for (; j < n; ++j) {
+            C[j] += a0 * b0[j] + a1 * b1[j] + a2 * b2[j] + a3 * b3[j];
+        }
+    }
+    
+    // 剩余k
+    for (; p < k; ++p) {
+        float a_val = alpha * A[p];
+        __m256 va = _mm256_broadcast_ss(&a_val);
+        const float* b_row = B + p * n;
+        int j = 0;
+        for (; j + 8 <= n; j += 8) {
+            _mm256_storeu_ps(C + j, _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j), _mm256_loadu_ps(C + j)));
+        }
+        for (; j < n; ++j) C[j] += a_val * b_row[j];
+    }
+}
+
 // C[1xn] = A[1xk] @ B[kxn]：优化的行向量乘矩阵
-// 对于行主序B：流式遍历k，每次迭代处理整个n
-// 确保B的每行只被读取一次
+// 自动检测B的布局并选择最优内核
 inline void gemv_row_simd(const float* __restrict A, const float* __restrict B, float* __restrict C,
                           int n, int k, float alpha, float beta,
                           int64_t csa, int64_t rsb, int64_t csb, int64_t csc) {
-    // 快速路径：A在k方向连续，B是行主序，C连续
+    // 快速路径1：A连续，B是行主序，C连续
     if (csa == 1 && csb == 1 && rsb == n && csc == 1) {
+        gemv_row_rowmajor_kernel(A, B, C, n, k, alpha, beta);
+        return;
+    }
+    
+    // 快速路径2：A连续，B是列主序（例如转置后的矩阵），C连续
+    // 列主序: rsb == 1, csb == k
+    if (csa == 1 && rsb == 1 && csb == k && csc == 1) {
+        gemv_row_colmajor_kernel(A, B, C, n, k, alpha, beta, csa, csb);
+        return;
+    }
+    
+    // 通用情况：检测B是否为列连续
+    if (csa == 1 && rsb == 1 && csc == 1) {
+        // B每列连续，可以用列主序内核
+        gemv_row_colmajor_kernel(A, B, C, n, k, alpha, beta, csa, csb);
+        return;
+    }
+    
+    // Strided K路径：A连续，C连续，B的列连续(csb=1)但行不连续(rsb>1)
+    // 策略：行方向处理 C[:] += A[p] * B[p,:]，这样B行是连续的
+    if (csa == 1 && csc == 1 && csb == 1 && rsb != n) {
         // 初始化C
         if (beta == 0.0f) {
-            memset(C, 0, n * sizeof(float));
+            std::memset(C, 0, n * sizeof(float));
         } else if (beta != 1.0f) {
             __m256 vbeta = _mm256_set1_ps(beta);
             int j = 0;
             for (; j + 8 <= n; j += 8) {
-                _mm256_storeu_ps(C + j, _mm256_mul_ps(vbeta, _mm256_loadu_ps(C + j)));
+                _mm256_storeu_ps(C + j, _mm256_mul_ps(_mm256_loadu_ps(C + j), vbeta));
             }
             for (; j < n; ++j) C[j] *= beta;
         }
         
-        // 流式遍历k：C += A[p] * B[p, :]
-        // 将k展开4次以获得更好的指令级并行
-        int p = 0;
-        for (; p + 4 <= k; p += 4) {
-            float a0 = alpha * A[p];
-            float a1 = alpha * A[p + 1];
-            float a2 = alpha * A[p + 2];
-            float a3 = alpha * A[p + 3];
-            __m256 va0 = _mm256_broadcast_ss(&a0);
-            __m256 va1 = _mm256_broadcast_ss(&a1);
-            __m256 va2 = _mm256_broadcast_ss(&a2);
-            __m256 va3 = _mm256_broadcast_ss(&a3);
-            
-            const float* b0 = B + p * n;
-            const float* b1 = B + (p + 1) * n;
-            const float* b2 = B + (p + 2) * n;
-            const float* b3 = B + (p + 3) * n;
+        // 逐行累加：C[:] += A[p] * B[p,:]
+        for (int p = 0; p < k; ++p) {
+            float a_val = alpha * A[p];
+            const float* b_row = B + p * rsb;  // B的第p行，csb=1所以行内连续
+            __m256 va = _mm256_set1_ps(a_val);
             
             int j = 0;
             for (; j + 32 <= n; j += 32) {
-                __m256 c0 = _mm256_loadu_ps(C + j);
-                __m256 c1 = _mm256_loadu_ps(C + j + 8);
-                __m256 c2 = _mm256_loadu_ps(C + j + 16);
-                __m256 c3 = _mm256_loadu_ps(C + j + 24);
-                
-                c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
-                c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
-                c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
-                c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
-                
-                c1 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 8), c1);
-                c1 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 8), c1);
-                c1 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 8), c1);
-                c1 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 8), c1);
-                
-                c2 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 16), c2);
-                c2 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 16), c2);
-                c2 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 16), c2);
-                c2 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 16), c2);
-                
-                c3 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 24), c3);
-                c3 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 24), c3);
-                c3 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 24), c3);
-                c3 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 24), c3);
-                
-                _mm256_storeu_ps(C + j, c0);
-                _mm256_storeu_ps(C + j + 8, c1);
-                _mm256_storeu_ps(C + j + 16, c2);
-                _mm256_storeu_ps(C + j + 24, c3);
+                __m256 vc0 = _mm256_loadu_ps(C + j);
+                __m256 vc1 = _mm256_loadu_ps(C + j + 8);
+                __m256 vc2 = _mm256_loadu_ps(C + j + 16);
+                __m256 vc3 = _mm256_loadu_ps(C + j + 24);
+                vc0 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j), vc0);
+                vc1 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j + 8), vc1);
+                vc2 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j + 16), vc2);
+                vc3 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j + 24), vc3);
+                _mm256_storeu_ps(C + j, vc0);
+                _mm256_storeu_ps(C + j + 8, vc1);
+                _mm256_storeu_ps(C + j + 16, vc2);
+                _mm256_storeu_ps(C + j + 24, vc3);
             }
             for (; j + 8 <= n; j += 8) {
-                __m256 c0 = _mm256_loadu_ps(C + j);
-                c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
-                c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
-                c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
-                c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
-                _mm256_storeu_ps(C + j, c0);
+                __m256 vc = _mm256_loadu_ps(C + j);
+                vc = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j), vc);
+                _mm256_storeu_ps(C + j, vc);
             }
             for (; j < n; ++j) {
-                C[j] += a0 * b0[j] + a1 * b1[j] + a2 * b2[j] + a3 * b3[j];
+                C[j] += a_val * b_row[j];
             }
         }
+        return;
+    }
+    
+    // 标准row-major B路径（已被快速路径1覆盖，这里不应到达）
+    if (csa == 1 && csc == 1 && csb == 1) {
+        // B的列步幅为1（列之间是紧邻的），但行步幅不为1
+        // 这意味着在一列内，元素以rsb为步幅
+        const __m256i vindex = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+        const __m256i vstride = _mm256_set1_epi32(static_cast<int>(rsb));
+        __m256i vindices = _mm256_mullo_epi32(vindex, vstride);
         
-        // 剩余k
-        for (; p < k; ++p) {
-            float a_val = alpha * A[p];
-            __m256 va = _mm256_broadcast_ss(&a_val);
-            const float* b_row = B + p * n;
-            int j = 0;
-            for (; j + 8 <= n; j += 8) {
-                _mm256_storeu_ps(C + j, _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j), _mm256_loadu_ps(C + j)));
-            }
-            for (; j < n; ++j) C[j] += a_val * b_row[j];
-        }
-    } else {
-        // 通用情况：用点积处理每列
+        #pragma omp parallel for schedule(static) if(n >= 256)
         for (int j = 0; j < n; ++j) {
-            float sum = 0.0f;
-            const float* b_col = B + j * csb;
+            const float* b_col = B + j;  // csb == 1
+            __m256 acc0 = _mm256_setzero_ps();
+            __m256 acc1 = _mm256_setzero_ps();
             
-            if (csa == 1 && rsb == 1) {
+            int p = 0;
+            for (; p + 16 <= k; p += 16) {
+                __m256 va0 = _mm256_loadu_ps(A + p);
+                __m256 va1 = _mm256_loadu_ps(A + p + 8);
+                // gather: 从 b_col + p*rsb 开始，以 rsb 为步幅加载8个元素
+                __m256 vb0 = _mm256_i32gather_ps(b_col + p * rsb, vindices, 4);
+                __m256 vb1 = _mm256_i32gather_ps(b_col + (p + 8) * rsb, vindices, 4);
+                acc0 = _mm256_fmadd_ps(va0, vb0, acc0);
+                acc1 = _mm256_fmadd_ps(va1, vb1, acc1);
+            }
+            acc0 = _mm256_add_ps(acc0, acc1);
+            for (; p + 8 <= k; p += 8) {
+                __m256 va = _mm256_loadu_ps(A + p);
+                __m256 vb = _mm256_i32gather_ps(b_col + p * rsb, vindices, 4);
+                acc0 = _mm256_fmadd_ps(va, vb, acc0);
+            }
+            float sum = hsum_ps_avx(acc0);
+            for (; p < k; ++p) sum += A[p] * b_col[p * rsb];
+            C[j] = alpha * sum + beta * C[j];
+        }
+        return;
+    }
+    
+    // Strided N路径：A连续，C连续，B的列步幅不为1（csb != 1）
+    // 策略：行方向处理，使用SIMD打包
+    if (csa == 1 && csc == 1) {
+        // 如果rsb==1，B的列是连续的，直接用点积更高效
+        if (rsb == 1) {
+            // 初始化C
+            if (beta == 0.0f) {
+                std::memset(C, 0, n * sizeof(float));
+            } else if (beta != 1.0f) {
+                for (int j = 0; j < n; ++j) C[j] *= beta;
+            }
+            
+            // 列方向处理
+            for (int j = 0; j < n; ++j) {
+                const float* b_col = B + j * csb;
                 __m256 acc0 = _mm256_setzero_ps();
                 __m256 acc1 = _mm256_setzero_ps();
+                
                 int p = 0;
                 for (; p + 16 <= k; p += 16) {
                     acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(A + p), _mm256_loadu_ps(b_col + p), acc0);
@@ -1043,15 +1323,161 @@ inline void gemv_row_simd(const float* __restrict A, const float* __restrict B, 
                 for (; p + 8 <= k; p += 8) {
                     acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(A + p), _mm256_loadu_ps(b_col + p), acc0);
                 }
-                sum = hsum_ps_avx(acc0);
+                float sum = hsum_ps_avx(acc0);
                 for (; p < k; ++p) sum += A[p] * b_col[p];
-            } else {
-                for (int p = 0; p < k; ++p) {
-                    sum += A[p * csa] * b_col[p * rsb];
+                C[j] += alpha * sum;
+            }
+            return;
+        }
+        
+        // rsb != 1 且 csb != 1: 完全strided
+        // 初始化C
+        if (beta == 0.0f) {
+            std::memset(C, 0, n * sizeof(float));
+        } else if (beta != 1.0f) {
+            for (int j = 0; j < n; ++j) C[j] *= beta;
+        }
+        
+        // 当csb是小整数(如2)时，批量打包多行
+        if (csb == 2) {
+            // 批量打包BLOCK_K行，减少打包开销
+            constexpr int BLOCK_K = 8;
+            constexpr int BLOCK_N = 3072;  // 一次处理整个N
+            alignas(32) float b_packed[BLOCK_K * BLOCK_N];
+            
+            int p = 0;
+            for (; p + BLOCK_K <= k; p += BLOCK_K) {
+                // 打包BLOCK_K行到连续内存
+                for (int pp = 0; pp < BLOCK_K; ++pp) {
+                    const float* b_row = B + (p + pp) * rsb;
+                    float* dst = b_packed + pp * n;
+                    int jj = 0;
+                    // 使用shuffle加速stride=2的打包
+                    for (; jj + 8 <= n; jj += 8) {
+                        __m256 v0 = _mm256_loadu_ps(b_row + jj * 2);
+                        __m256 v1 = _mm256_loadu_ps(b_row + jj * 2 + 8);
+                        __m256 packed = _mm256_shuffle_ps(v0, v1, 0x88);
+                        packed = _mm256_permutevar8x32_ps(packed, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+                        _mm256_storeu_ps(dst + jj, packed);
+                    }
+                    for (; jj < n; ++jj) {
+                        dst[jj] = b_row[jj * 2];
+                    }
+                }
+                
+                // SIMD累加：处理BLOCK_K行
+                __m256 va[BLOCK_K];
+                for (int pp = 0; pp < BLOCK_K; ++pp) {
+                    va[pp] = _mm256_set1_ps(alpha * A[p + pp]);
+                }
+                
+                for (int j = 0; j + 8 <= n; j += 8) {
+                    __m256 vc = _mm256_loadu_ps(C + j);
+                    for (int pp = 0; pp < BLOCK_K; ++pp) {
+                        vc = _mm256_fmadd_ps(va[pp], _mm256_loadu_ps(b_packed + pp * n + j), vc);
+                    }
+                    _mm256_storeu_ps(C + j, vc);
+                }
+                // 标量处理余下
+                for (int j = (n / 8) * 8; j < n; ++j) {
+                    float sum = C[j];
+                    for (int pp = 0; pp < BLOCK_K; ++pp) {
+                        sum += alpha * A[p + pp] * b_packed[pp * n + j];
+                    }
+                    C[j] = sum;
                 }
             }
-            C[j * csc] = alpha * sum + beta * C[j * csc];
+            
+            // 处理剩余行
+            for (; p < k; ++p) {
+                float a_val = alpha * A[p];
+                const float* b_row = B + p * rsb;
+                __m256 va = _mm256_set1_ps(a_val);
+                
+                // 打包
+                float* dst = b_packed;
+                int jj = 0;
+                for (; jj + 8 <= n; jj += 8) {
+                    __m256 v0 = _mm256_loadu_ps(b_row + jj * 2);
+                    __m256 v1 = _mm256_loadu_ps(b_row + jj * 2 + 8);
+                    __m256 packed = _mm256_shuffle_ps(v0, v1, 0x88);
+                    packed = _mm256_permutevar8x32_ps(packed, _mm256_setr_epi32(0,1,4,5,2,3,6,7));
+                    _mm256_storeu_ps(dst + jj, packed);
+                }
+                for (; jj < n; ++jj) {
+                    dst[jj] = b_row[jj * 2];
+                }
+                
+                // SIMD累加
+                jj = 0;
+                for (; jj + 8 <= n; jj += 8) {
+                    __m256 vc = _mm256_loadu_ps(C + jj);
+                    vc = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_packed + jj), vc);
+                    _mm256_storeu_ps(C + jj, vc);
+                }
+                for (; jj < n; ++jj) {
+                    C[jj] += a_val * b_packed[jj];
+                }
+            }
+            return;
         }
+        
+        // 通用情况：标量打包
+        constexpr int BLOCK_N = 4096;
+        alignas(32) float b_row_packed[BLOCK_N];
+        
+        for (int p = 0; p < k; ++p) {
+            float a_val = alpha * A[p];
+            const float* b_row = B + p * rsb;
+            __m256 va = _mm256_set1_ps(a_val);
+            
+            for (int j0 = 0; j0 < n; j0 += BLOCK_N) {
+                int j_end = std::min(j0 + BLOCK_N, n);
+                int block_size = j_end - j0;
+                
+                // 标量打包
+                for (int jj = 0; jj < block_size; ++jj) {
+                    b_row_packed[jj] = b_row[(j0 + jj) * csb];
+                }
+                
+                // SIMD累加
+                float* c_ptr = C + j0;
+                int jj = 0;
+                for (; jj + 32 <= block_size; jj += 32) {
+                    __m256 vc0 = _mm256_loadu_ps(c_ptr + jj);
+                    __m256 vc1 = _mm256_loadu_ps(c_ptr + jj + 8);
+                    __m256 vc2 = _mm256_loadu_ps(c_ptr + jj + 16);
+                    __m256 vc3 = _mm256_loadu_ps(c_ptr + jj + 24);
+                    vc0 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row_packed + jj), vc0);
+                    vc1 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row_packed + jj + 8), vc1);
+                    vc2 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row_packed + jj + 16), vc2);
+                    vc3 = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row_packed + jj + 24), vc3);
+                    _mm256_storeu_ps(c_ptr + jj, vc0);
+                    _mm256_storeu_ps(c_ptr + jj + 8, vc1);
+                    _mm256_storeu_ps(c_ptr + jj + 16, vc2);
+                    _mm256_storeu_ps(c_ptr + jj + 24, vc3);
+                }
+                for (; jj + 8 <= block_size; jj += 8) {
+                    __m256 vc = _mm256_loadu_ps(c_ptr + jj);
+                    vc = _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row_packed + jj), vc);
+                    _mm256_storeu_ps(c_ptr + jj, vc);
+                }
+                for (; jj < block_size; ++jj) {
+                    c_ptr[jj] += a_val * b_row_packed[jj];
+                }
+            }
+        }
+        return;
+    }
+    
+    // 完全通用情况：用点积处理每列（标量）
+    for (int j = 0; j < n; ++j) {
+        float sum = 0.0f;
+        const float* b_col = B + j * csb;
+        for (int p = 0; p < k; ++p) {
+            sum += A[p * csa] * b_col[p * rsb];
+        }
+        C[j * csc] = alpha * sum + beta * C[j * csc];
     }
 }
 
@@ -1133,33 +1559,80 @@ inline void gemv_col_simd(const float* A, const float* B, float* C,
             for (; p < k; ++p) sum += A[i * rsa + p] * B[p];
             C[i] = alpha * sum + beta * C[i];
         }
-    } else {
-        // 通用情况
-        for (int i = 0; i < m; ++i) {
-            float sum = 0.0f;
-            const float* a_row = A + i * rsa;
-            
-            if (csa == 1 && rsb == 1) {
-                __m256 acc0 = _mm256_setzero_ps();
-                __m256 acc1 = _mm256_setzero_ps();
-                int p = 0;
-                for (; p + 16 <= k; p += 16) {
-                    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row + p), _mm256_loadu_ps(B + p), acc0);
-                    acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row + p + 8), _mm256_loadu_ps(B + p + 8), acc1);
-                }
-                acc0 = _mm256_add_ps(acc0, acc1);
-                for (; p + 8 <= k; p += 8) {
-                    acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row + p), _mm256_loadu_ps(B + p), acc0);
-                }
-                sum = hsum_ps_avx(acc0);
-                for (; p < k; ++p) sum += a_row[p] * B[p];
-            } else {
-                for (int p = 0; p < k; ++p) {
-                    sum += a_row[p * csa] * B[p * rsb];
-                }
-            }
-            C[i * rsc] = alpha * sum + beta * C[i * rsc];
+        return;
+    }
+    
+    // 列主序A优化路径：A是列主序(rsa=1)，使用SAXPY风格
+    // C += b[p] * A[:,p]，其中A[:,p]是A的第p列，是连续的
+    if (rsa == 1 && rsb == 1 && rsc == 1) {
+        // 初始化C
+        if (beta == 0.0f) {
+            for (int i = 0; i < m; ++i) C[i] = 0.0f;
+        } else if (beta != 1.0f) {
+            for (int i = 0; i < m; ++i) C[i] *= beta;
         }
+        
+        // SAXPY: C += b[p] * A[:,p]
+        for (int p = 0; p < k; ++p) {
+            float b_val = alpha * B[p];
+            const float* a_col = A + p * csa;  // A的第p列
+            __m256 vb = _mm256_set1_ps(b_val);
+            
+            int i = 0;
+            for (; i + 8 <= m; i += 8) {
+                __m256 vc = _mm256_loadu_ps(C + i);
+                __m256 va = _mm256_loadu_ps(a_col + i);
+                vc = _mm256_fmadd_ps(va, vb, vc);
+                _mm256_storeu_ps(C + i, vc);
+            }
+            for (; i < m; ++i) {
+                C[i] += b_val * a_col[i];
+            }
+        }
+        return;
+    }
+    
+    // 通用strided路径：使用gather指令处理strided A
+    if (rsb == 1 && rsc == 1) {
+        // 初始化C
+        if (beta == 0.0f) {
+            for (int i = 0; i < m; ++i) C[i] = 0.0f;
+        } else if (beta != 1.0f) {
+            for (int i = 0; i < m; ++i) C[i] *= beta;
+        }
+        
+        const __m256i vindex = _mm256_set_epi32(7, 6, 5, 4, 3, 2, 1, 0);
+        const __m256i vstride = _mm256_set1_epi32(static_cast<int>(rsa));
+        __m256i vindices = _mm256_mullo_epi32(vindex, vstride);
+        
+        // SAXPY with gather for strided A columns
+        for (int p = 0; p < k; ++p) {
+            float b_val = alpha * B[p];
+            const float* a_col = A + p * csa;
+            __m256 vb = _mm256_set1_ps(b_val);
+            
+            int i = 0;
+            for (; i + 8 <= m; i += 8) {
+                __m256 vc = _mm256_loadu_ps(C + i);
+                __m256 va = _mm256_i32gather_ps(a_col + i * rsa, vindices, 4);
+                vc = _mm256_fmadd_ps(va, vb, vc);
+                _mm256_storeu_ps(C + i, vc);
+            }
+            for (; i < m; ++i) {
+                C[i] += b_val * a_col[i * rsa];
+            }
+        }
+        return;
+    }
+    
+    // 完全通用情况
+    for (int i = 0; i < m; ++i) {
+        float sum = 0.0f;
+        const float* a_row = A + i * rsa;
+        for (int p = 0; p < k; ++p) {
+            sum += a_row[p * csa] * B[p * rsb];
+        }
+        C[i * rsc] = alpha * sum + beta * C[i * rsc];
     }
 }
 
@@ -1553,121 +2026,6 @@ inline void sgemm(
     // 矩阵乘列向量：n=1
     if (n == 1) {
         gemv_col_simd(A, B, C, m, k, alpha, beta, rsa, csa, rsb, rsc);
-        return;
-    }
-    
-    // 小m优化：当m较小或m%6!=0时使用行向k流式处理
-    // 这避免了打包开销，对于小m比带填充的6x16内核更高效
-    // 扩展范围：2<=m<=24，但仅当以下条件满足时
-    //   - m<=6 时总是比带填充的6x16更好
-    //   - 或者7<=m<=24 且 m%6!=0 时避免填充开销
-    // 用于行主序A和B和C的情况
-    bool use_small_m_kernel = false;
-    if (m >= 2 && m <= 24 && n >= 64 && k >= 64 && csa == 1 && rsa == k && csb == 1 && rsb == n && csc == 1 && rsc == n) {
-        if (m <= 6) {
-            use_small_m_kernel = true;  // Always better for very small m
-        } else if (m % MR_ROW != 0) {
-            use_small_m_kernel = true;  // Avoid padding overhead
-        }
-    }
-    
-    if (use_small_m_kernel) {
-        // 初始化C
-        if (beta == 0.0f) {
-            memset(C, 0, (size_t)m * n * sizeof(float));
-        } else if (beta != 1.0f) {
-            __m256 vbeta = _mm256_set1_ps(beta);
-            for (int i = 0; i < m; ++i) {
-                float* c_row = C + i * n;
-                int j = 0;
-                for (; j + 8 <= n; j += 8) {
-                    _mm256_storeu_ps(c_row + j, _mm256_mul_ps(vbeta, _mm256_loadu_ps(c_row + j)));
-                }
-                for (; j < n; ++j) c_row[j] *= beta;
-            }
-        }
-        
-        // 对每个k同时处理所有m行
-        // 这样只遍历B一次，C的行保持在缓存中
-        int p = 0;
-        for (; p + 4 <= k; p += 4) {
-            // 处理A的每一行
-            for (int i = 0; i < m; ++i) {
-                float a0 = alpha * A[i * k + p];
-                float a1 = alpha * A[i * k + p + 1];
-                float a2 = alpha * A[i * k + p + 2];
-                float a3 = alpha * A[i * k + p + 3];
-                __m256 va0 = _mm256_broadcast_ss(&a0);
-                __m256 va1 = _mm256_broadcast_ss(&a1);
-                __m256 va2 = _mm256_broadcast_ss(&a2);
-                __m256 va3 = _mm256_broadcast_ss(&a3);
-                
-                const float* b0 = B + p * n;
-                const float* b1 = B + (p + 1) * n;
-                const float* b2 = B + (p + 2) * n;
-                const float* b3 = B + (p + 3) * n;
-                float* c_row = C + i * n;
-                
-                int j = 0;
-                for (; j + 32 <= n; j += 32) {
-                    __m256 c0 = _mm256_loadu_ps(c_row + j);
-                    __m256 c1 = _mm256_loadu_ps(c_row + j + 8);
-                    __m256 c2 = _mm256_loadu_ps(c_row + j + 16);
-                    __m256 c3 = _mm256_loadu_ps(c_row + j + 24);
-                    
-                    c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
-                    c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
-                    c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
-                    c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
-                    
-                    c1 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 8), c1);
-                    c1 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 8), c1);
-                    c1 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 8), c1);
-                    c1 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 8), c1);
-                    
-                    c2 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 16), c2);
-                    c2 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 16), c2);
-                    c2 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 16), c2);
-                    c2 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 16), c2);
-                    
-                    c3 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j + 24), c3);
-                    c3 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j + 24), c3);
-                    c3 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j + 24), c3);
-                    c3 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j + 24), c3);
-                    
-                    _mm256_storeu_ps(c_row + j, c0);
-                    _mm256_storeu_ps(c_row + j + 8, c1);
-                    _mm256_storeu_ps(c_row + j + 16, c2);
-                    _mm256_storeu_ps(c_row + j + 24, c3);
-                }
-                for (; j + 8 <= n; j += 8) {
-                    __m256 c0 = _mm256_loadu_ps(c_row + j);
-                    c0 = _mm256_fmadd_ps(va0, _mm256_loadu_ps(b0 + j), c0);
-                    c0 = _mm256_fmadd_ps(va1, _mm256_loadu_ps(b1 + j), c0);
-                    c0 = _mm256_fmadd_ps(va2, _mm256_loadu_ps(b2 + j), c0);
-                    c0 = _mm256_fmadd_ps(va3, _mm256_loadu_ps(b3 + j), c0);
-                    _mm256_storeu_ps(c_row + j, c0);
-                }
-                for (; j < n; ++j) {
-                    c_row[j] += a0 * b0[j] + a1 * b1[j] + a2 * b2[j] + a3 * b3[j];
-                }
-            }
-        }
-        
-        // 剩余k
-        for (; p < k; ++p) {
-            const float* b_row = B + p * n;
-            for (int i = 0; i < m; ++i) {
-                float a_val = alpha * A[i * k + p];
-                __m256 va = _mm256_broadcast_ss(&a_val);
-                float* c_row = C + i * n;
-                int j = 0;
-                for (; j + 8 <= n; j += 8) {
-                    _mm256_storeu_ps(c_row + j, _mm256_fmadd_ps(va, _mm256_loadu_ps(b_row + j), _mm256_loadu_ps(c_row + j)));
-                }
-                for (; j < n; ++j) c_row[j] += a_val * b_row[j];
-            }
-        }
         return;
     }
     

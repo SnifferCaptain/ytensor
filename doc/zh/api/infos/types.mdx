@@ -13,6 +13,10 @@ struct TypeRegItem {
     std::function<void(void*)> destructor = nullptr;   // 析构函数
     std::function<void(void*, const void*)> copyConstruct = nullptr;  // 拷贝构造
     std::function<void(void*)> defaultConstruct = nullptr;  // 默认构造
+    
+    // IO 序列化支持 (用于非 POD 类型)
+    std::function<std::vector<char>(const void*)> serialize = nullptr;      // 对象 -> 字节序列
+    std::function<void(void*, const char*, size_t)> deserialize = nullptr;  // 字节序列 -> 对象
 };
 ```
 
@@ -24,24 +28,95 @@ auto& getTypeRegistry();
 
 返回全局类型注册表的引用。
 
-:::warning
-修改类型注册表属于高级操作，通常仅在库初始化时进行。
-:::
+### 注册类型
+
+除了自动推导的 POD 类型外，YTensor 提供了 `registerType` 函数用于注册自定义类型。
+
+#### 1. 基础注册 (自动 POD 检测)
+
+```cpp
+template<typename T>
+void registerType(const std::string& typeName, 
+                  std::function<std::string(const void*)> formatter = nullptr);
+```
+
+#### 2. 带 IO 支持的注册 (非 POD)
+
+```cpp
+template<typename T>
+void registerType(const std::string& typeName,
+                  std::function<std::string(const void*)> formatter,
+                  std::function<std::vector<char>(const void*)> serialize,
+                  std::function<void(void*, const char*, size_t)> deserialize);
+```
+
+此重载允许你为非 POD 类型（如 `std::string` 或自定义对象）提供序列化和反序列化函数，从而使这些类型能够被 `YTensorIO` 正确存储和加载。
+
+---
 
 ## 浮点类型规范
 
-YTensor 支持 `float` (fp32), `double` (fp64), 和 `bfloat16` (bf16)。
+YTensor 支持包括标准浮点与低精度浮点在内的多种浮点类型。
 特别地，对于 BF16 类型，其舍入模式受全局配置影响（见 [常量](./constants.mdx)）。
 
-## 内置类型
+## FloatSpec 通用浮点数模板
 
-| 类型名 | 字节大小 | C++ 类型 |
+YTensor 提供 `FloatSpec` 模板类，支持在 IEEE 754 标准下生成任意指数位和尾数位配置的浮点数类型。
+
+### 模板定义
+
+```cpp
+template <int SignBits, int ExpBits, int MantissaBits>
+class FloatSpec;
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `SignBits` | 符号位数（0 或 1） |
+| `ExpBits` | 指数位数 |
+| `MantissaBits` | 尾数位数 |
+
+### 预定义类型
+
+这些类型已经在库中预定义，可直接使用：
+
+| 类型名 | C++别名 | 定义 | 总位数 | 说明 |
+| --- | --- | --- | --- | --- |
+| `float16` | `yt::float16` | `FloatSpec<1, 5, 10>` | 16 | IEEE 754 半精度浮点数 |
+| `bfloat16` | `yt::bfloat16` | `FloatSpec<1, 8, 7>` | 16 | Brain Floating Point |
+| `float8_e5m2` | `yt::float8_e5m2` | `FloatSpec<1, 5, 2>` | 8 | Hopper 架构 FP8 |
+| `float8_e4m3` | `yt::float8_e4m3` | `FloatSpec<1, 4, 3>` | 8 | Hopper 架构 FP8 |
+| `float8_e8m0` | `yt::float8_e8m0` | `FloatSpec<0, 8, 0>` | 8 | 纯指数形式（Scaling Factor） |
+
+### 使用示例
+
+```cpp
+#include "ytensor_types.hpp"
+
+// 使用预定义类型
+yt::bfloat16 bf = 3.14f;
+float val = static_cast<float>(bf);
+
+// 自定义浮点类型（TF32 格式，模拟）
+using TF32 = yt::FloatSpec<1, 8, 10>;
+TF32 tf = 2.5f;
+```
+
+## 内置类型字符串
+
+在创建张量时使用的 `dtype` 字符串：
+
+| 类型名 (dtype) | 字节大小 | 对应的 C++ 类型 |
 | --- | --- | --- |
 | `"float32"` | 4 | `float` |
 | `"float64"` | 8 | `double` |
 | `"int32"` | 4 | `int32_t` |
 | `"int64"` | 8 | `int64_t` |
+| `"float16"` | 2 | `yt::float16` |
 | `"bfloat16"` | 2 | `yt::bfloat16` |
+| `"float8_e5m2"` | 1 | `yt::float8_e5m2` |
+| `"float8_e4m3"` | 1 | `yt::float8_e4m3` |
+| `"bool"` | 1 | `bool` |
 
 ## dtype 命名规范
 
@@ -97,20 +172,38 @@ yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T
 
 ## 非 POD 类型支持
 
-对于非 POD 类型（如 `std::string`、自定义类），需要注册：
-- `destructor`: 析构函数
-- `copyConstruct`: 拷贝构造函数
-- `defaultConstruct`: 默认构造函数
+对于非 POD 类型（如 `std::string`、自定义类），在使用前必须进行注册。注册时会自动推导析构函数和构造函数。
 
-:::danger
-**IO 支持限制**
+### 开启 IO 支持
 
-目前的文件 IO 系统对非 POD 类型的支持**不完善**。
-虽然类型系统允许注册非 POD 类型，但在保存到文件时，可能只会直接写入对象的内存表示（浅拷贝），而非序列化内容。
+默认情况下，`registerType` 仅注册基本的生命周期函数。如果需要支持文件 IO（即保存到 `.yt` 文件），必须显式提供 `serialize` 和 `deserialize` 函数。
 
-**请勿依赖 YTensor IO 存储包含指针或动态资源的非 POD 类型（如 `std::vector`, `std::string`）。**
+```cpp
+struct MyStruct {
+    std::string data;
+};
+
+// 注册并提供 IO 支持
+yt::types::registerType<MyStruct>(
+    "MyStruct",
+    // formatter
+    [](const void* ptr) { return static_cast<const MyStruct*>(ptr)->data; },
+    // serialize
+    [](const void* ptr) -> std::vector<char> {
+        const auto& s = static_cast<const MyStruct*>(ptr)->data;
+        return std::vector<char>(s.begin(), s.end());
+    },
+    // deserialize
+    [](void* ptr, const char* data, size_t len) {
+        new (ptr) MyStruct{std::string(data, len)};
+    }
+);
+```
+
+:::info
+**存储格式**
+对于注册了序列化函数的类型，YTensorIO 会使用 `map` 格式存储，确保能够正确处理变长数据和对象状态。
 :::
-
 
 ---
 

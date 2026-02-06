@@ -1,6 +1,6 @@
 # Type Registration
 
-This document describes the type registration system in the `yt::infos` namespace.
+This document introduces the type registration system in the `yt::infos` namespace.
 
 ## TypeRegItem Struct
 
@@ -8,11 +8,15 @@ This document describes the type registration system in the `yt::infos` namespac
 struct TypeRegItem {
     std::string name;                              // Type name
     int32_t size;                                  // Size in bytes
-    std::function<std::string(const void*)> toString;  // Function to convert to string
-    bool isPOD = true;                             // Whether it's a POD type
+    std::function<std::string(const void*)> toString;  // Format to string
+    bool isPOD = true;                             // Is POD type
     std::function<void(void*)> destructor = nullptr;   // Destructor
     std::function<void(void*, const void*)> copyConstruct = nullptr;  // Copy constructor
     std::function<void(void*)> defaultConstruct = nullptr;  // Default constructor
+    
+    // IO Serialization Support (for non-POD types)
+    std::function<std::vector<char>(const void*)> serialize = nullptr;      // Object -> Byte Sequence
+    std::function<void(void*, const char*, size_t)> deserialize = nullptr;  // Byte Sequence -> Object
 };
 ```
 
@@ -24,35 +28,106 @@ auto& getTypeRegistry();
 
 Returns a reference to the global type registry.
 
-:::warning
-Modifying the type registry is an advanced operation, typically performed only during library initialization.
-:::
+### Registering Types
 
-## Floating-point Specification
+In addition to automatically deduced POD types, YTensor provides the `registerType` function for registering custom types.
 
-YTensor supports `float` (fp32), `double` (fp64), and `bfloat16` (bf16).
-Specifically, for the BF16 type, its rounding mode is affected by the global configuration (see [Constants](./constants.mdx)).
+#### 1. Basic Registration (Auto POD Detection)
 
-## Built-in Types
+```cpp
+template<typename T>
+void registerType(const std::string& typeName, 
+                  std::function<std::string(const void*)> formatter = nullptr);
+```
 
-| Type Name | Size (Bytes) | C++ Type |
+#### 2. Registration with IO Support (Non-POD)
+
+```cpp
+template<typename T>
+void registerType(const std::string& typeName,
+                  std::function<std::string(const void*)> formatter,
+                  std::function<std::vector<char>(const void*)> serialize,
+                  std::function<void(void*, const char*, size_t)> deserialize);
+```
+
+This overload allows you to provide serialization and deserialization functions for non-POD types (such as `std::string` or custom objects), enabling them to be correctly stored and loaded by `YTensorIO`.
+
+---
+
+## Floating Point Types Specification
+
+YTensor supports various floating point types, including standard and low-precision floats.
+Specifically, for standard `float16` and `bfloat16`, the rounding mode is affected by global configuration (see [Constants](./constants.mdx)).
+
+## FloatSpec Template
+
+YTensor provides the `FloatSpec` template class to generate arbitrary floating point types based on IEEE 754 standard configuration.
+
+### Template Definition
+
+```cpp
+template <int SignBits, int ExpBits, int MantissaBits>
+class FloatSpec;
+```
+
+| Parameter | Description |
+| --- | --- |
+| `SignBits` | Number of sign bits (0 or 1) |
+| `ExpBits` | Number of exponent bits |
+| `MantissaBits` | Number of mantissa bits |
+
+### Predefined Types
+
+These types are predefined in the library and can be used directly:
+
+| Type Name | C++ Alias | Definition | Total Bits | Description |
+| --- | --- | --- | --- | --- |
+| `float16` | `yt::float16` | `FloatSpec<1, 5, 10>` | 16 | IEEE 754 Half Precision |
+| `bfloat16` | `yt::bfloat16` | `FloatSpec<1, 8, 7>` | 16 | Brain Floating Point |
+| `float8_e5m2` | `yt::float8_e5m2` | `FloatSpec<1, 5, 2>` | 8 | Hopper Architecture FP8 |
+| `float8_e4m3` | `yt::float8_e4m3` | `FloatSpec<1, 4, 3>` | 8 | Hopper Architecture FP8 |
+| `float8_e8m0` | `yt::float8_e8m0` | `FloatSpec<0, 8, 0>` | 8 | Pure Exponent (Scaling Factor) |
+
+### Usage Example
+
+```cpp
+#include "ytensor_types.hpp"
+
+// Use predefined types
+yt::bfloat16 bf = 3.14f;
+float val = static_cast<float>(bf);
+
+// Custom floating point type (simulated TF32)
+using TF32 = yt::FloatSpec<1, 8, 10>;
+TF32 tf = 2.5f;
+```
+
+## Built-in Type Strings
+
+`dtype` strings used when creating tensors:
+
+| Type Name (dtype) | Size (Bytes) | Corresponding C++ Type |
 | --- | --- | --- |
 | `"float32"` | 4 | `float` |
 | `"float64"` | 8 | `double` |
 | `"int32"` | 4 | `int32_t` |
 | `"int64"` | 8 | `int64_t` |
+| `"float16"` | 2 | `yt::float16` |
 | `"bfloat16"` | 2 | `yt::bfloat16` |
+| `"float8_e5m2"` | 1 | `yt::float8_e5m2` |
+| `"float8_e4m3"` | 1 | `yt::float8_e4m3` |
+| `"bool"` | 1 | `bool` |
 
-## dtype Naming Convention
+## Dtype Naming Convention
 
-YTensor uses a standardized dtype naming format that supports representation of nested tensor types:
+YTensor uses a normalized dtype naming format to support nested tensor types:
 
 ### Base Type Names
-Use `getBaseTypeName<T>()` to get the name of a basic C++ type:
+Use `getBaseTypeName<T>()` to get the base C++ type name:
 - `float` → `"float32"`
 - `double` → `"float64"`
 - `int32_t` → `"int32"`
-- Custom types → `typeid(T).name()` or registered name
+- Custom Type → `typeid(T).name()` or registered name
 
 ### Nested Type Format
 
@@ -60,11 +135,11 @@ Use `getBaseTypeName<T>()` to get the name of a basic C++ type:
 | --- | --- | --- |
 | `YTensor<T, dim>` | `"YTensor<scalar_dtype, dim>"` | `"YTensor<float32, 2>"` |
 | `YTensorBase` | `"YTensorBase<inner_dtype>"` | `"YTensorBase<float32>"` |
-| Multi-level nesting | Recursive format | `"YTensor<YTensor<float32, 2>, 2>"` |
+| Multi-level Nesting | Recursive Format | `"YTensor<YTensor<float32, 2>, 2>"` |
 
-### dtype Parsing Functions
+### Dtype Parsing Functions
 
-| Function | Purpose | Example |
+| Function | Description | Example |
 | --- | --- | --- |
 | `parseDtypeInner(dtype)` | Parse outer type and inner content | `"YTensorBase<float32>"` → `{"YTensorBase", "float32"}` |
 | `getBaseDtype(dtype)` | Recursively extract innermost base type | `"YTensor<YTensor<float32, 2>, 2>"` → `"float32"` |
@@ -73,7 +148,7 @@ Use `getBaseTypeName<T>()` to get the name of a basic C++ type:
 | `makeYTensorDtype(scalar, dim)` | Build YTensor dtype | `("float32", 2)` → `"YTensor<float32, 2>"` |
 | `makeYTensorBaseDtype(inner)` | Build YTensorBase dtype | `("float32")` → `"YTensorBase<float32>"` |
 
-### Usage Examples
+### Usage Example
 
 ```cpp
 #include "ytensor_types.hpp"
@@ -89,30 +164,49 @@ std::string ytensorDtype = yt::types::makeYTensorDtype("float32", 3);  // "YTens
 YTensorBase tensor({2, 3, 4}, "float32");
 auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
 
-// dispatch will auto-parse nested types
+// Dispatch automatically parses nested types
 yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
-    // T is resolved to float
+    // T is parsed as float
 });
 ```
 
 ## Non-POD Type Support
 
-For non-POD types (e.g., `std::string`, custom classes), the following should be registered:
-- `destructor`: Destructor function
-- `copyConstruct`: Copy constructor function
-- `defaultConstruct`: Default constructor function
+For non-POD types (like `std::string`, custom classes), registration is required before use. Destructors and constructors are automatically deduced during registration.
 
-:::danger
-**IO Support Limitation**
+### Enabling IO Support
 
-Currently, the file IO system has **incomplete** support for non-POD types.
-Although the type system allows registering non-POD types, saving them to a file might directly write the object's memory representation (shallow copy) instead of serialized content.
+By default, `registerType` only registers basic lifecycle functions. If you need file IO support (saving to `.yt` files), you must explicitly provide `serialize` and `deserialize` functions.
 
-**Do not rely on YTensor IO to store non-POD types that contain pointers or dynamic resources (such as `std::vector` or `std::string`).**
+```cpp
+struct MyStruct {
+    std::string data;
+};
+
+// Register and provide IO support
+yt::types::registerType<MyStruct>(
+    "MyStruct",
+    // formatter
+    [](const void* ptr) { return static_cast<const MyStruct*>(ptr)->data; },
+    // serialize
+    [](const void* ptr) -> std::vector<char> {
+        const auto& s = static_cast<const MyStruct*>(ptr)->data;
+        return std::vector<char>(s.begin(), s.end());
+    },
+    // deserialize
+    [](void* ptr, const char* data, size_t len) {
+        new (ptr) MyStruct{std::string(data, len)};
+    }
+);
+```
+
+:::info
+**Storage Format**
+For types with registered serialization functions, YTensorIO uses the `map` format for storage, ensuring variable-length data and object states are handled correctly.
 :::
 
 ---
 
 ## Related Content
 
-- [Type Querying](../YTensorBase/access/dtype.mdx) - `dtype()` method
+- [Type Query](../YTensorBase/access/dtype.mdx) - `dtype()` method

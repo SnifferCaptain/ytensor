@@ -177,8 +177,8 @@ float val = t.atData(0);
 **注意**: 虽然支持，但仍需注意浮点数精度问题。
 
 ```cpp
-auto t = YTensorBase::zeros({10}, "int32");
-auto result = t % 2;  // ✅ 正确
+auto t = YTensorBase::zeros({10}, "float32");
+auto result = t % 2.0f;  // ✅ 正确
 ```
 
 ---

@@ -4,24 +4,52 @@
 
 ## 概述
 
-`Type Dispatch` 是连接 `YTensorBase`（运行时动态类型）和 `YTensor<T>`（编译时静态类型）的桥梁。它允许你根据字符串类型的 `dtype`（如 `"float32"`）自动选择并实例化对应的模板函数。
+### 什么是类型分发？
 
-这对于以下场景非常有用：
-1. 实现支持任意类型的通用算子。
-2. 处理 `YTensorBase` 输入并在内部转为具体的 `T` 类型进行计算。
-3. 避免编写冗长的 `if-else` 或 `switch-case` 语句。
+在 YTensor 中，`YTensorBase` 使用字符串 `dtype`（如 `"float32"`）在运行时表示数据类型，而 `YTensor<T, dim>` 在编译时确定类型。**类型分发**的作用就是将运行时的 dtype 字符串映射到编译时的具体类型 `T`，从而调用正确的模板函数。
 
-## 核心宏与类型列表
+### 为什么需要类型分发？
 
-为了方便使用，YTensor 预定义了一些常用的类型列表（Type Lists）：
+假设你需要编写一个函数来处理 `YTensorBase`，但内部需要访问具体类型的数据：
+
+```cpp
+void processData(const YTensorBase& tensor) {
+    // tensor.dtype() 可能是 "float32"、"int64" 等
+    // 如何根据 dtype 调用正确的模板函数？
+    
+    // ❌ 传统方式：冗长的 if-else
+    if (tensor.dtype() == "float32") {
+        const float* data = tensor.data<float>();
+        // ...
+    } else if (tensor.dtype() == "int64") {
+        const int64_t* data = tensor.data<int64_t>();
+        // ...
+    }
+    // 需要为每种类型写一遍！
+    
+    // ✅ 使用类型分发：简洁高效
+    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+        tensor.dtype(),
+        [&]<typename T>() { // C++20 泛型 Lambda
+            const T* data = tensor.data<T>();
+            // T 会被自动推导为正确的类型
+        },
+        "processData"
+    );
+}
+```
+
+## 预定义类型列表
+
+为了方便使用，YTensor 预定义了一些常用的类型列表：
 
 | 类型列表 | 包含的类型 |
 | --- | --- |
 | `StandardFloatTypes` | `float`, `double` |
-| `StandardIntTypes` | `int8`, `int16`, `int32`, `int64`, `uint8`, `...`, `uint64` |
+| `StandardIntTypes` | `int8`, `int16`, `int32`, `int64`, `uint8`, `uint16`, `uint32`, `uint64` |
 | `IntegerTypes` | 同 `StandardIntTypes` |
 | `StandardNumericTypes` | 标准浮点 + 标准整数 |
-| `ExtendedFloatTypes` | `bfloat16`, `float16`, `float8_...` |
+| `ExtendedFloatTypes` | `bfloat16`, `float16`, `float8_e5m2`, `float8_e4m3` 等 |
 | `AllNumericTypes` | 所有上述类型 |
 
 ## `dispatch`

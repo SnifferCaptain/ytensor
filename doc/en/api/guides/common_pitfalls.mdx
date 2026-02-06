@@ -1,10 +1,10 @@
 # Common Pitfalls
 
-This guide lists common problems and solutions encountered when using YTensor.
+This guide lists common issues and solutions when using YTensor.
 
-## 1. Forgetting View Memory Sharing
+## 1. Forgetting Shared Memory in Views
 
-**Problem**: Modifying a view unexpectedly affects the original tensor.
+**Issue**: Modifying a view unexpectedly affects the original tensor.
 
 ```cpp
 auto tensor = YTensor<float, 2>::ones(10, 10);
@@ -22,37 +22,37 @@ sub.fill(0);  // Does not affect the original tensor
 
 ---
 
-## 2. Using view() on Non-contiguous Tensors
+## 2. Using view() on Non-Contiguous Tensors
 
-**Problem**: Calling `view()` on a non-contiguous tensor throws an exception.
+**Issue**: Calling `view()` on a non-contiguous tensor throws an exception.
 
 ```cpp
 auto t = tensor.transpose();
-auto v = t.view({new_shape});  // ❌ Throws an exception!
+auto v = t.view({new_shape});  // ❌ Throws exception!
 ```
 
 **Solution**: Use `reshape()` or call `contiguous()` first.
 
 ```cpp
-// Method 1: Use reshape (automatic handling)
+// Method 1: Use reshape (automatically handles it)
 auto v = t.reshape({new_shape});
 
-// Method 2: Convert to contiguous first
+// Method 2: Make contiguous first
 auto v = t.contiguous().view({new_shape});
 ```
 
 ---
 
-## 3. Data Access with Mismatched Types
+## 3. Type Mismatch in Data Access
 
-**Problem**: Accessing data using the wrong template type.
+**Issue**: Accessing data using the wrong template type.
 
 ```cpp
 YTensorBase t = YTensorBase::zeros({10}, "int32");
 float* ptr = t.data<float>();  // ❌ Type reinterpretation error!
 ```
 
-**Solution**: Check the `dtype()` before accessing data.
+**Solution**: Check `dtype` before access.
 
 ```cpp
 if (t.dtype() == "int32") {
@@ -66,18 +66,18 @@ if (t.dtype() == "int32") {
 
 ---
 
-## 4. In-place Operations Affecting Shared Views
+## 4. In-Place Operations Affecting Shared Views
 
-**Problem**: In-place operations modify shared data across multiple tensor variables.
+**Issue**: In-place operations modify unexpected tensors.
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4);
-auto b = a;  // Shallow copy, shared memory
+auto b = a;  // Shallow copy, shares memory
 
-a += 1.0f;   // b is modified as well!
+a += 1.0f;   // b also changes!
 ```
 
-**Solution**: Understand the memory model; use `clone()` when necessary.
+**Solution**: Understand the memory model and use `clone()` when necessary.
 
 ```cpp
 auto a = YTensor<float, 2>::ones(3, 4);
@@ -88,17 +88,17 @@ a += 1.0f;   // b is unaffected
 
 ---
 
-## 5. slice Step Rules differ from Python
+## 5. Different Slice Step Rules from Python
 
-**Problem**: Reverse slicing results do not match expectations.
+**Issue**: Reverse slicing results are not as expected.
 
 ```cpp
 // Python: arr[5:2:-1] returns [5, 4, 3]
-// YTensor: start=5, end=2, step=-1 might not match expectations
+// YTensor: start=5, end=2, step=-1 might behave differently
 auto result = vec.slice(0, 5, 2, -1);
 ```
 
-**Solution**: Use `autoFix=true` or understand the internal rules.
+**Solution**: Use `autoFix=true` or understand the rules.
 
 ```cpp
 // autoFix automatically handles cases where start > end
@@ -109,14 +109,14 @@ auto result = vec.slice(0, 5, 2, -1, true);
 
 ## 6. Unchecked Division by Zero
 
-**Problem**: Division produces `inf` or `nan`, or causes crashes with integers.
+**Issue**: Division results in inf or nan.
 
 ```cpp
 auto result = tensor / 0.0f;  // Produces inf
 auto mod = int_tensor % 0;     // ❌ Undefined behavior (may crash)
 ```
 
-**Solution**: Manually check the denominator.
+**Solution**: Check the denominator yourself.
 
 ```cpp
 if (denominator != 0) {
@@ -126,16 +126,16 @@ if (denominator != 0) {
 
 ---
 
-## 7. Out-of-bounds Access with atData_()
+## 7. Out of Bounds Access with atData_()
 
-**Problem**: `atData_()` does not perform bounds checking.
+**Issue**: `atData_()` does not perform boundary checks.
 
 ```cpp
 auto tensor = YTensor<float, 1>::zeros(10);
 tensor.atData_(100) = 1.0f;  // ❌ Out of bounds! Undefined behavior
 ```
 
-**Solution**: Ensure the index is within the valid range.
+**Solution**: Ensure the index is within valid range.
 
 ```cpp
 if (index >= 0 && index < tensor.size()) {
@@ -145,20 +145,20 @@ if (index >= 0 && index < tensor.size()) {
 
 ---
 
-## 8. Using atData_() without Contiguity
+## 8. Using atData_() After Forgetting Contiguous()
 
-**Problem**: Using `atData_()` on a non-contiguous tensor yields incorrect results.
+**Issue**: Using `atData_()` on a non-contiguous tensor yields incorrect results.
 
 ```cpp
 auto t = tensor.transpose();
-// t is non-contiguous, atData_() accesses by physical index, resulting in an error
+// t is non-contiguous, atData_() accesses by physical index, giving wrong logical results
 float val = t.atData_(0);
 ```
 
-**Solution**: Ensure contiguity or use `atData()`.
+**Solution**: Make contiguous first or use `atData()`.
 
 ```cpp
-// Method 1: Convert to contiguous first
+// Method 1: Use after contiguous
 t.contiguous_();
 float val = t.atData_(0);
 
@@ -168,34 +168,34 @@ float val = t.atData(0);
 
 ---
 
-## 9. Modular operator and float types
+## 9. Bitwise Operations on Floating Point Types
 
-**Problem**: Generally, `%` is thought to be unsupported for floating-point numbers.
+**Issue**: Generally, `%` is considered not to support floating point numbers.
 
-**Fact**: YTensor provides extended support for `%` on floating-point tensors, implemented internally using `fabs` and `fmod`.
+**Fact**: YTensor extends support for `%` using `fabs` and `fmod` internally.
 
-**Note**: While supported, be mindful of floating-point precision issues.
+**Note**: Although supported, be aware of floating point precision issues.
 
 ```cpp
-auto t = YTensorBase::zeros({10}, "int32");
-auto result = t % 2;  // ✅ Correct
+auto t = YTensorBase::zeros({10}, "float32");
+auto result = t % 2.0f;  // ✅ Correct
 ```
 
 ---
 
 ## Checklist
 
-- [ ] Does a view modification have unintended side effects?
-- [ ] Do non-contiguous tensors require `contiguous()` before access?
-- [ ] Does the data type match the template argument?
+- [ ] Do view modifications have side effects?
+- [ ] Do non-contiguous tensors need `contiguous()`?
+- [ ] Do data types match?
 - [ ] Is the denominator potentially zero?
-- [ ] Is the `atData_()` index valid?
-- [ ] Are integer/float operators used correctly?
+- [ ] Is `atData_()` index valid?
+- [ ] Are integer/float operators correct?
 
 ---
 
 ## Related Content
 
-- [Memory Model](./memory_model.mdx) - Understand views and copies
+- [Memory Model](./memory_model.mdx) - Understanding views and copies
 - [Differences from Python](./python_differences.mdx) - API differences
 - [Performance Optimization](./performance_tips.mdx) - Best practices

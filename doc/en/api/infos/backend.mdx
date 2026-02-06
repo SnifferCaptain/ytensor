@@ -1,47 +1,28 @@
 # Backend System
 
-This document describes the matrix multiplication backend configurations in the `yt::infos` namespace.
-
 ## MatmulBackend Enum
+
+Defined in `ytensor_infos.hpp`, specifies the implementation used for matrix multiplication.
 
 ```cpp
 enum class MatmulBackend {
-    Naive = 0,  // Plain implementation, no dependencies
-    Eigen = 1,  // Eigen library implementation
-    AVX2 = 2    // Custom AVX2+FMA implementation
+    Naive,  // Plain implementation (slow, reference)
+    Eigen,  // Usually used when AVX2 is not available
+    AVX2    // Highly optimized (requires hardware support)
 };
 ```
 
-## Default Backend
+## Global Configuration
+
+The default backend is determined at compilation time:
 
 ```cpp
-static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2
-#elif YT_USE_EIGEN
-    MatmulBackend::Eigen
-#else
-    MatmulBackend::Naive
-#endif
-;
+// Check the default backend
+constexpr MatmulBackend defaultBackend = yt::infos::defaultMatmulBackend;
 ```
 
-Priority: AVX2 > Eigen > Naive
+You can compile with macros to control this:
+*   `YT_NO_AVX2`: Disable AVX2 (fallback to Eigen or Naive).
+*   `YT_NO_EIGEN`: Disable Eigen (fallback to Naive).
 
-## Compilation Macros
-
-| Macro | Description |
-| --- | --- |
-| `YT_USE_EIGEN` | Enables the Eigen backend |
-| `YT_USE_AVX2` | Enables the AVX2 backend |
-
-## Backend Performance and Selection
-
-For detailed performance comparisons and selection recommendations for different backends, please refer to the **[Backend Selection Guide](../guides/backend_selection.mdx)**.
-
----
-
-## Related Content
-
-- [Performance Optimization Guide](../guides/performance_tips.mdx)
-- [Backend Selection Guide](../guides/backend_selection.mdx)
+See [Backend Selection](../guides/backend_selection.mdx) for more details.

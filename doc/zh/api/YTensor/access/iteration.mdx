@@ -171,9 +171,9 @@ std::cout << "Count > 0.5: " << count << std::endl;
 **并行控制**
 
 `flop` 参数控制并行策略：
-- `flop = 1e-11`（默认）：简单操作，自动并行
+- `flop = 1e-11`（默认）：极小值，导致不会并行化
 - 增大 `flop`：复杂操作，更积极并行
-- 减小 `flop`：轻量操作，可能串行
+- 减小 `flop`：轻量操作，不并行
 
 内部会根据 `flop * 元素数量` 决定线程数。
 :::
@@ -392,18 +392,18 @@ dst2.copy_(src);
 
 ### 注意事项
 
-:::danger
+:::info
 **内存重叠**
 
-`copy_()` 不支持源和目标内存重叠：
+`copy_()` 已支持源和目标内存重叠的情况，内部会自动处理：
 
 ```cpp
 yt::YTensor<float, 2> tensor(10, 10);
 auto view1 = tensor.slice(0, 0, 5);
 auto view2 = tensor.slice(0, 2, 7);
 
-// ❌ 错误：view1 和 view2 内存重叠
-view1.copy_(view2);  // 未定义行为！
+// ✅ 支持：view1 和 view2 内存重叠但可以正确复制
+view1.copy_(view2);
 ```
 :::
 
@@ -448,8 +448,17 @@ tensor.foreach([](float& val) {
 // 方式 2：带坐标（不推荐，除非需要坐标）
 tensor.foreach([](float& val, const std::vector<int>& coord) {
     val = std::sqrt(val);  // 实际没用到 coord
-});  // ⚡️ 慢（需要计算坐标）
+});  // ⚡️ 较慢（需要计算坐标）
 ```
+
+:::info
+**性能排序**
+
+从快到慢：
+1. `broadcastInplace` 广播操作（最快）
+2. `fill()` / `foreach` 无坐标版本
+3. `foreach` 带坐标版本（最慢）
+:::
 
 ### copy_ vs 循环赋值
 

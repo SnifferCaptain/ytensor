@@ -9,7 +9,6 @@
 | `relu()` | ReLU 激活函数 | `relu_()` |
 | `exp()` | 指数函数 | - |
 | `sigmoid()` | Sigmoid 激活函数 | - |
-
 | `softmax()` | Softmax 归一化函数 | `softmax_()` |
 
 ---
@@ -17,6 +16,13 @@
 ## `relu()`
 
 对输入张量进行整流线性单元（Rectified Linear Unit）激活操作。
+
+### 核心功能描述
+
+该函数对输入张量的每个元素应用 ReLU 函数。
+*   `order = 0`: 计算 $f(x) = \max(0, x)$
+*   `order = 1`: 计算导数 $f'(x) = 1 \text{ if } x > 0 \text{ else } 0$
+*   `order < 0`: 计算 n 次积分 $\frac{x^n}{n!} (x > 0)$
 
 ### 函数签名
 
@@ -34,13 +40,6 @@ YTensor<T, dim>& relu_(YTensor<T, dim>& x, int order = 0);
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` | - | 输入张量 |
 | `order` | `int` | `0` | 导数阶数（0=函数值，1=一阶导数，-n=n次积分） |
-
-### 核心功能描述
-
-该函数对输入张量的每个元素应用 ReLU 函数。
-*   `order = 0`: 计算 $f(x) = \max(0, x)$
-*   `order = 1`: 计算导数 $f'(x) = 1 \text{ if } x > 0 \text{ else } 0$
-*   `order < 0`: 计算 n 次积分 $\frac{x^n}{n!} (x > 0)$
 
 ### 返回值
 
@@ -74,6 +73,10 @@ void example() {
 
 对输入张量进行指数运算。
 
+### 核心功能描述
+
+计算 $e^x$。
+
 ### 函数签名
 
 ```cpp
@@ -87,10 +90,6 @@ YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` | - | 输入张量 |
 | `order` | `int` | `0` | 导数阶数（保留参数，目前仅支持 0） |
-
-### 核心功能描述
-
-计算 $e^x$。
 
 ### 返回值
 
@@ -111,6 +110,13 @@ auto y = yt::function::exp(x);
 
 对输入张量进行 Sigmoid 激活操作。
 
+### 核心功能描述
+
+该函数对每个元素应用 Sigmoid 函数：
+*   `order = 0`: $\sigma(x) = \frac{1}{1 + e^{-x}}$
+*   `order = 1`: $\sigma'(x) = \sigma(x)(1 - \sigma(x))$
+*   `order = -1`: $\log(1 + e^x)$ (SoftPlus)
+
 ### 函数签名
 
 ```cpp
@@ -124,13 +130,6 @@ YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` | - | 输入张量 |
 | `order` | `int` | `0` | 导数阶数 |
-
-### 核心功能描述
-
-该函数对每个元素应用 Sigmoid 函数：
-*   `order = 0`: $\sigma(x) = \frac{1}{1 + e^{-x}}$
-*   `order = 1`: $\sigma'(x) = \sigma(x)(1 - \sigma(x))$
-*   `order = -1`: $\log(1 + e^x)$ (SoftPlus)
 
 ### 返回值
 
@@ -149,11 +148,11 @@ auto dy = yt::function::sigmoid(x, 1);
 // dy ≈ {0.197, 0.25, 0.197}
 ```
 
-```
-
 ---
 
 ## `softmax()`
+
+对输入张量进行 Softmax 归一化操作。
 
 ### 核心功能描述
 
@@ -210,4 +209,4 @@ void example() {
 
 ## 相关内容
 
-- [注意力机制](./attention.mdx) - Scaled Dot-Product Attention
+- [广播操作](../YTensor/math/broadcast.mdx) - 广播机制
