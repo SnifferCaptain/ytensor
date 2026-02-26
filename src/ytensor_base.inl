@@ -512,7 +512,7 @@ inline YTensorBase& YTensorBase::to_(const std::string& device) {
     const size_t bytes = size() * _element_size;
     if (target == "kompute") {
 #if !YT_USE_KOMPUTE
-        throw std::runtime_error("[YTensorBase::to_] kompute backend is not enabled at compile time (YT_USE_KOMPUTE=0)");
+        throw std::runtime_error("[YTensorBase::to_] kompute backend was not enabled during compilation. Rebuild with YT_USE_KOMPUTE=1 and Kompute dependencies.");
 #endif
         if (!_gpuMemory) {
             _gpuMemory = std::make_shared<yt::KomputeMemory>();
