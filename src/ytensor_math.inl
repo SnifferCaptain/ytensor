@@ -334,7 +334,6 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                     op = matmul_avx2_backend(other);
                     break;
                 }
-                [[fallthrough]];
 #endif
 #if YT_USE_EIGEN
             case yt::infos::MatmulBackend::Eigen:
