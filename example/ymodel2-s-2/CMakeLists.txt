@@ -42,6 +42,7 @@ set(SRC
 
 add_executable(${PROJECT_NAME} ${SRC})
 add_executable(ymodel2_parity_test parity_test.cpp ymodel2.cpp)
+add_executable(kompute_shader_manifest_test kompute_shader_manifest_test.cpp)
 
 # if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 #     target_compile_options(${PROJECT_NAME} PRIVATE -Wno-pass-failed)
@@ -69,17 +70,35 @@ if(YT_USE_KOMPUTE)
     find_program(GLSLANG_VALIDATOR glslangValidator)
     if(GLSLANG_VALIDATOR)
         set(KOMPUTE_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+        set(KOMPUTE_CORE_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/kompute/shaders)
         set(KOMPUTE_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spirv)
         file(MAKE_DIRECTORY ${KOMPUTE_SPV_DIR})
-        add_custom_command(
-            OUTPUT ${KOMPUTE_SPV_DIR}/elementwise_add.comp.spv
-            COMMAND ${GLSLANG_VALIDATOR} -V -D -S comp -e main -o ${KOMPUTE_SPV_DIR}/elementwise_add.comp.spv ${KOMPUTE_SHADER_DIR}/elementwise_add.comp.hlsl
-            DEPENDS ${KOMPUTE_SHADER_DIR}/elementwise_add.comp.hlsl
-            COMMENT "Compiling HLSL shader to SPIR-V for Kompute"
-            VERBATIM
+        set(KOMPUTE_HLSL_FILES
+            ${KOMPUTE_SHADER_DIR}/elementwise_add.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/broadcast_inplace.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/binary_arith.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/binary_cmp.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/matmul.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/matview.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/reduction_sum.comp.hlsl
+            ${KOMPUTE_CORE_SHADER_DIR}/reduction_max.comp.hlsl
         )
-        add_custom_target(kompute_spirv ALL DEPENDS ${KOMPUTE_SPV_DIR}/elementwise_add.comp.spv)
+        set(KOMPUTE_SPV_OUTPUTS)
+        foreach(HLSL_FILE ${KOMPUTE_HLSL_FILES})
+            get_filename_component(HLSL_NAME ${HLSL_FILE} NAME_WE)
+            set(SPV_FILE ${KOMPUTE_SPV_DIR}/${HLSL_NAME}.spv)
+            add_custom_command(
+                OUTPUT ${SPV_FILE}
+                COMMAND ${GLSLANG_VALIDATOR} -V -D -S comp -e main -o ${SPV_FILE} ${HLSL_FILE}
+                DEPENDS ${HLSL_FILE}
+                COMMENT "Compiling ${HLSL_FILE} to SPIR-V"
+                VERBATIM
+            )
+            list(APPEND KOMPUTE_SPV_OUTPUTS ${SPV_FILE})
+        endforeach()
+        add_custom_target(kompute_spirv ALL DEPENDS ${KOMPUTE_SPV_OUTPUTS})
         add_dependencies(${PROJECT_NAME} kompute_spirv)
+        add_dependencies(ymodel2_parity_test kompute_spirv)
     endif()
 endif()
 

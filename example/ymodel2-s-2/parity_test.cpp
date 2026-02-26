@@ -57,6 +57,10 @@ void assertClose(const yt::YTensor<float, 2>& a, const yt::YTensor<float, 2>& b,
 } // namespace
 
 int main() {
+#if !YT_USE_KOMPUTE
+    std::cout << "ymodel2 parity skipped: YT_USE_KOMPUTE=0" << std::endl;
+    return 0;
+#else
     ymodel2::YConfig2 cfg;
     cfg.scale_lvl(-2);
 
@@ -77,4 +81,5 @@ int main() {
 
     std::cout << "ymodel2 parity ok" << std::endl;
     return 0;
+#endif
 }
