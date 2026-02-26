@@ -255,7 +255,7 @@ auto broadcast(Func&& func, Args&&... tensors) {
     // 收集所有张量的shape
     std::vector<std::vector<int>> shapes;
     bool hasTensor = false;
-    std::string firstDevice;
+    std::string firstDevice = "";
     [[maybe_unused]] auto collectShape = [&shapes, &hasTensor, &firstDevice](auto&& arg) {
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
@@ -263,7 +263,7 @@ auto broadcast(Func&& func, Args&&... tensors) {
                 hasTensor = true;
                 firstDevice = arg.device();
             } else if (arg.device() != firstDevice) {
-                throw std::runtime_error("broadcast: tensor device mismatch");
+                throw std::runtime_error("broadcast: tensor device mismatch (" + firstDevice + " vs " + arg.device() + ")");
             }
         }
     };
@@ -452,7 +452,7 @@ TensorType& broadcastInplace(TensorType& target, Func&& func, Args&&... tensors)
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
             if (arg.device() != targetDevice) {
-                throw std::runtime_error("broadcastInplace: tensor device mismatch");
+                throw std::runtime_error("broadcastInplace: tensor device mismatch (" + targetDevice + " vs " + arg.device() + ")");
             }
         }
     };
@@ -674,7 +674,7 @@ yt::YTensorBase broadcastBase(Func&& func, Args&&... tensors) {
     // 收集所有张量的shape
     std::vector<std::vector<int>> shapes;
     bool hasTensor = false;
-    std::string firstDevice;
+    std::string firstDevice = "";
     [[maybe_unused]] auto collectShape = [&shapes, &hasTensor, &firstDevice](auto&& arg) {
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
@@ -682,7 +682,7 @@ yt::YTensorBase broadcastBase(Func&& func, Args&&... tensors) {
                 hasTensor = true;
                 firstDevice = arg.device();
             } else if (arg.device() != firstDevice) {
-                throw std::runtime_error("broadcastBase: tensor device mismatch");
+                throw std::runtime_error("broadcastBase: tensor device mismatch (" + firstDevice + " vs " + arg.device() + ")");
             }
         }
     };

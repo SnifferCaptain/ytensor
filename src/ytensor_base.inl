@@ -221,6 +221,9 @@ inline void YTensorBase::shallowCopyTo(YTensorBase &other) const {
 }
 
 inline YTensorBase YTensorBase::clone() const {
+    if (_device != "cpu" && _gpuMemory) {
+        return this->to("cpu").clone();
+    }
     YTensorBase op;
     op._shape = _shape;
     op._dtype = _dtype;
@@ -304,6 +307,9 @@ inline YTensorBase YTensorBase::clone() const {
                 }
             }
         }
+    }
+    if (_device != "cpu") {
+        op.to_(_device);
     }
     return op;
 }
@@ -507,15 +513,19 @@ inline YTensorBase& YTensorBase::to_(const std::string& device) {
         if (!_gpuMemory) {
             _gpuMemory = std::make_shared<yt::KomputeMemory>();
         }
-        YTensorBase host = this->contiguous();
-        _gpuMemory->syncFromHost(host._data.get() + host._offset * host._element_size, bytes);
+        if (this->isContiguous() && _offset == 0) {
+            _gpuMemory->syncFromHost(_data.get() + _offset * _element_size, bytes);
+        } else {
+            YTensorBase host = this->contiguous();
+            _gpuMemory->syncFromHost(host._data.get(), bytes);
+        }
         _device = "kompute";
         return *this;
     }
     if (_gpuMemory) {
         YTensorBase host(_shape, _dtype);
-        host._device = _device;
         _gpuMemory->syncToHost(host._data.get(), bytes);
+        _device = "cpu";
         this->copy_(host);
     }
     _device = "cpu";
