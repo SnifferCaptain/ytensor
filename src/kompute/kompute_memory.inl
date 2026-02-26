@@ -33,9 +33,10 @@ inline void KomputeMemory::syncFromHost(const void* hostPtr, size_t bytes) {
     if (!hostPtr) {
         throw std::invalid_argument("[KomputeMemory::syncFromHost] hostPtr is null");
     }
+    std::fill(_hostWords.begin(), _hostWords.end(), 0u);
     std::memcpy(_hostWords.data(), hostPtr, bytes);
 #if YT_USE_KOMPUTE
-    std::memcpy(_tensor->vector().data(), _hostWords.data(), _hostWords.size() * sizeof(uint32_t));
+    std::memcpy(_tensor->vector().data(), _hostWords.data(), bytes);
     auto seq = _manager->sequence();
     std::vector<std::shared_ptr<kp::Memory>> params = {_tensor};
     seq->record<kp::OpSyncDevice>(params)->eval();

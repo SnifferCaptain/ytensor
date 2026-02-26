@@ -40,7 +40,7 @@ void moveToDevice(ymodel2::YForCausalLM2& model, const std::string& device) {
     }
 }
 
-void expectClose(const yt::YTensor<float, 2>& a, const yt::YTensor<float, 2>& b, float eps = 1e-3f) {
+void assertClose(const yt::YTensor<float, 2>& a, const yt::YTensor<float, 2>& b, float eps = 1e-3f) {
     assert(a.shape() == b.shape());
     for (int i = 0; i < a.shape(0); ++i) {
         for (int j = 0; j < a.shape(1); ++j) {
@@ -73,7 +73,7 @@ int main() {
 
     auto cpuLogits = cpu.forward(ids);
     auto gpuLogits = gpu.forward(ids).to("cpu");
-    expectClose(cpuLogits, gpuLogits);
+    assertClose(cpuLogits, gpuLogits);
 
     std::cout << "ymodel2 parity ok" << std::endl;
     return 0;

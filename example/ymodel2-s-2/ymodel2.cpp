@@ -251,7 +251,9 @@ yt::YTensor<float, 3> PEGA2::forward(
     
     // 获取causal mask
     yt::YTensor<float, 2> causal_mask = kv_cache->get_mask(l);
-    causal_mask.to_(q_full.device());
+    if (causal_mask.device() != q_full.device()) {
+        causal_mask.to_(q_full.device());
+    }
     
     // 使用 scaledDotProductAttention完成标准注意力计算。
     // q_5d, k_5d, v_5d: [b, 2, hh, l, hd]
