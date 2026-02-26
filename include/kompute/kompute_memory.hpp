@@ -1,7 +1,9 @@
 #pragma once
 
+#include "../ytensor_infos.hpp"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace yt {
 
@@ -26,7 +28,11 @@ public:
     std::string backend() const override;
 
 private:
-    std::shared_ptr<char[]> _buffer;
+    std::vector<uint32_t> _hostWords;
+#if YT_USE_KOMPUTE
+    std::shared_ptr<kp::Manager> _manager;
+    std::shared_ptr<kp::TensorT<uint32_t>> _tensor;
+#endif
     size_t _bytes = 0;
 };
 

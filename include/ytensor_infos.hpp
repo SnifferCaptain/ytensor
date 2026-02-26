@@ -104,6 +104,15 @@ namespace yt::infos{
             #define YT_USE_AVX2 0
         #endif
     #endif
+
+    /// @brief 控制是否启用Kompute后端的宏，默认根据头文件可用性自动检测
+    #ifndef YT_USE_KOMPUTE
+        #if __has_include(<kompute/Kompute.hpp>)
+            #define YT_USE_KOMPUTE 1
+        #else
+            #define YT_USE_KOMPUTE 0
+        #endif
+    #endif
     
     /// @brief 矩阵乘法后端枚举
     enum class MatmulBackend {
@@ -135,4 +144,8 @@ namespace yt::infos{
 #if YT_USE_AVX2
 #include <immintrin.h>
 #endif // YT_USE_AVX2
+
+#if YT_USE_KOMPUTE
+#include <kompute/Kompute.hpp>
+#endif // YT_USE_KOMPUTE
     

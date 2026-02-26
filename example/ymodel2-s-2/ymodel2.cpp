@@ -251,6 +251,7 @@ yt::YTensor<float, 3> PEGA2::forward(
     
     // 获取causal mask
     yt::YTensor<float, 2> causal_mask = kv_cache->get_mask(l);
+    causal_mask.to_(q_full.device());
     
     // 使用 scaledDotProductAttention完成标准注意力计算。
     // q_5d, k_5d, v_5d: [b, 2, hh, l, hd]
@@ -378,6 +379,11 @@ yt::YTensor<float, 3> YModel2::forward(const yt::YTensor<int, 2>& ids, std::vect
     
     auto cos_slice = rope.cos.slice(0, start, start + l);
     auto sin_slice = rope.sin.slice(0, start, start + l);
+    if (embed.device() != "cpu") {
+        x.to_(embed.device());
+        cos_slice.to_(embed.device());
+        sin_slice.to_(embed.device());
+    }
     
     for (int i = 0; i < config.num_layers; ++i) {
         KVCache* cache = (kv_caches && i < (int)kv_caches->size()) ? &(*kv_caches)[i] : nullptr;
@@ -417,7 +423,11 @@ yt::YTensor<float, 2> YForCausalLM2::forward(const yt::YTensor<int, 2>& ids) {
     int b = h.shape(0), l = h.shape(1);
     
     auto last = h.slice(1, l - 1, l).contiguous().view(b, config.hidden_size);
-    auto logits = last.matmul(model.embed.transpose());
+    auto embedT = model.embed.transpose();
+    if (last.device() != embedT.device()) {
+        last.to_(embedT.device());
+    }
+    auto logits = last.matmul(embedT);
     return logits;
 }
 
@@ -500,7 +510,12 @@ namespace ops {
 template<int dim>
 yt::YTensor<float, dim> linear(const yt::YTensor<float, dim>& x, const yt::YTensor<float, 2>& weight) {
     // 权重遵循pytorch的权重形状，即[输出, 输入]，因此需要转置
-    return x.matmul(weight.transpose());
+    auto w = weight.transpose();
+    auto in = x;
+    if (in.device() != w.device()) {
+        in.to_(w.device());
+    }
+    return in.matmul(w);
 }
 
 template yt::YTensor<float, 3> linear(const yt::YTensor<float, 3>&, const yt::YTensor<float, 2>&);
