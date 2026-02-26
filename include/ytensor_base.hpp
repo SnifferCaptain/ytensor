@@ -384,6 +384,8 @@ public:
     /// @brief 原地同步/迁移到指定设备
     YTensorBase& to_(const std::string& device);
     void ensureSameDevice(const YTensorBase& other, const std::string& opName) const;
+    void setDeviceTag(const std::string& device);
+    void markHostDirty();
 
     /// @brief 获取元素字节大小
     size_t elementSize() const;
@@ -414,4 +416,3 @@ inline YTensorBase YTensorBase::cast(const std::string& newDtype) const {
 }
 
 } // namespace yt
-

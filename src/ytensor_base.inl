@@ -86,6 +86,7 @@ inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
         _device = other._device;
         _gpuMemory = other._gpuMemory;
     }
+    markHostDirty();
     return *this;
 }
 
@@ -535,6 +536,16 @@ inline YTensorBase& YTensorBase::to_(const std::string& device) {
 inline void YTensorBase::ensureSameDevice(const YTensorBase& other, const std::string& opName) const {
     if (_device != other._device) {
         throw std::runtime_error("[YTensorBase::" + opName + "] device mismatch: " + _device + " vs " + other._device + ". Use to(...) first.");
+    }
+}
+
+inline void YTensorBase::setDeviceTag(const std::string& device) {
+    _device = yt::normalizeDevice(device);
+}
+
+inline void YTensorBase::markHostDirty() {
+    if (_device != "cpu") {
+        _gpuMemory.reset();
     }
 }
 

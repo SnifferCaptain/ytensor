@@ -136,6 +136,8 @@ yt::YTensor<T, dim>::YTensor(const yt::YTensor<T, dim>& other): YTensorBase() {
     _offset = other._offset;
     _element_size = other._element_size;
     _dtype = other._dtype;
+    _device = other._device;
+    _gpuMemory = other._gpuMemory;
     _data = other._data;
 }
 
@@ -152,6 +154,8 @@ yt::YTensor<T, dim> &yt::YTensor<T, dim>::operator=(const yt::YTensor<T, dim> &o
     _offset = other._offset;
     _element_size = other._element_size;
     _dtype = other._dtype;
+    _device = other._device;
+    _gpuMemory = other._gpuMemory;
     _data = other._data;
     return *this;
 }

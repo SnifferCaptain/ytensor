@@ -3,6 +3,7 @@
 #include <initializer_list>
 #include <iostream>
 #include <type_traits>
+#include <algorithm>
 
 // 前向声明
 namespace yt {

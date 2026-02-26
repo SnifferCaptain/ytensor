@@ -16,7 +16,9 @@
 template <typename T, int dim>
 template <typename Func, typename... Args>
 yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&... tensors) {
-    return yt::kernel::broadcastInplace(*this, std::forward<Func>(func), std::forward<Args>(tensors)...);
+    auto& out = yt::kernel::broadcastInplace(*this, std::forward<Func>(func), std::forward<Args>(tensors)...);
+    this->markHostDirty();
+    return out;
 }
 
 // 运算符生成规则
@@ -26,9 +28,11 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
         this->ensureSameDevice(other, #OP);                                                           \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+            auto op = yt::kernel::broadcast([](const T& a, const T& b) {                              \
                 return a OP b;                                                                        \
             },*this, other);                                                                          \
+            op.setDeviceTag(this->device());                                                          \
+            return op;                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
@@ -39,13 +43,17 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator OP##=(const yt::YTensor<T, dim1>& other) { \
         this->ensureSameDevice(other, std::string(#OP) + "=");                                        \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
-            return this->broadcastInplace([](T& a, const T& b) {                                      \
+            auto& out = this->broadcastInplace([](T& a, const T& b) {                                 \
                 return a OP## = b;                                                                    \
             }, other);                                                                                \
+            this->markHostDirty();                                                                    \
+            return out;                                                                               \
         } else if constexpr (ENABLE_IF_T<T>) {                                                        \
-            return this->broadcastInplace([](T& a, const T& b) {                                      \
+            auto& out = this->broadcastInplace([](T& a, const T& b) {                                 \
                 return a = a OP b;                                                                    \
             }, other);                                                                                \
+            this->markHostDirty();                                                                    \
+            return out;                                                                               \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), std::string(#OP) + "=");                        \
         }                                                                                             \
@@ -54,9 +62,11 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     template <typename T, int dim>                                                                    \
     auto yt::YTensor<T, dim>::operator OP(const T& other) const {                                     \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+            auto op = yt::kernel::broadcast([](const T& a, const T& b) {                              \
                 return a OP b;                                                                        \
             }, *this, other);                                                                         \
+            op.setDeviceTag(this->device());                                                          \
+            return op;                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
@@ -65,13 +75,17 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     template <typename T, int dim>                                                                    \
     yt::YTensor<T, dim>& yt::YTensor<T, dim>::operator OP##=(const T& other) {                        \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
-            return broadcastInplace([](T& a, const T& b) {                                            \
+            auto& out = broadcastInplace([](T& a, const T& b) {                                       \
                 return a OP## = b;                                                                    \
             }, other);                                                                                \
+            this->markHostDirty();                                                                    \
+            return out;                                                                               \
         } else if constexpr (ENABLE_IF_T<T>) {                                                        \
-            return broadcastInplace([](T& a, const T& b) {                                            \
+            auto& out = broadcastInplace([](T& a, const T& b) {                                       \
                 return a = a OP b;                                                                    \
             }, other);                                                                                \
+            this->markHostDirty();                                                                    \
+            return out;                                                                               \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), std::string(#OP) + "=");                        \
             return *this;                                                                             \
@@ -99,9 +113,11 @@ YT_YTENSOR_OPERATOR(>>, yt::concepts::HAVE_RSHIFT)
     auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
         this->ensureSameDevice(other, #OP);                                                           \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+            auto op = yt::kernel::broadcast([](const T& a, const T& b) {                              \
                 return a OP b;                                                                        \
             }, *this, other);                                                                         \
+            op.setDeviceTag(this->device());                                                          \
+            return op;                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
@@ -110,9 +126,11 @@ YT_YTENSOR_OPERATOR(>>, yt::concepts::HAVE_RSHIFT)
     template <typename T, int dim>                                                                    \
     auto yt::YTensor<T, dim>::operator OP(const T& other) const {                                     \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
-            return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
+            auto op = yt::kernel::broadcast([](const T& a, const T& b) {                              \
                 return a OP b;                                                                        \
             }, *this, other);                                                                         \
+            op.setDeviceTag(this->device());                                                          \
+            return op;                                                                                \
         } else {                                                                                      \
             throwOperatorNotSupport(typeid(T).name(), #OP);                                           \
         }                                                                                             \
@@ -131,14 +149,18 @@ template <typename T, int dim> template<int dim1>
 auto yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
     this->ensureSameDevice(other, "%");
     if constexpr (yt::concepts::HAVE_MOD<T>){
-        return yt::kernel::broadcast([](const T& a, const T& b) {
+        auto op = yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
         }, *this, other);
+        op.setDeviceTag(this->device());
+        return op;
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return yt::kernel::broadcast([](const T& a, const T& b) {
+        auto op = yt::kernel::broadcast([](const T& a, const T& b) {
             return std::fmod(a, b);
         }, *this, other);
+        op.setDeviceTag(this->device());
+        return op;
     }
     else {
         std::string typeName = typeid(T).name();
@@ -175,14 +197,18 @@ yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator%=(const yt::Y
 template <typename T, int dim>
 auto yt::YTensor<T, dim>::operator%(const T& other) const {
     if constexpr (yt::concepts::HAVE_MOD<T>){
-        return yt::kernel::broadcast([](const T& a, const T& b) {
+        auto op = yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
         }, *this, other);
+        op.setDeviceTag(this->device());
+        return op;
     }
     else if constexpr (std::is_floating_point_v<T>){
-        return yt::kernel::broadcast([](const T& a, const T& b) {
+        auto op = yt::kernel::broadcast([](const T& a, const T& b) {
             return std::fmod(a, b);
         }, *this, other);
+        op.setDeviceTag(this->device());
+        return op;
     }
     else {
         std::string typeName = typeid(T).name();
@@ -300,19 +326,31 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     
     // 根据后端分派，各后端自己处理fastpath优化
     if constexpr (std::is_arithmetic_v<T>) {
+        yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op;
         switch (backend) {
 #if YT_USE_AVX2
             case yt::infos::MatmulBackend::AVX2:
-                if constexpr (std::is_same_v<T, float>) return matmul_avx2_backend(other);
+                if constexpr (std::is_same_v<T, float>) {
+                    op = matmul_avx2_backend(other);
+                    break;
+                }
                 [[fallthrough]];
 #endif
 #if YT_USE_EIGEN
-            case yt::infos::MatmulBackend::Eigen: return matmul_eigen_backend(other);
+            case yt::infos::MatmulBackend::Eigen:
+                op = matmul_eigen_backend(other);
+                break;
 #endif
-            default: return matmul_naive_backend(other);
+            default:
+                op = matmul_naive_backend(other);
+                break;
         }
+        op.setDeviceTag(this->device());
+        return op;
     } else {
-        return matmul_naive_backend(other);
+        auto op = matmul_naive_backend(other);
+        op.setDeviceTag(this->device());
+        return op;
     }
 }
 
