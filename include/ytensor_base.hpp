@@ -14,6 +14,7 @@
 
 #include "ytensor_concepts.hpp"
 #include "ytensor_infos.hpp"
+#include "gpu_memory.hpp"
 
 namespace yt{
 
@@ -376,6 +377,13 @@ public:
 
     /// @brief 获取数据类型字符串（例如 "float32"）
     std::string dtype() const;
+    std::string device() const;
+
+    /// @brief 将张量同步/迁移到指定设备，返回新张量
+    YTensorBase to(const std::string& device) const;
+    /// @brief 原地同步/迁移到指定设备
+    YTensorBase& to_(const std::string& device);
+    void ensureSameDevice(const YTensorBase& other, const std::string& opName) const;
 
     /// @brief 获取元素字节大小
     size_t elementSize() const;
@@ -391,6 +399,8 @@ protected:
     std::vector<int> _stride;       // 步长 (以元素为单位)
     size_t _element_size = 0;       // 元素大小（字节）
     std::string _dtype;             // 用于序列化/反序列化友好名称
+    std::string _device = "cpu";
+    std::shared_ptr<GPUMemory> _gpuMemory;
 
     /// @brief cout接口
     virtual std::ostream& _cout(std::ostream &os) const;
@@ -404,5 +414,4 @@ inline YTensorBase YTensorBase::cast(const std::string& newDtype) const {
 }
 
 } // namespace yt
-
 

@@ -21,6 +21,7 @@ inline YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string
         }
     }
     _dtype = dtype;
+    _device = "cpu";
     _element_size = static_cast<size_t>(yt::types::getTypeSize(dtype));
     // allocate contiguous storage for given shape
     size_t total = 1;
@@ -70,6 +71,8 @@ inline YTensorBase::YTensorBase(const YTensorBase& other) {
     _data = other._data;
     _element_size = other._element_size;
     _dtype = other._dtype;
+    _device = other._device;
+    _gpuMemory = other._gpuMemory;
 }
 
 inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
@@ -80,6 +83,8 @@ inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
         _data = other._data;
         _element_size = other._element_size;
         _dtype = other._dtype;
+        _device = other._device;
+        _gpuMemory = other._gpuMemory;
     }
     return *this;
 }
@@ -211,12 +216,15 @@ inline void YTensorBase::shallowCopyTo(YTensorBase &other) const {
     other._data = _data;
     other._element_size = _element_size;
     other._dtype = _dtype;
+    other._device = _device;
+    other._gpuMemory = _gpuMemory;
 }
 
 inline YTensorBase YTensorBase::clone() const {
     YTensorBase op;
     op._shape = _shape;
     op._dtype = _dtype;
+    op._device = "cpu";
     op._element_size = _element_size;
     op._offset = 0;
     
@@ -301,6 +309,7 @@ inline YTensorBase YTensorBase::clone() const {
 }
 
 inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
+    ensureSameDevice(src, "copy_");
     // 验证shape一致
     if (!this->shapeMatch(src.shape())) {
         throw std::runtime_error("copy_: source and destination shapes must match");
@@ -476,7 +485,48 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
 }
 
 inline std::string YTensorBase::dtype() const { return _dtype; }
+inline std::string YTensorBase::device() const { return _device; }
 inline size_t YTensorBase::elementSize() const { return _element_size; }
+
+inline YTensorBase YTensorBase::to(const std::string& device) const {
+    YTensorBase op = *this;
+    op.to_(device);
+    return op;
+}
+
+inline YTensorBase& YTensorBase::to_(const std::string& device) {
+    const std::string target = yt::normalizeDevice(device);
+    if (target != "cpu" && target != "kompute") {
+        throw std::invalid_argument("[YTensorBase::to_] unsupported device: " + device);
+    }
+    if (target == _device) {
+        return *this;
+    }
+    const size_t bytes = size() * _element_size;
+    if (target == "kompute") {
+        if (!_gpuMemory) {
+            _gpuMemory = std::make_shared<yt::KomputeMemory>();
+        }
+        YTensorBase host = this->contiguous();
+        _gpuMemory->syncFromHost(host._data.get() + host._offset * host._element_size, bytes);
+        _device = "kompute";
+        return *this;
+    }
+    if (_gpuMemory) {
+        YTensorBase host(_shape, _dtype);
+        host._device = _device;
+        _gpuMemory->syncToHost(host._data.get(), bytes);
+        this->copy_(host);
+    }
+    _device = "cpu";
+    return *this;
+}
+
+inline void YTensorBase::ensureSameDevice(const YTensorBase& other, const std::string& opName) const {
+    if (_device != other._device) {
+        throw std::runtime_error("[YTensorBase::" + opName + "] device mismatch: " + _device + " vs " + other._device + ". Use to(...) first.");
+    }
+}
 
 inline bool YTensorBase::isContiguous(int fromDim, int toDim) const {
     if (_data == nullptr) {
@@ -1194,6 +1244,7 @@ inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, 
         if (t.ndim() != d) {
             throw std::invalid_argument("[YTensorBase::concat] Dimension mismatch");
         }
+        first.ensureSameDevice(t, "concat");
         if (t.dtype() != first.dtype()) {
             throw std::invalid_argument("[YTensorBase::concat] dtype mismatch");
         }

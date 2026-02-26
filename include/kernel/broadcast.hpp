@@ -5,6 +5,7 @@
 #include <utility>
 #include <tuple>
 #include <type_traits>
+#include <string>
 #include "../ytensor_concepts.hpp"
 #include "../ytensor_types.hpp"
 #include "parallel_for.hpp"
@@ -253,9 +254,17 @@ auto broadcast(Func&& func, Args&&... tensors) {
     
     // 收集所有张量的shape
     std::vector<std::vector<int>> shapes;
-    [[maybe_unused]] auto collectShape = [&shapes](auto&& arg) {
+    bool hasTensor = false;
+    std::string firstDevice;
+    [[maybe_unused]] auto collectShape = [&shapes, &hasTensor, &firstDevice](auto&& arg) {
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
+            if (!hasTensor) {
+                hasTensor = true;
+                firstDevice = arg.device();
+            } else if (arg.device() != firstDevice) {
+                throw std::runtime_error("broadcast: tensor device mismatch");
+            }
         }
     };
     (collectShape(tensors), ...);
@@ -437,10 +446,14 @@ TensorType& broadcastInplace(TensorType& target, Func&& func, Args&&... tensors)
     // 收集所有张量的shape（包括target）
     std::vector<std::vector<int>> shapes;
     shapes.push_back(target.shape());
+    const std::string targetDevice = target.device();
     
-    [[maybe_unused]] auto collectShape = [&shapes](auto&& arg) {
+    [[maybe_unused]] auto collectShape = [&shapes, &targetDevice](auto&& arg) {
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
+            if (arg.device() != targetDevice) {
+                throw std::runtime_error("broadcastInplace: tensor device mismatch");
+            }
         }
     };
     (collectShape(tensors), ...);
@@ -660,9 +673,17 @@ yt::YTensorBase broadcastBase(Func&& func, Args&&... tensors) {
     
     // 收集所有张量的shape
     std::vector<std::vector<int>> shapes;
-    [[maybe_unused]] auto collectShape = [&shapes](auto&& arg) {
+    bool hasTensor = false;
+    std::string firstDevice;
+    [[maybe_unused]] auto collectShape = [&shapes, &hasTensor, &firstDevice](auto&& arg) {
         if constexpr (is_ytensor_v<decltype(arg)>) {
             shapes.push_back(arg.shape());
+            if (!hasTensor) {
+                hasTensor = true;
+                firstDevice = arg.device();
+            } else if (arg.device() != firstDevice) {
+                throw std::runtime_error("broadcastBase: tensor device mismatch");
+            }
         }
     };
     (collectShape(tensors), ...);

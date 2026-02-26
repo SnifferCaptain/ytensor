@@ -24,6 +24,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
     auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
+        this->ensureSameDevice(other, #OP);                                                           \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
             return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
                 return a OP b;                                                                        \
@@ -36,6 +37,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::broadcastInplace(Func&& func, Args&&..
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
     yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator OP##=(const yt::YTensor<T, dim1>& other) { \
+        this->ensureSameDevice(other, std::string(#OP) + "=");                                        \
         if constexpr (ENABLE_IF_T##_INPLACE<T>) {                                                     \
             return this->broadcastInplace([](T& a, const T& b) {                                      \
                 return a OP## = b;                                                                    \
@@ -95,6 +97,7 @@ YT_YTENSOR_OPERATOR(>>, yt::concepts::HAVE_RSHIFT)
     template <typename T, int dim>                                                                    \
     template <int dim1>                                                                               \
     auto yt::YTensor<T, dim>::operator OP(const yt::YTensor<T, dim1>& other) const {                  \
+        this->ensureSameDevice(other, #OP);                                                           \
         if constexpr (ENABLE_IF_T<T>) {                                                               \
             return yt::kernel::broadcast([](const T& a, const T& b) {                                 \
                 return a OP b;                                                                        \
@@ -126,6 +129,7 @@ YT_YTENSOR_CMP_OPERATOR(!=, yt::concepts::HAVE_NEQ)
 
 template <typename T, int dim> template<int dim1>
 auto yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
+    this->ensureSameDevice(other, "%");
     if constexpr (yt::concepts::HAVE_MOD<T>){
         return yt::kernel::broadcast([](const T& a, const T& b) {
             return a % b;
@@ -145,6 +149,7 @@ auto yt::YTensor<T, dim>::operator%(const yt::YTensor<T, dim1>& other) const {
 
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, std::max(dim, dim1)>& yt::YTensor<T, dim>::operator%=(const yt::YTensor<T, dim1>& other){
+    this->ensureSameDevice(other, "%=");
     if constexpr (yt::concepts::HAVE_MOD_INPLACE<T>){
         return broadcastInplace([](T& a, const T& b) {
             a %= b;
@@ -286,6 +291,7 @@ template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul(
     const yt::YTensor<T, dim1>& other, 
     yt::infos::MatmulBackend backend) const {
+    this->ensureSameDevice(other, "matmul");
     static_assert(yt::concepts::HAVE_ADD<T> && yt::concepts::HAVE_MUL<T>, "Type must have add and mul in matmul");
     static_assert(dim >= 1 && dim1 >= 1, "matmul only support dim >= 1");
     if(this->shape(-1) != other.shape(-2)){

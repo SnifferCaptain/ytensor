@@ -156,6 +156,10 @@ public:
     /// @return 返回张量数据的指针。
     T *data_();
     const T *data_() const;
+    
+    std::string device() const;
+    YTensor<T, dim> to(const std::string& device) const;
+    YTensor<T, dim>& to_(const std::string& device);
 
     using YTensorBase::size;
     using YTensorBase::shape;

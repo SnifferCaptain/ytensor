@@ -241,6 +241,22 @@ const T* yt::YTensor<T, dim>::data_() const {
     return reinterpret_cast<const T*>(_data.get());
 }
 
+template <typename T, int dim>
+std::string yt::YTensor<T, dim>::device() const {
+    return YTensorBase::device();
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::YTensor<T, dim>::to(const std::string& device) const {
+    return yt::YTensor<T, dim>(YTensorBase::to(device));
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::YTensor<T, dim>::to_(const std::string& device) {
+    YTensorBase::to_(device);
+    return *this;
+}
+
 template<typename T, int dim>
 constexpr int yt::YTensor<T, dim>::shapeSize() const {
     return dim;
