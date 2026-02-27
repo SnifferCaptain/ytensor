@@ -21,6 +21,9 @@
 #if YT_USE_AVX2
 #include "../include/kernel/gemm/sgemm.hpp"
 #endif
+#if YT_USE_KOMPUTE
+#include "../include/kompute/kompute_dispatch.hpp"
+#endif
 
 namespace yt{
 
@@ -178,10 +181,13 @@ YTensorBase& YTensorBase::broadcastInplace(Func&& func, Args&&... tensors) {
 
 // 统一运算符宏 - 同时生成 Tensor op Tensor 和 Tensor op Scalar 的4个版本
 // TypeListT: 类型列表（如 yt::types::AllNumericTypes）
-#define YT_IMPL_BINARY_OP(OP, OP_NAME, TypeListT)                                          \
+// GPU_SPV_FLOAT: float32的SPIR-V文件名（为空则不启用GPU float路径）
+// GPU_SPV_INT:   int32的SPIR-V文件名（为空则不启用GPU int路径）
+#define YT_IMPL_BINARY_OP(OP, OP_NAME, TypeListT, GPU_SPV_FLOAT, GPU_SPV_INT)              \
 /* Tensor op Tensor - 非原地版本 */                                                         \
 inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
     auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
+    YT_KOMPUTE_BINARY_DISPATCH(OP, GPU_SPV_FLOAT, GPU_SPV_INT)                            \
     YTensorBase result(opShape, _dtype);                                                   \
     result.copy_(*this);                                                                   \
     yt::kernel::dispatchOrThrow<TypeListT>(_dtype,                                         \
@@ -213,19 +219,47 @@ YTensorBase& YTensorBase::operator OP##=(const T& scalar) {                     
     return *this;                                                                          \
 }
 
-// 实例化所有运算符 - 数值类型
-YT_IMPL_BINARY_OP(+, "+", yt::types::AllNumericTypes)
-YT_IMPL_BINARY_OP(-, "-", yt::types::AllNumericTypes)
-YT_IMPL_BINARY_OP(*, "*", yt::types::AllNumericTypes)
-YT_IMPL_BINARY_OP(/, "/", yt::types::AllNumericTypes)
+// GPU分派辅助宏：当张量在GPU上且shape/dtype满足条件时，使用Kompute着色器
+#if YT_USE_KOMPUTE
+#define YT_KOMPUTE_BINARY_DISPATCH(OP, SPV_FLOAT, SPV_INT)                                 \
+    if (_device == "kompute" && other._device == "kompute"                                  \
+        && this->isContiguous() && other.isContiguous()                                    \
+        && this->shapeMatch(other.shape())) {                                              \
+        size_t n = this->size();                                                           \
+        if (_dtype == "float32" && std::string(SPV_FLOAT).size() > 0) {                    \
+            YTensorBase result(opShape, _dtype);                                           \
+            yt::kompute::dispatchBinaryFloat(                                              \
+                this->data<float>(), other.data<float>(),                                  \
+                result.data<float>(), n, SPV_FLOAT);                                       \
+            result._device = "kompute";                                                    \
+            return result;                                                                 \
+        }                                                                                  \
+        if (_dtype == "int32" && std::string(SPV_INT).size() > 0) {                        \
+            YTensorBase result(opShape, _dtype);                                           \
+            yt::kompute::dispatchBinaryInt(                                                \
+                this->data<int32_t>(), other.data<int32_t>(),                              \
+                result.data<int32_t>(), n, SPV_INT);                                       \
+            result._device = "kompute";                                                    \
+            return result;                                                                 \
+        }                                                                                  \
+    }
+#else
+#define YT_KOMPUTE_BINARY_DISPATCH(OP, SPV_FLOAT, SPV_INT) /* no-op */
+#endif
+
+// 实例化所有运算符 - 数值类型（float + int GPU支持）
+YT_IMPL_BINARY_OP(+, "+", yt::types::AllNumericTypes, "binary_arith_float_add.spv", "binary_arith.spv")
+YT_IMPL_BINARY_OP(-, "-", yt::types::AllNumericTypes, "binary_arith_float_sub.spv", "")
+YT_IMPL_BINARY_OP(*, "*", yt::types::AllNumericTypes, "binary_arith_float_mul.spv", "")
+YT_IMPL_BINARY_OP(/, "/", yt::types::AllNumericTypes, "binary_arith_float_div.spv", "")
 
 // 实例化所有运算符 - 仅整数类型
-YT_IMPL_BINARY_OP(%, "%", yt::types::IntegerTypes)
-YT_IMPL_BINARY_OP(&, "&", yt::types::IntegerTypes)
-YT_IMPL_BINARY_OP(|, "|", yt::types::IntegerTypes)
-YT_IMPL_BINARY_OP(^, "^", yt::types::IntegerTypes)
-YT_IMPL_BINARY_OP(<<, "<<", yt::types::IntegerTypes)
-YT_IMPL_BINARY_OP(>>, ">>", yt::types::IntegerTypes)
+YT_IMPL_BINARY_OP(%, "%", yt::types::IntegerTypes, "", "")
+YT_IMPL_BINARY_OP(&, "&", yt::types::IntegerTypes, "", "")
+YT_IMPL_BINARY_OP(|, "|", yt::types::IntegerTypes, "", "")
+YT_IMPL_BINARY_OP(^, "^", yt::types::IntegerTypes, "", "")
+YT_IMPL_BINARY_OP(<<, "<<", yt::types::IntegerTypes, "", "")
+YT_IMPL_BINARY_OP(>>, ">>", yt::types::IntegerTypes, "", "")
 
 // 清理宏
 #undef YT_IMPL_BINARY_OP
@@ -323,6 +357,20 @@ inline YTensorBase YTensorBase::sum(int axis) const {
     int axisSize = newShape[axis];
     newShape[axis] = 1;
     
+    // GPU路径：float32连续张量，在最后一个轴上归约
+#if YT_USE_KOMPUTE
+    if (_device == "kompute" && _dtype == "float32" && this->isContiguous()
+        && axis == dim - 1) {
+        YTensorBase op(newShape, _dtype);
+        size_t outSize = op.size();
+        yt::kompute::dispatchReductionSum(
+            this->data<float>(), op.data<float>(),
+            static_cast<uint32_t>(axisSize), static_cast<uint32_t>(outSize));
+        op._device = "kompute";
+        return op;
+    }
+#endif
+    
     YTensorBase op(newShape, _dtype);
     size_t outSize = op.size();
     
@@ -375,6 +423,25 @@ inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
     auto newShape = this->shape();
     int axisSize = newShape[axis];
     newShape[axis] = 1;
+    
+    // GPU路径：float32连续张量，在最后一个轴上求最大值
+#if YT_USE_KOMPUTE
+    if (_device == "kompute" && _dtype == "float32" && this->isContiguous()
+        && axis == dim - 1) {
+        YTensorBase values(newShape, _dtype);
+        YTensorBase indices(newShape, "int32");
+        size_t outSize = values.size();
+        std::vector<uint32_t> argmaxBuf(outSize);
+        yt::kompute::dispatchReductionMax(
+            this->data<float>(), values.data<float>(), argmaxBuf.data(),
+            static_cast<uint32_t>(axisSize), static_cast<uint32_t>(outSize));
+        int32_t* idxData = indices.data<int32_t>();
+        for (size_t i = 0; i < outSize; ++i) idxData[i] = static_cast<int32_t>(argmaxBuf[i]);
+        values._device = "kompute";
+        indices._device = "kompute";
+        return {values, indices};
+    }
+#endif
     
     YTensorBase values(newShape, _dtype);
     YTensorBase indices(newShape, "int32");
@@ -647,6 +714,22 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
         YTensorBase resultF32 = thisF32.matmul(otherF32, backend);
         return resultF32.cast(_dtype);
     }
+    
+    // GPU路径：float32，2D连续矩阵，使用Kompute matmul着色器
+#if YT_USE_KOMPUTE
+    if (_device == "kompute" && other._device == "kompute"
+        && _dtype == "float32" && ndim() == 2 && other.ndim() == 2
+        && this->isContiguous() && other.isContiguous()) {
+        uint32_t M = static_cast<uint32_t>(thisRows);
+        uint32_t N = static_cast<uint32_t>(otherCols);
+        uint32_t K = static_cast<uint32_t>(thisCols);
+        YTensorBase result({static_cast<int>(M), static_cast<int>(N)}, _dtype);
+        yt::kompute::dispatchMatmul(
+            this->data<float>(), other.data<float>(), result.data<float>(), M, N, K);
+        result._device = "kompute";
+        return result;
+    }
+#endif
     
     // 根据backend选择实现
     switch (backend) {

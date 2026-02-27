@@ -41,8 +41,6 @@ set(SRC
 )
 
 add_executable(${PROJECT_NAME} ${SRC})
-add_executable(ymodel2_parity_test parity_test.cpp ymodel2.cpp)
-add_executable(kompute_shader_manifest_test kompute_shader_manifest_test.cpp)
 
 # if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 #     target_compile_options(${PROJECT_NAME} PRIVATE -Wno-pass-failed)
@@ -53,19 +51,10 @@ target_link_libraries(${PROJECT_NAME}
     OpenMP::OpenMP_CXX
     pthread
 )
-target_link_libraries(ymodel2_parity_test
-    ZLIB::ZLIB
-    OpenMP::OpenMP_CXX
-    pthread
-)
-
 if(YT_USE_KOMPUTE)
     target_compile_definitions(${PROJECT_NAME} PRIVATE YT_USE_KOMPUTE=1)
-    target_compile_definitions(ymodel2_parity_test PRIVATE YT_USE_KOMPUTE=1)
     target_include_directories(${PROJECT_NAME} PRIVATE ${KOMPUTE_INCLUDE_DIR})
-    target_include_directories(ymodel2_parity_test PRIVATE ${KOMPUTE_INCLUDE_DIR})
     target_link_libraries(${PROJECT_NAME} ${KOMPUTE_LIBRARY})
-    target_link_libraries(ymodel2_parity_test ${KOMPUTE_LIBRARY})
 
     find_program(GLSLANG_VALIDATOR glslangValidator)
     if(GLSLANG_VALIDATOR)
@@ -98,7 +87,6 @@ if(YT_USE_KOMPUTE)
         endforeach()
         add_custom_target(kompute_spirv ALL DEPENDS ${KOMPUTE_SPV_OUTPUTS})
         add_dependencies(${PROJECT_NAME} kompute_spirv)
-        add_dependencies(ymodel2_parity_test kompute_spirv)
     endif()
 endif()
 
