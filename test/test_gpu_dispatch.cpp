@@ -8,6 +8,8 @@
 #include <cmath>
 #include <iostream>
 
+#if YT_USE_KOMPUTE
+
 static void assertClose(float a, float b, float eps = 1e-4f) {
     if (std::fabs(a - b) > eps) {
         std::cerr << "FAIL: " << a << " vs " << b << " (diff=" << std::fabs(a - b) << ")" << std::endl;
@@ -95,6 +97,8 @@ static void test_max() {
         assertClose(v.at(i, 0), v_c.at(i, 0));
     std::cout << "  max: ok" << std::endl;
 }
+
+#endif // YT_USE_KOMPUTE
 
 int main() {
 #if !YT_USE_KOMPUTE

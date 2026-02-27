@@ -226,7 +226,7 @@ YTensorBase& YTensorBase::operator OP##=(const T& scalar) {                     
         && this->isContiguous() && other.isContiguous()                                    \
         && this->shapeMatch(other.shape())) {                                              \
         size_t n = this->size();                                                           \
-        if (_dtype == "float32" && std::string(SPV_FLOAT).size() > 0) {                    \
+        if (_dtype == "float32" && SPV_FLOAT[0] != '\0') {                                 \
             YTensorBase result(opShape, _dtype);                                           \
             yt::kompute::dispatchBinaryFloat(                                              \
                 this->data<float>(), other.data<float>(),                                  \
@@ -234,7 +234,7 @@ YTensorBase& YTensorBase::operator OP##=(const T& scalar) {                     
             result._device = "kompute";                                                    \
             return result;                                                                 \
         }                                                                                  \
-        if (_dtype == "int32" && std::string(SPV_INT).size() > 0) {                        \
+        if (_dtype == "int32" && SPV_INT[0] != '\0') {                                     \
             YTensorBase result(opShape, _dtype);                                           \
             yt::kompute::dispatchBinaryInt(                                                \
                 this->data<int32_t>(), other.data<int32_t>(),                              \

@@ -49,7 +49,6 @@ if(YT_USE_KOMPUTE)
         # Each shader entry point needs its own SPIR-V compilation
         set(SHADER_ENTRIES
             # file                              entry        output name
-            "binary_arith_float.comp.hlsl;main;binary_arith_float"
             "binary_arith_float.comp.hlsl;fadd_main;binary_arith_float_add"
             "binary_arith_float.comp.hlsl;fsub_main;binary_arith_float_sub"
             "binary_arith_float.comp.hlsl;fmul_main;binary_arith_float_mul"
