@@ -756,7 +756,7 @@ yt::YTensor<T, dim>& yt::function::softplus_(yt::YTensor<T, dim>& x, int order) 
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::softplus_()");
     if(order == 0){
         x.broadcastInplace([](T& a) {
-            if(a > static_cast<T>(20)){ /* a不变 */ return; }
+            if(a > static_cast<T>(20)) return;
             if(a < static_cast<T>(-20)){ a = static_cast<T>(0); return; }
             a = std::log(static_cast<T>(1) + std::exp(a));
         });
