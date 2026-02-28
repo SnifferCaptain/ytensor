@@ -120,7 +120,13 @@ inline void dispatchBinaryInt(const int32_t* inputA, const int32_t* inputB, int3
 
     std::vector<std::shared_ptr<kp::Memory>> params = {tensorA, tensorB, tensorC};
 
-    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}));
+    // push constants: totalSize for bounds checking in shader
+    std::vector<float> pushConsts(1);
+    uint32_t totalSize = static_cast<uint32_t>(count);
+    std::memcpy(pushConsts.data(), &totalSize, sizeof(totalSize));
+
+    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}),
+                              {}, pushConsts);
 
     mgr.sequence()
         ->record<kp::OpSyncDevice>(params)
@@ -258,7 +264,13 @@ inline void dispatchCmpFloat(const float* inputA, const float* inputB, uint32_t*
 
     std::vector<std::shared_ptr<kp::Memory>> params = {tensorA, tensorB, tensorC};
 
-    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}));
+    // push constants: totalSize for bounds checking in shader
+    std::vector<float> pushConsts(1);
+    uint32_t totalSize = static_cast<uint32_t>(count);
+    std::memcpy(pushConsts.data(), &totalSize, sizeof(totalSize));
+
+    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}),
+                              {}, pushConsts);
 
     mgr.sequence()
         ->record<kp::OpSyncDevice>(params)

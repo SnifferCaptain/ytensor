@@ -42,7 +42,7 @@ if(YT_USE_KOMPUTE)
     # Compile core HLSL shaders to SPIR-V
     find_program(GLSLANG_VALIDATOR glslangValidator)
     if(GLSLANG_VALIDATOR)
-        set(KOMPUTE_CORE_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include/kompute/shaders)
+        set(KOMPUTE_CORE_SHADER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../shaders/kompute)
         set(KOMPUTE_SPV_DIR ${CMAKE_CURRENT_BINARY_DIR}/spirv)
         file(MAKE_DIRECTORY ${KOMPUTE_SPV_DIR})
 
