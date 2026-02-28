@@ -411,6 +411,1565 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
 }
 
 
+// ========== exp_ (inplace) ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::exp_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::exp_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            a = std::exp(a);
+        });
+    }
+    else if(order == 1){
+        // exp的导数仍为exp
+        x.broadcastInplace([](T& a) {
+            a = std::exp(a);
+        });
+    }
+    else{
+        throwNotSupport("yt::function::exp_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== sigmoid_ (inplace) ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::sigmoid_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::sigmoid_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            a = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            a = sig * (static_cast<T>(1) - sig);
+        });
+    }
+    else if(order == -1){
+        x.broadcastInplace([](T& a) {
+            a = std::log(static_cast<T>(1) + std::exp(a));
+        });
+    }
+    else{
+        throwNotSupport("yt::function::sigmoid_", "order != 0, 1, -1");
+    }
+    return x;
+}
+
+// ========== leakyRelu ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::leakyRelu(const yt::YTensor<T, dim>& x, T alpha, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::leakyRelu()");
+    if(order == 0){
+        return yt::kernel::broadcast([alpha](const T& a) {
+            return a > static_cast<T>(0) ? a : alpha * a;
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([alpha](const T& a) {
+            return a > static_cast<T>(0) ? static_cast<T>(1) : alpha;
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::leakyRelu", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::leakyRelu_(yt::YTensor<T, dim>& x, T alpha, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::leakyRelu_()");
+    if(order == 0){
+        x.broadcastInplace([alpha](T& a) {
+            a = a > static_cast<T>(0) ? a : alpha * a;
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([alpha](T& a) {
+            a = a > static_cast<T>(0) ? static_cast<T>(1) : alpha;
+        });
+    }
+    else{
+        throwNotSupport("yt::function::leakyRelu_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== elu ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::elu(const yt::YTensor<T, dim>& x, T alpha, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::elu()");
+    if(order == 0){
+        return yt::kernel::broadcast([alpha](const T& a) {
+            return a > static_cast<T>(0) ? a : alpha * (std::exp(a) - static_cast<T>(1));
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([alpha](const T& a) {
+            return a > static_cast<T>(0) ? static_cast<T>(1) : alpha * std::exp(a);
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::elu", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::elu_(yt::YTensor<T, dim>& x, T alpha, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::elu_()");
+    if(order == 0){
+        x.broadcastInplace([alpha](T& a) {
+            a = a > static_cast<T>(0) ? a : alpha * (std::exp(a) - static_cast<T>(1));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([alpha](T& a) {
+            a = a > static_cast<T>(0) ? static_cast<T>(1) : alpha * std::exp(a);
+        });
+    }
+    else{
+        throwNotSupport("yt::function::elu_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== selu ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::selu(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::selu()");
+    constexpr T lambda = static_cast<T>(1.0507009873554804934193349852946);
+    constexpr T alpha  = static_cast<T>(1.6732632423543772848170429916717);
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
+            constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
+            return a > static_cast<T>(0) ? l * a : l * al * (std::exp(a) - static_cast<T>(1));
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
+            constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
+            return a > static_cast<T>(0) ? l : l * al * std::exp(a);
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::selu", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::selu_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::selu_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
+            constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
+            a = a > static_cast<T>(0) ? l * a : l * al * (std::exp(a) - static_cast<T>(1));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
+            constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
+            a = a > static_cast<T>(0) ? l : l * al * std::exp(a);
+        });
+    }
+    else{
+        throwNotSupport("yt::function::selu_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== gelu ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::gelu(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::gelu()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
+            return static_cast<T>(0.5) * a * (static_cast<T>(1) + std::erf(a / sqrt2));
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
+            constexpr T inv_sqrt2pi = static_cast<T>(0.3989422804014326779399460599343);
+            T cdf = static_cast<T>(0.5) * (static_cast<T>(1) + std::erf(a / sqrt2));
+            T pdf = inv_sqrt2pi * std::exp(static_cast<T>(-0.5) * a * a);
+            return cdf + a * pdf;
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::gelu", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::gelu_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::gelu_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
+            a = static_cast<T>(0.5) * a * (static_cast<T>(1) + std::erf(a / sqrt2));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
+            constexpr T inv_sqrt2pi = static_cast<T>(0.3989422804014326779399460599343);
+            T cdf = static_cast<T>(0.5) * (static_cast<T>(1) + std::erf(a / sqrt2));
+            T pdf = inv_sqrt2pi * std::exp(static_cast<T>(-0.5) * a * a);
+            a = cdf + a * pdf;
+        });
+    }
+    else{
+        throwNotSupport("yt::function::gelu_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== tanh ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::tanh(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::tanh()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            return std::tanh(a);
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            T t = std::tanh(a);
+            return static_cast<T>(1) - t * t;
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::tanh", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::tanh_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::tanh_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            a = std::tanh(a);
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            T t = std::tanh(a);
+            a = static_cast<T>(1) - t * t;
+        });
+    }
+    else{
+        throwNotSupport("yt::function::tanh_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== swish (SiLU) ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::swish(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::swish()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            return a * sig;
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            return sig * (static_cast<T>(1) + a * (static_cast<T>(1) - sig));
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::swish", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::swish_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::swish_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            a = a * sig;
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            a = sig * (static_cast<T>(1) + a * (static_cast<T>(1) - sig));
+        });
+    }
+    else{
+        throwNotSupport("yt::function::swish_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== softplus ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::softplus(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::softplus()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            // 数值稳定：当a较大时直接返回a，避免exp溢出
+            if(a > static_cast<T>(20)) return a;
+            if(a < static_cast<T>(-20)) return static_cast<T>(0);
+            return std::log(static_cast<T>(1) + std::exp(a));
+        }, x);
+    }
+    else if(order == 1){
+        // softplus的导数为sigmoid
+        return yt::kernel::broadcast([](const T& a) {
+            return static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::softplus", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::softplus_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::softplus_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            if(a > static_cast<T>(20)){ /* a不变 */ return; }
+            if(a < static_cast<T>(-20)){ a = static_cast<T>(0); return; }
+            a = std::log(static_cast<T>(1) + std::exp(a));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            a = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+        });
+    }
+    else{
+        throwNotSupport("yt::function::softplus_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== mish ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::mish(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mish()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
+            return a * std::tanh(sp);
+        }, x);
+    }
+    else if(order == 1){
+        // mish'(x) = tanh(sp) + x * (1 - tanh(sp)^2) * sigmoid(x)
+        return yt::kernel::broadcast([](const T& a) {
+            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
+            T tsp = std::tanh(sp);
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            return tsp + a * (static_cast<T>(1) - tsp * tsp) * sig;
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::mish", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::mish_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mish_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
+            a = a * std::tanh(sp);
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
+            T tsp = std::tanh(sp);
+            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            a = tsp + a * (static_cast<T>(1) - tsp * tsp) * sig;
+        });
+    }
+    else{
+        throwNotSupport("yt::function::mish_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== hardSigmoid ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::hardSigmoid(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSigmoid()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            T v = a / static_cast<T>(6) + static_cast<T>(0.5);
+            return std::max(static_cast<T>(0), std::min(static_cast<T>(1), v));
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            return (a > static_cast<T>(-3) && a < static_cast<T>(3))
+                ? static_cast<T>(1) / static_cast<T>(6)
+                : static_cast<T>(0);
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::hardSigmoid", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::hardSigmoid_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSigmoid_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            T v = a / static_cast<T>(6) + static_cast<T>(0.5);
+            a = std::max(static_cast<T>(0), std::min(static_cast<T>(1), v));
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            a = (a > static_cast<T>(-3) && a < static_cast<T>(3))
+                ? static_cast<T>(1) / static_cast<T>(6)
+                : static_cast<T>(0);
+        });
+    }
+    else{
+        throwNotSupport("yt::function::hardSigmoid_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== hardSwish ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::hardSwish(const yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSwish()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a) {
+            if(a <= static_cast<T>(-3)) return static_cast<T>(0);
+            if(a >= static_cast<T>(3)) return a;
+            return a * (a + static_cast<T>(3)) / static_cast<T>(6);
+        }, x);
+    }
+    else if(order == 1){
+        return yt::kernel::broadcast([](const T& a) {
+            if(a <= static_cast<T>(-3)) return static_cast<T>(0);
+            if(a >= static_cast<T>(3)) return static_cast<T>(1);
+            return (static_cast<T>(2) * a + static_cast<T>(3)) / static_cast<T>(6);
+        }, x);
+    }
+    else{
+        throwNotSupport("yt::function::hardSwish", "order != 0, 1");
+    }
+    return x;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::hardSwish_(yt::YTensor<T, dim>& x, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSwish_()");
+    if(order == 0){
+        x.broadcastInplace([](T& a) {
+            if(a <= static_cast<T>(-3)){ a = static_cast<T>(0); return; }
+            if(a >= static_cast<T>(3)) return;
+            a = a * (a + static_cast<T>(3)) / static_cast<T>(6);
+        });
+    }
+    else if(order == 1){
+        x.broadcastInplace([](T& a) {
+            if(a <= static_cast<T>(-3)){ a = static_cast<T>(0); return; }
+            if(a >= static_cast<T>(3)){ a = static_cast<T>(1); return; }
+            a = (static_cast<T>(2) * a + static_cast<T>(3)) / static_cast<T>(6);
+        });
+    }
+    else{
+        throwNotSupport("yt::function::hardSwish_", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== logsumexp ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::logsumexp(const yt::YTensor<T, dim>& x, int axis) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logsumexp()");
+    // 标准化 axis 索引
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = x.shape();
+    // 输出shape：axis维度为1
+    auto out_shape = shape;
+    out_shape[axis] = 1;
+    yt::YTensor<T, dim> output(out_shape);
+
+    // 构建迭代shape（去掉axis维度）
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) {
+        total_iterations *= s;
+    }
+
+    #pragma omp parallel for if(total_iterations > 1024)
+    for (int64_t idx = 0; idx < total_iterations; ++idx) {
+        // 将平铺索引转换为多维索引（不包括 axis 维度）
+        std::vector<int> iter_indices(iter_shape.size());
+        int64_t temp_idx = idx;
+        for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+            iter_indices[i] = temp_idx % iter_shape[i];
+            temp_idx /= iter_shape[i];
+        }
+
+        // 构建完整索引
+        std::vector<int> full_indices;
+        int iter_pos = 0;
+        for (int i = 0; i < dim; ++i) {
+            if (i == axis) {
+                full_indices.push_back(0);
+            } else {
+                full_indices.push_back(iter_indices[iter_pos++]);
+            }
+        }
+
+        // 找最大值（数值稳定性）
+        T max_val = std::numeric_limits<T>::lowest();
+        for (int d = 0; d < shape[axis]; ++d) {
+            full_indices[axis] = d;
+            max_val = std::max(max_val, x.at(full_indices));
+        }
+
+        // 计算 sum(exp(x - max))
+        T sum_exp = static_cast<T>(0);
+        for (int d = 0; d < shape[axis]; ++d) {
+            full_indices[axis] = d;
+            sum_exp += std::exp(x.at(full_indices) - max_val);
+        }
+
+        // 输出 = log(sum_exp) + max_val
+        full_indices[axis] = 0;
+        output.at(full_indices) = std::log(sum_exp) + max_val;
+    }
+
+    return output;
+}
+
+// ========== logSoftmax ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::logSoftmax(const yt::YTensor<T, dim>& x, int axis, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logSoftmax()");
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = x.shape();
+    yt::YTensor<T, dim> output(shape);
+
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) {
+        total_iterations *= s;
+    }
+
+    if(order == 0){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            // 找最大值
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, x.at(full_indices));
+            }
+
+            // 计算 sum(exp(x - max))
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                sum_exp += std::exp(x.at(full_indices) - max_val);
+            }
+            T lse = std::log(sum_exp) + max_val;
+
+            // logSoftmax = x - logsumexp
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                output.at(full_indices) = x.at(full_indices) - lse;
+            }
+        }
+    }
+    else if(order == 1){
+        // logSoftmax的导数对角线: 1 - softmax(x)
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            // 先计算softmax
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, x.at(full_indices));
+            }
+
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                T exp_val = std::exp(x.at(full_indices) - max_val);
+                output.at(full_indices) = exp_val;
+                sum_exp += exp_val;
+            }
+
+            // 导数 = 1 - softmax
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                output.at(full_indices) = static_cast<T>(1) - output.at(full_indices) / sum_exp;
+            }
+        }
+    }
+    else{
+        throwNotSupport("yt::function::logSoftmax", "order != 0, 1");
+    }
+
+    return output;
+}
+
+template<typename T, int dim>
+yt::YTensor<T, dim>& yt::function::logSoftmax_(yt::YTensor<T, dim>& x, int axis, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logSoftmax_()");
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = x.shape();
+
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) {
+        total_iterations *= s;
+    }
+
+    if(order == 0){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, x.at(full_indices));
+            }
+
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                sum_exp += std::exp(x.at(full_indices) - max_val);
+            }
+            T lse = std::log(sum_exp) + max_val;
+
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                x.at(full_indices) -= lse;
+            }
+        }
+    }
+    else if(order == 1){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, x.at(full_indices));
+            }
+
+            // 需要临时存储softmax值
+            std::vector<T> sm(shape[axis]);
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                sm[d] = std::exp(x.at(full_indices) - max_val);
+                sum_exp += sm[d];
+            }
+
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                x.at(full_indices) = static_cast<T>(1) - sm[d] / sum_exp;
+            }
+        }
+    }
+    else{
+        throwNotSupport("yt::function::logSoftmax_", "order != 0, 1");
+    }
+
+    return x;
+}
+
+// ========== layerNorm ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::layerNorm(const yt::YTensor<T, dim>& x, int axis, T eps, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::layerNorm()");
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = x.shape();
+    yt::YTensor<T, dim> output(shape);
+
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) {
+        total_iterations *= s;
+    }
+
+    int64_t n = shape[axis];
+
+    if(order == 0){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            // 计算均值
+            T mean_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                mean_val += x.at(full_indices);
+            }
+            mean_val /= static_cast<T>(n);
+
+            // 计算方差
+            T var_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                T diff = x.at(full_indices) - mean_val;
+                var_val += diff * diff;
+            }
+            var_val /= static_cast<T>(n);
+
+            T inv_std = static_cast<T>(1) / std::sqrt(var_val + eps);
+
+            // 归一化
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                output.at(full_indices) = (x.at(full_indices) - mean_val) * inv_std;
+            }
+        }
+    }
+    else if(order == 1){
+        // layerNorm导数（简化版，对角线元素）：
+        // d/dx_i [(x_i - mu) / sigma] ≈ (1/sigma) * (1 - 1/N) 当忽略mu和sigma对x_i的依赖时
+        // 完整版：(1/sigma) * (1 - 1/N - (x_i - mu)^2 / (N * sigma^2))
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            T mean_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                mean_val += x.at(full_indices);
+            }
+            mean_val /= static_cast<T>(n);
+
+            T var_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                T diff = x.at(full_indices) - mean_val;
+                var_val += diff * diff;
+            }
+            var_val /= static_cast<T>(n);
+
+            T inv_std = static_cast<T>(1) / std::sqrt(var_val + eps);
+            T inv_n = static_cast<T>(1) / static_cast<T>(n);
+
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                T x_hat = (x.at(full_indices) - mean_val) * inv_std;
+                output.at(full_indices) = inv_std * (static_cast<T>(1) - inv_n - x_hat * x_hat * inv_n);
+            }
+        }
+    }
+    else{
+        throwNotSupport("yt::function::layerNorm", "order != 0, 1");
+    }
+
+    return output;
+}
+
+template<typename T, int dim>
+yt::YTensor<T, dim>& yt::function::layerNorm_(yt::YTensor<T, dim>& x, int axis, T eps, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::layerNorm_()");
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = x.shape();
+
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) {
+        total_iterations *= s;
+    }
+
+    int64_t n = shape[axis];
+
+    if(order == 0){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            T mean_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                mean_val += x.at(full_indices);
+            }
+            mean_val /= static_cast<T>(n);
+
+            T var_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                T diff = x.at(full_indices) - mean_val;
+                var_val += diff * diff;
+            }
+            var_val /= static_cast<T>(n);
+
+            T inv_std = static_cast<T>(1) / std::sqrt(var_val + eps);
+
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                x.at(full_indices) = (x.at(full_indices) - mean_val) * inv_std;
+            }
+        }
+    }
+    else if(order == 1){
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            T mean_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                mean_val += x.at(full_indices);
+            }
+            mean_val /= static_cast<T>(n);
+
+            T var_val = static_cast<T>(0);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                T diff = x.at(full_indices) - mean_val;
+                var_val += diff * diff;
+            }
+            var_val /= static_cast<T>(n);
+
+            T inv_std = static_cast<T>(1) / std::sqrt(var_val + eps);
+            T inv_n = static_cast<T>(1) / static_cast<T>(n);
+
+            // 需要临时存储归一化值
+            std::vector<T> x_hat(n);
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                x_hat[d] = (x.at(full_indices) - mean_val) * inv_std;
+            }
+
+            for (int d = 0; d < n; ++d) {
+                full_indices[axis] = d;
+                x.at(full_indices) = inv_std * (static_cast<T>(1) - inv_n - x_hat[d] * x_hat[d] * inv_n);
+            }
+        }
+    }
+    else{
+        throwNotSupport("yt::function::layerNorm_", "order != 0, 1");
+    }
+
+    return x;
+}
+
+// ========== maxPool1d ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::maxPool1d(const yt::YTensor<T, dim>& x, int kernelSize, int stride, int axis, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::maxPool1d()");
+    axis = (axis % dim + dim) % dim;
+    if(stride < 0) stride = kernelSize;
+
+    auto shape = x.shape();
+    int input_size = shape[axis];
+    int output_size = (input_size - kernelSize) / stride + 1;
+    if(output_size <= 0){
+        throw std::invalid_argument("yt::function::maxPool1d: kernelSize too large for input dimension");
+    }
+
+    if(order == 0){
+        // 输出shape: axis维度变为output_size
+        auto out_shape = shape;
+        out_shape[axis] = output_size;
+        yt::YTensor<T, dim> output(out_shape);
+
+        // 构建迭代shape
+        std::vector<int> iter_shape;
+        for (int i = 0; i < dim; ++i) {
+            if (i != axis) {
+                iter_shape.push_back(shape[i]);
+            }
+        }
+
+        int64_t total_iterations = 1;
+        for (int s : iter_shape) total_iterations *= s;
+
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> in_indices, out_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    in_indices.push_back(0);
+                    out_indices.push_back(0);
+                } else {
+                    in_indices.push_back(iter_indices[iter_pos]);
+                    out_indices.push_back(iter_indices[iter_pos]);
+                    iter_pos++;
+                }
+            }
+
+            for (int o = 0; o < output_size; ++o) {
+                int start = o * stride;
+                in_indices[axis] = start;
+                T max_val = x.at(in_indices);
+                for (int k = 1; k < kernelSize; ++k) {
+                    in_indices[axis] = start + k;
+                    max_val = std::max(max_val, x.at(in_indices));
+                }
+                out_indices[axis] = o;
+                output.at(out_indices) = max_val;
+            }
+        }
+
+        return output;
+    }
+    else if(order == 1){
+        // 返回与输入同shape的梯度掩码：max位置为1，其他为0
+        yt::YTensor<T, dim> grad = yt::YTensor<T, dim>::zeros(shape);
+
+        std::vector<int> iter_shape;
+        for (int i = 0; i < dim; ++i) {
+            if (i != axis) {
+                iter_shape.push_back(shape[i]);
+            }
+        }
+
+        int64_t total_iterations = 1;
+        for (int s : iter_shape) total_iterations *= s;
+
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            for (int o = 0; o < output_size; ++o) {
+                int start = o * stride;
+                full_indices[axis] = start;
+                T max_val = x.at(full_indices);
+                int max_pos = start;
+                for (int k = 1; k < kernelSize; ++k) {
+                    full_indices[axis] = start + k;
+                    T v = x.at(full_indices);
+                    if(v > max_val){
+                        max_val = v;
+                        max_pos = start + k;
+                    }
+                }
+                full_indices[axis] = max_pos;
+                grad.at(full_indices) = static_cast<T>(1);
+            }
+        }
+
+        return grad;
+    }
+    else{
+        throwNotSupport("yt::function::maxPool1d", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== avgPool1d ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::avgPool1d(const yt::YTensor<T, dim>& x, int kernelSize, int stride, int axis, int order) {
+    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::avgPool1d()");
+    axis = (axis % dim + dim) % dim;
+    if(stride < 0) stride = kernelSize;
+
+    auto shape = x.shape();
+    int input_size = shape[axis];
+    int output_size = (input_size - kernelSize) / stride + 1;
+    if(output_size <= 0){
+        throw std::invalid_argument("yt::function::avgPool1d: kernelSize too large for input dimension");
+    }
+
+    if(order == 0){
+        auto out_shape = shape;
+        out_shape[axis] = output_size;
+        yt::YTensor<T, dim> output(out_shape);
+
+        std::vector<int> iter_shape;
+        for (int i = 0; i < dim; ++i) {
+            if (i != axis) {
+                iter_shape.push_back(shape[i]);
+            }
+        }
+
+        int64_t total_iterations = 1;
+        for (int s : iter_shape) total_iterations *= s;
+
+        T inv_k = static_cast<T>(1) / static_cast<T>(kernelSize);
+
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> in_indices, out_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    in_indices.push_back(0);
+                    out_indices.push_back(0);
+                } else {
+                    in_indices.push_back(iter_indices[iter_pos]);
+                    out_indices.push_back(iter_indices[iter_pos]);
+                    iter_pos++;
+                }
+            }
+
+            for (int o = 0; o < output_size; ++o) {
+                int start = o * stride;
+                T sum_val = static_cast<T>(0);
+                for (int k = 0; k < kernelSize; ++k) {
+                    in_indices[axis] = start + k;
+                    sum_val += x.at(in_indices);
+                }
+                out_indices[axis] = o;
+                output.at(out_indices) = sum_val * inv_k;
+            }
+        }
+
+        return output;
+    }
+    else if(order == 1){
+        // 返回与输入同shape的梯度：每个元素被包含在多少个窗口中 / kernelSize
+        yt::YTensor<T, dim> grad = yt::YTensor<T, dim>::zeros(shape);
+
+        T inv_k = static_cast<T>(1) / static_cast<T>(kernelSize);
+
+        std::vector<int> iter_shape;
+        for (int i = 0; i < dim; ++i) {
+            if (i != axis) {
+                iter_shape.push_back(shape[i]);
+            }
+        }
+
+        int64_t total_iterations = 1;
+        for (int s : iter_shape) total_iterations *= s;
+
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            for (int o = 0; o < output_size; ++o) {
+                int start = o * stride;
+                for (int k = 0; k < kernelSize; ++k) {
+                    full_indices[axis] = start + k;
+                    grad.at(full_indices) += inv_k;
+                }
+            }
+        }
+
+        return grad;
+    }
+    else{
+        throwNotSupport("yt::function::avgPool1d", "order != 0, 1");
+    }
+    return x;
+}
+
+// ========== mseLoss ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::mseLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mseLoss()");
+    if(order == 0){
+        return yt::kernel::broadcast([](const T& a, const T& b) {
+            T diff = a - b;
+            return diff * diff;
+        }, input, target);
+    }
+    else if(order == 1){
+        // d/d(input) [(input - target)^2] = 2 * (input - target)
+        return yt::kernel::broadcast([](const T& a, const T& b) {
+            return static_cast<T>(2) * (a - b);
+        }, input, target);
+    }
+    else{
+        throwNotSupport("yt::function::mseLoss", "order != 0, 1");
+    }
+    return input;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::mseLoss_(yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mseLoss_()");
+    if(order == 0){
+        input.broadcastInplace([](T& a, const T& b) {
+            T diff = a - b;
+            a = diff * diff;
+        }, target);
+    }
+    else if(order == 1){
+        input.broadcastInplace([](T& a, const T& b) {
+            a = static_cast<T>(2) * (a - b);
+        }, target);
+    }
+    else{
+        throwNotSupport("yt::function::mseLoss_", "order != 0, 1");
+    }
+    return input;
+}
+
+// ========== crossEntropyLoss ==========
+
+template<typename T, int dim>
+yt::YTensor<T, dim> yt::function::crossEntropyLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, int axis, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::crossEntropyLoss()");
+    axis = (axis % dim + dim) % dim;
+
+    auto shape = input.shape();
+    yt::YTensor<T, dim> output(shape);
+
+    std::vector<int> iter_shape;
+    for (int i = 0; i < dim; ++i) {
+        if (i != axis) {
+            iter_shape.push_back(shape[i]);
+        }
+    }
+
+    int64_t total_iterations = 1;
+    for (int s : iter_shape) total_iterations *= s;
+
+    if(order == 0){
+        // 交叉熵: -sum(target * log(softmax(input)))，按元素返回 -target * logSoftmax(input)
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            // 计算logSoftmax
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, input.at(full_indices));
+            }
+
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                sum_exp += std::exp(input.at(full_indices) - max_val);
+            }
+            T lse = std::log(sum_exp) + max_val;
+
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                T log_sm = input.at(full_indices) - lse;
+                output.at(full_indices) = -target.at(full_indices) * log_sm;
+            }
+        }
+    }
+    else if(order == 1){
+        // 梯度: softmax(input) - target
+        #pragma omp parallel for if(total_iterations > 1024)
+        for (int64_t idx = 0; idx < total_iterations; ++idx) {
+            std::vector<int> iter_indices(iter_shape.size());
+            int64_t temp_idx = idx;
+            for (int i = static_cast<int>(iter_shape.size()) - 1; i >= 0; --i) {
+                iter_indices[i] = temp_idx % iter_shape[i];
+                temp_idx /= iter_shape[i];
+            }
+
+            std::vector<int> full_indices;
+            int iter_pos = 0;
+            for (int i = 0; i < dim; ++i) {
+                if (i == axis) {
+                    full_indices.push_back(0);
+                } else {
+                    full_indices.push_back(iter_indices[iter_pos++]);
+                }
+            }
+
+            // 计算softmax
+            T max_val = std::numeric_limits<T>::lowest();
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                max_val = std::max(max_val, input.at(full_indices));
+            }
+
+            T sum_exp = static_cast<T>(0);
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                T exp_val = std::exp(input.at(full_indices) - max_val);
+                output.at(full_indices) = exp_val;
+                sum_exp += exp_val;
+            }
+
+            for (int d = 0; d < shape[axis]; ++d) {
+                full_indices[axis] = d;
+                output.at(full_indices) = output.at(full_indices) / sum_exp - target.at(full_indices);
+            }
+        }
+    }
+    else{
+        throwNotSupport("yt::function::crossEntropyLoss", "order != 0, 1");
+    }
+
+    return output;
+}
+
+// ========== binaryCrossEntropyLoss ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::binaryCrossEntropyLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::binaryCrossEntropyLoss()");
+    constexpr T eps = static_cast<T>(1e-7);
+    if(order == 0){
+        return yt::kernel::broadcast([eps](const T& a, const T& b) {
+            T clamped = std::max(eps, std::min(static_cast<T>(1) - eps, a));
+            return -(b * std::log(clamped) + (static_cast<T>(1) - b) * std::log(static_cast<T>(1) - clamped));
+        }, input, target);
+    }
+    else if(order == 1){
+        // d/d(input) = -target/input + (1-target)/(1-input)
+        return yt::kernel::broadcast([eps](const T& a, const T& b) {
+            T clamped = std::max(eps, std::min(static_cast<T>(1) - eps, a));
+            return -b / clamped + (static_cast<T>(1) - b) / (static_cast<T>(1) - clamped);
+        }, input, target);
+    }
+    else{
+        throwNotSupport("yt::function::binaryCrossEntropyLoss", "order != 0, 1");
+    }
+    return input;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::binaryCrossEntropyLoss_(yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::binaryCrossEntropyLoss_()");
+    constexpr T eps = static_cast<T>(1e-7);
+    if(order == 0){
+        input.broadcastInplace([eps](T& a, const T& b) {
+            T clamped = std::max(eps, std::min(static_cast<T>(1) - eps, a));
+            a = -(b * std::log(clamped) + (static_cast<T>(1) - b) * std::log(static_cast<T>(1) - clamped));
+        }, target);
+    }
+    else if(order == 1){
+        input.broadcastInplace([eps](T& a, const T& b) {
+            T clamped = std::max(eps, std::min(static_cast<T>(1) - eps, a));
+            a = -b / clamped + (static_cast<T>(1) - b) / (static_cast<T>(1) - clamped);
+        }, target);
+    }
+    else{
+        throwNotSupport("yt::function::binaryCrossEntropyLoss_", "order != 0, 1");
+    }
+    return input;
+}
+
+// ========== huberLoss ==========
+
+template <typename T, int dim>
+yt::YTensor<T, dim> yt::function::huberLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, T delta, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::huberLoss()");
+    if(order == 0){
+        return yt::kernel::broadcast([delta](const T& a, const T& b) {
+            T diff = a - b;
+            T abs_diff = std::abs(diff);
+            if(abs_diff <= delta){
+                return static_cast<T>(0.5) * diff * diff;
+            }
+            else{
+                return delta * (abs_diff - static_cast<T>(0.5) * delta);
+            }
+        }, input, target);
+    }
+    else if(order == 1){
+        // d/d(input): diff if |diff| <= delta, else delta * sign(diff)
+        return yt::kernel::broadcast([delta](const T& a, const T& b) {
+            T diff = a - b;
+            T abs_diff = std::abs(diff);
+            if(abs_diff <= delta){
+                return diff;
+            }
+            else{
+                return diff > static_cast<T>(0) ? delta : -delta;
+            }
+        }, input, target);
+    }
+    else{
+        throwNotSupport("yt::function::huberLoss", "order != 0, 1");
+    }
+    return input;
+}
+
+template <typename T, int dim>
+yt::YTensor<T, dim>& yt::function::huberLoss_(yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, T delta, int order) {
+    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::huberLoss_()");
+    if(order == 0){
+        input.broadcastInplace([delta](T& a, const T& b) {
+            T diff = a - b;
+            T abs_diff = std::abs(diff);
+            if(abs_diff <= delta){
+                a = static_cast<T>(0.5) * diff * diff;
+            }
+            else{
+                a = delta * (abs_diff - static_cast<T>(0.5) * delta);
+            }
+        }, target);
+    }
+    else if(order == 1){
+        input.broadcastInplace([delta](T& a, const T& b) {
+            T diff = a - b;
+            T abs_diff = std::abs(diff);
+            if(abs_diff <= delta){
+                a = diff;
+            }
+            else{
+                a = diff > static_cast<T>(0) ? delta : -delta;
+            }
+        }, target);
+    }
+    else{
+        throwNotSupport("yt::function::huberLoss_", "order != 0, 1");
+    }
+    return input;
+}
+
 void yt::function::throwNotSupport(const std::string& funcName, const std::string& caseDiscription) {
     throw std::invalid_argument("Function " + funcName + " is not supported for case: " + caseDiscription);
 }
