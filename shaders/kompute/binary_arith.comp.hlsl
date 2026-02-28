@@ -1,0 +1,33 @@
+StructuredBuffer<int> inputA : register(t0);
+StructuredBuffer<int> inputB : register(t1);
+RWStructuredBuffer<int> outputC : register(u2);
+
+cbuffer BinarySize : register(b0) { uint totalSize; };
+
+[numthreads(64, 1, 1)]
+// `main` is kept as a default compile entrypoint for bulk HLSL->SPIR-V build steps.
+void main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] + inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+void add_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] + inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+void sub_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] - inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+void mul_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] * inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+// Deterministic guard for zero divisor in shader path.
+void div_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = (inputB[tid.x] == 0) ? 0 : (inputA[tid.x] / inputB[tid.x]); }
+[numthreads(64, 1, 1)]
+// Deterministic guard for zero divisor in shader path.
+void mod_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = (inputB[tid.x] == 0) ? 0 : (inputA[tid.x] % inputB[tid.x]); }
+[numthreads(64, 1, 1)]
+void and_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] & inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+void or_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] | inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+void xor_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] ^ inputB[tid.x]; }
+[numthreads(64, 1, 1)]
+// Shift amount masking follows 32-bit integer lane semantics.
+void shl_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] << (inputB[tid.x] & 31); }
+[numthreads(64, 1, 1)]
+// Shift amount masking follows 32-bit integer lane semantics.
+void shr_main(uint3 tid : SV_DispatchThreadID) { if (tid.x >= totalSize) return; outputC[tid.x] = inputA[tid.x] >> (inputB[tid.x] & 31); }

@@ -8,6 +8,7 @@ _codeql*
 !example
 !test
 !test/CMakeLists.txt
+!shaders
 .cache
 .vscode
 .clangd
