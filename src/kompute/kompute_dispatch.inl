@@ -92,7 +92,8 @@ inline void dispatchBinaryFloat(const float* inputA, const float* inputB, float*
     uint32_t totalSize = static_cast<uint32_t>(count);
     std::memcpy(pushConsts.data(), &totalSize, sizeof(totalSize));
 
-    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}),
+    // 256 threads × 4 iterations = 1024 elements per workgroup
+    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 1023) / 1024), 1, 1}),
                               {}, pushConsts);
 
     mgr.sequence()
@@ -125,7 +126,8 @@ inline void dispatchBinaryInt(const int32_t* inputA, const int32_t* inputB, int3
     uint32_t totalSize = static_cast<uint32_t>(count);
     std::memcpy(pushConsts.data(), &totalSize, sizeof(totalSize));
 
-    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}),
+    // 256 threads × 4 iterations = 1024 elements per workgroup
+    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 1023) / 1024), 1, 1}),
                               {}, pushConsts);
 
     mgr.sequence()
@@ -158,9 +160,10 @@ inline void dispatchMatmul(const float* A, const float* B, float* C,
 
     std::vector<std::shared_ptr<kp::Memory>> params = {tensorA, tensorB, tensorC};
 
+    // Tiled matmul: each workgroup covers 32×32 output elements
     auto algo = mgr.algorithm(
         params, spirv,
-        kp::Workgroup({(N + 7) / 8, (M + 7) / 8, 1}),
+        kp::Workgroup({(N + 31) / 32, (M + 31) / 32, 1}),
         {},  // specialization constants
         pushConsts
     );
@@ -193,9 +196,10 @@ inline void dispatchReductionSum(const float* input, float* output,
 
     std::vector<std::shared_ptr<kp::Memory>> params = {tensorIn, tensorOut};
 
+    // Parallel tree reduction: one workgroup per output element (256 threads each)
     auto algo = mgr.algorithm(
         params, spirv,
-        kp::Workgroup({(outputSize + 63) / 64, 1, 1}),
+        kp::Workgroup({outputSize, 1, 1}),
         {},
         pushConsts
     );
@@ -229,9 +233,10 @@ inline void dispatchReductionMax(const float* input, float* maxValues, uint32_t*
 
     std::vector<std::shared_ptr<kp::Memory>> paramsAll = {tensorIn, tensorMax, tensorArg};
 
+    // Parallel tree reduction: one workgroup per output element (256 threads each)
     auto algo = mgr.algorithm(
         paramsAll, spirv,
-        kp::Workgroup({(outputSize + 63) / 64, 1, 1}),
+        kp::Workgroup({outputSize, 1, 1}),
         {},
         pushConsts
     );
@@ -269,7 +274,8 @@ inline void dispatchCmpFloat(const float* inputA, const float* inputB, uint32_t*
     uint32_t totalSize = static_cast<uint32_t>(count);
     std::memcpy(pushConsts.data(), &totalSize, sizeof(totalSize));
 
-    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 63) / 64), 1, 1}),
+    // 256 threads × 4 iterations = 1024 elements per workgroup
+    auto algo = mgr.algorithm(params, spirv, kp::Workgroup({static_cast<uint32_t>((count + 1023) / 1024), 1, 1}),
                               {}, pushConsts);
 
     mgr.sequence()
