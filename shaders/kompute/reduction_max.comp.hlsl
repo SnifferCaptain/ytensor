@@ -48,8 +48,10 @@ void main(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID)
     GroupMemoryBarrierWithGroupSync();
 
     // Phase 2: parallel tree reduction in shared memory (ggml pattern).
+    // All threads have initialized sharedMax (FLT_MIN_VAL for sentinel),
+    // so unconditional comparison within BLOCK_SIZE is safe.
     [unroll] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
-        if (col < s && col + s < axisLength) {
+        if (col < s) {
             if (sharedMax[col] < sharedMax[col + s]) {
                 sharedMax[col] = sharedMax[col + s];
                 sharedArg[col] = sharedArg[col + s];

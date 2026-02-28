@@ -62,15 +62,14 @@ void main(uint3 gid : SV_GroupID, uint3 ltid : SV_GroupThreadID)
             tileA[tr][tc] = (globalR < M && globalC < K) ? matrixA[globalR * K + globalC] : 0.0f;
         }
 
-        // --- Load tileB (BN×BK = 32×16 = 512 floats, 64 threads → 8 loads each) ---
-        // tileB stored as [col][k] for coalesced access during compute.
+        // --- Load tileB: stored as tileB[column][k] for coalesced compute access ---
         [unroll] for (uint t = 0; t < 8; ++t) {
             uint idx = localIdx + t * 64;
-            uint tr = idx / BK; // column index
-            uint tc = idx % BK; // k index
-            uint globalR = bk + tc;
-            uint globalC = blockCol + tr;
-            tileB[tr][tc] = (globalR < K && globalC < N) ? matrixB[globalR * N + globalC] : 0.0f;
+            uint colIdx = idx / BK; // column offset within tile
+            uint kIdx   = idx % BK; // k offset within tile
+            uint globalR = bk + kIdx;
+            uint globalC = blockCol + colIdx;
+            tileB[colIdx][kIdx] = (globalR < K && globalC < N) ? matrixB[globalR * N + globalC] : 0.0f;
         }
 
         GroupMemoryBarrierWithGroupSync();
