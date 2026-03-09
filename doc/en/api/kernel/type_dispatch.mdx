@@ -28,7 +28,7 @@ void processData(const YTensorBase& tensor) {
     // Need to write for every type!
     
     // ✅ Using Type Dispatch: Concise and Efficient
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(
         tensor.dtype(),
         [&]<typename T>() { // C++20 Generic Lambda
             const T* data = tensor.data<T>();
@@ -61,7 +61,7 @@ template<typename TypeListT, typename Func>
 bool dispatch(const std::string& dtype, Func&& func);
 
 template<typename TypeListT, typename Func>
-void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
+void dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
 ```
 
 ### Core Functionality
@@ -69,7 +69,7 @@ void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& o
 Based on the `dtype` string, finds a matching C++ type `T` in `TypeListT`, and calls the generic lambda `func.operator()<T>()`.
 
 *   `dispatch`: Returns `true` if a match is found and executed; otherwise `false`.
-*   `dispatchOrThrow`: Throws `std::runtime_error` if no match is found.
+*   `dispatch`: Throws `std::runtime_error` if no match is found.
 
 #### Automatic Nested Type Parsing
 
@@ -109,7 +109,7 @@ void printValue(const yt::YTensorBase& tensor) {
 
     // Dispatch!
     // Try to match tensor.dtype() in AllNumericTypes
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(
         tensor.dtype(), 
         kernel, 
         "printValue"
@@ -189,7 +189,7 @@ yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumer
 
 1.  **Use Generic Lambdas (C++20)**: With `[&]<typename T>() { ... }` syntax for cleaner code.
 2.  **Select Appropriate TypeList**: Restrict to types you actually assume to support, reducing compile time and binary size (though instantiation is on-demand, failed matching attempts have overhead).
-3.  **Error Handling**: For operations that must succeed, prefer `dispatchOrThrow` for clear error messages.
+3.  **Error Handling**: For operations that must succeed, prefer `dispatch` for clear error messages.
 
 ---
 

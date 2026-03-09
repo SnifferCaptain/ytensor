@@ -184,7 +184,7 @@ inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {   
     auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
     YTensorBase result(opShape, _dtype);                                                   \
     result.copy_(*this);                                                                   \
-    yt::kernel::dispatchOrThrow<TypeListT>(_dtype,                                         \
+    yt::kernel::dispatch<TypeListT>(_dtype,                                         \
         [&]<typename DType>() {                                                            \
             result.broadcastInplace([](DType& a, const DType& b) { a = a OP b; }, other);  \
         }, OP_NAME);                                                                       \
@@ -192,7 +192,7 @@ inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {   
 }                                                                                          \
 /* Tensor op Tensor - 原地版本 */                                                            \
 inline YTensorBase& YTensorBase::operator OP##=(const YTensorBase& other) {                \
-    yt::kernel::dispatchOrThrow<TypeListT>(_dtype,                                         \
+    yt::kernel::dispatch<TypeListT>(_dtype,                                         \
         [&]<typename DType>() {                                                            \
             this->broadcastInplace([](DType& a, const DType& b) { a = a OP b; }, other);   \
         }, OP_NAME);                                                                       \
@@ -238,7 +238,7 @@ YT_IMPL_BINARY_OP(>>, ">>", yt::types::IntegerTypes)
 inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
     auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
     YTensorBase result(opShape, "bool");                                                   \
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,                       \
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,                       \
         [&]<typename DType>() {                                                            \
             bool* resultData = result.data<bool>();                                        \
             size_t totalSize = result.size();                                              \
@@ -326,7 +326,7 @@ inline YTensorBase YTensorBase::sum(int axis) const {
     YTensorBase op(newShape, _dtype);
     size_t outSize = op.size();
     
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
         [&]<typename DType>() {
             DType* opData = op.data<DType>();
             yt::kernel::parallelFor(0, static_cast<int>(outSize), [&](int i) {
@@ -380,7 +380,7 @@ inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
     YTensorBase indices(newShape, "int32");
     size_t outSize = values.size();
     
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
         [&]<typename DType>() {
             DType* valData = values.data<DType>();
             int32_t* idxData = indices.data<int32_t>();
@@ -677,7 +677,7 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
 
 inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) const {
     YTensorBase result(_shape, _dtype);
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
         [&]<typename DType>() {
             if constexpr (yt::concepts::HAVE_MUL<DType>) {
                 result = matmul_naive_impl<DType>(*this, other);
@@ -743,7 +743,7 @@ inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) c
     int aw = shape(selfDim - 1), bw = other.shape(otherDim - 1);
     
     YTensorBase result;
-    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype,
+    yt::kernel::dispatch<yt::types::EigenNativeTypes>(_dtype,
         [&]<typename DType>() {
             // ==================== Fastpath检测 ====================
             // fastpath: [..., m, k] @ [k, n]，左张量除最后一维外连续
@@ -839,7 +839,7 @@ inline YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opN
     }
     
     YTensorBase result;
-    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
+    yt::kernel::dispatch<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
         auto thisMatView = matView();
         YTensorBase* mats = thisMatView.template data<YTensorBase>();
         
@@ -875,7 +875,7 @@ inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Fun
     }
     
     YTensorBase result;
-    yt::kernel::dispatchOrThrow<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
+    yt::kernel::dispatch<yt::types::EigenNativeTypes>(_dtype, [&]<typename T>() {
         auto thisMatView = matView(), otherMatView = other.matView();
         YTensorBase *thisMats = thisMatView.template data<YTensorBase>();
         YTensorBase *otherMats = otherMatView.template data<YTensorBase>();
@@ -915,7 +915,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
         return matmul_eigen_backend(other);
 #else
         YTensorBase result(_shape, _dtype);
-        yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(_dtype,
+        yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
             [&]<typename DType>() {
                 result = matmul_naive_impl<DType>(*this, other);
             }, "matmul_avx2_backend");

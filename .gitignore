@@ -14,3 +14,7 @@ build
 doc/index.html
 # doc/build.py
 # doc/template.html
+.ignore/
+example/ymodel2-s-2/model
+!example/ymodel2-s-2/model/.keep
+test/

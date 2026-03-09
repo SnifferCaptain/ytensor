@@ -28,3 +28,6 @@
 
 #include "src/ytensor_io.inl"
 #include "src/ytensor_function.inl"
+
+//////////// build lib /////////////
+#include "include/ytensor_extern_templates.hpp"

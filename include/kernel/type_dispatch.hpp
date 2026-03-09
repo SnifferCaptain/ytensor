@@ -62,7 +62,7 @@ bool dispatchImpl(const std::string& dtype, Func&& func, yt::types::TypeList<T, 
 /// @return 是否成功匹配并执行
 /// @note 如果dtype是嵌套类型（如"YTensorBase<float32>"），会自动解析并匹配内部基础类型
 template<typename TypeListT, typename Func>
-bool dispatch(const std::string& dtype, Func&& func) {
+bool dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch" ) {
     // 首先尝试直接匹配
     if (dispatchImpl(dtype, std::forward<Func>(func), TypeListT{})) {
         return true;
@@ -71,17 +71,12 @@ bool dispatch(const std::string& dtype, Func&& func) {
     std::string baseDtype = yt::types::getBaseDtype(dtype);
     if (baseDtype != dtype) {
         // dtype是嵌套类型，尝试用基础类型匹配
-        return dispatchImpl(baseDtype, std::forward<Func>(func), TypeListT{});
+        if(dispatchImpl(baseDtype, std::forward<Func>(func), TypeListT{})) {
+            return true;
+        }
     }
+    throw std::runtime_error(opName + ": unsupported dtype: " + dtype);
     return false;
-}
-
-/// @brief 带默认错误处理的分发（未匹配时抛出异常）
-template<typename TypeListT, typename Func>
-void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatch") {
-    if (!dispatch<TypeListT>(dtype, std::forward<Func>(func))) {
-        throw std::runtime_error(opName + ": unsupported dtype: " + dtype);
-    }
 }
 
 // ======================== 双类型分发 ========================

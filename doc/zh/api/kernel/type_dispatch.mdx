@@ -28,7 +28,7 @@ void processData(const YTensorBase& tensor) {
     // 需要为每种类型写一遍！
     
     // ✅ 使用类型分发：简洁高效
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(
         tensor.dtype(),
         [&]<typename T>() { // C++20 泛型 Lambda
             const T* data = tensor.data<T>();
@@ -61,7 +61,7 @@ template<typename TypeListT, typename Func>
 bool dispatch(const std::string& dtype, Func&& func);
 
 template<typename TypeListT, typename Func>
-void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
+void dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
 ```
 
 ### 核心功能描述
@@ -69,7 +69,7 @@ void dispatchOrThrow(const std::string& dtype, Func&& func, const std::string& o
 根据 `dtype` 字符串，在 `TypeListT` 中查找匹配的 C++ 类型 `T`，并调用泛型 lambda 函数 `func.operator()<T>()`。
 
 *   `dispatch`: 如果找到匹配类型并成功执行，返回 `true`；否则返回 `false`。
-*   `dispatchOrThrow`: 如果未找到匹配类型，抛出 `std::runtime_error` 异常。
+*   `dispatch`: 如果未找到匹配类型，抛出 `std::runtime_error` 异常。
 
 #### 嵌套类型自动解析
 
@@ -109,7 +109,7 @@ void printValue(const yt::YTensorBase& tensor) {
 
     // 分发！
     // 尝试在 AllNumericTypes 中匹配 tensor.dtype()
-    yt::kernel::dispatchOrThrow<yt::types::AllNumericTypes>(
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(
         tensor.dtype(), 
         kernel, 
         "printValue"
@@ -189,7 +189,7 @@ yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumer
 
 1.  **使用泛型 Lambda (C++20)**：配合 `[&]<typename T>() { ... }` 语法，代码最简洁。
 2.  **选择合适的 TypeList**：尽量只包含你真正支持的类型列表，以减少编译时间及二进制大小（虽然模板实例化是按需的，但错误的匹配尝试也可能有开销）。
-3.  **错误处理**：对于必须成功的操作，优先使用 `dispatchOrThrow`，它能提供清晰的错误信息。
+3.  **错误处理**：对于必须成功的操作，优先使用 `dispatch`，它能提供清晰的错误信息。
 
 ---
 
