@@ -37,22 +37,15 @@ constexpr const char* getDTypeName() {
     else return nullptr;
 }
 
-// ======================== 分发实现（递归展开） ========================
+// ======================== 分发实现（折叠表达式） ========================
 
-/// @brief 分发递归终止
-template<typename Func>
-bool dispatchImpl(const std::string&, Func&&, yt::types::TypeList<>) {
-    return false;
-}
-
-/// @brief 分发递归展开
-template<typename Func, typename T, typename... Rest>
-bool dispatchImpl(const std::string& dtype, Func&& func, yt::types::TypeList<T, Rest...>) {
-    if (dtype == getDTypeName<T>()) {
-        func.template operator()<T>();
-        return true;
-    }
-    return dispatchImpl(dtype, std::forward<Func>(func), yt::types::TypeList<Rest...>{});
+/// @brief 使用折叠表达式进行类型分发（替代递归展开）
+/// 将每个唯一Func类型的模板实例化从O(N)降低到O(1)，其中N为TypeList中的类型数量。
+/// 对于15种类型的AllNumericTypes，这意味着约15倍的模板实例化减少。
+template<typename Func, typename... Ts>
+bool dispatchImpl(const std::string& dtype, Func&& func, yt::types::TypeList<Ts...>) {
+    // || 折叠表达式：左到右短路求值，找到匹配后立即停止
+    return ((dtype == getDTypeName<Ts>() && (func.template operator()<Ts>(), true)) || ...);
 }
 
 /// @brief 根据 dtype 字符串分发到对应类型的模板函数
@@ -62,24 +55,21 @@ bool dispatchImpl(const std::string& dtype, Func&& func, yt::types::TypeList<T, 
 /// @return 是否成功匹配并执行
 /// @note 如果dtype是嵌套类型（如"YTensorBase<float32>"），会自动解析并匹配内部基础类型
 template<typename TypeListT, typename Func>
-bool dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch" ) {
+void dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch" ) {
     // 首先尝试直接匹配
     if (dispatchImpl(dtype, std::forward<Func>(func), TypeListT{})) {
-        return true;
+        return;
     }
     // 如果直接匹配失败，尝试解析嵌套类型
     std::string baseDtype = yt::types::getBaseDtype(dtype);
     if (baseDtype != dtype) {
         // dtype是嵌套类型，尝试用基础类型匹配
         if(dispatchImpl(baseDtype, std::forward<Func>(func), TypeListT{})) {
-            return true;
+            return;
         }
     }
     throw std::runtime_error(opName + ": unsupported dtype: " + dtype);
-    return false;
 }
-
-// ======================== 双类型分发 ========================
 
 /// @brief 双类型分发：对 src 和 dst 分别分发
 /// @param srcDtype 源类型
@@ -104,51 +94,4 @@ void dispatch2OrThrow(const std::string& srcDtype, const std::string& dstDtype,
         throw std::runtime_error(opName + ": unsupported dtype pair: " + srcDtype + " -> " + dstDtype);
     }
 }
-
-// ======================== 带 Trait 检查的分发 ========================
-
-/// @brief 带 trait 检查的分发递归终止
-template<template<typename> class Trait, typename Func, typename Fallback>
-bool dispatchWithTraitImpl(const std::string&, Func&&, Fallback&&, yt::types::TypeList<>) {
-    return false;
-}
-
-/// @brief 带 trait 检查的分发递归展开
-template<template<typename> class Trait, typename Func, typename Fallback, typename T, typename... Rest>
-bool dispatchWithTraitImpl(const std::string& dtype, Func&& func, Fallback&& fallback, yt::types::TypeList<T, Rest...>) {
-    if (dtype == getDTypeName<T>()) {
-        if constexpr (Trait<T>::value) {
-            func.template operator()<T>();
-        } else {
-            fallback.template operator()<T>();
-        }
-        return true;
-    }
-    return dispatchWithTraitImpl<Trait>(dtype, std::forward<Func>(func), 
-                                        std::forward<Fallback>(fallback), yt::types::TypeList<Rest...>{});
-}
-
-/// @brief 带 trait 检查的分发
-/// @tparam Trait type trait（需要有 ::value）
-/// @tparam TypeListT 类型列表
-/// @param dtype 数据类型字符串
-/// @param func 类型支持 trait 时执行的函数
-/// @param fallback 类型不支持 trait 时执行的函数
-template<template<typename> class Trait, typename TypeListT, typename Func, typename Fallback>
-bool dispatchWithTrait(const std::string& dtype, Func&& func, Fallback&& fallback) {
-    return dispatchWithTraitImpl<Trait>(dtype, std::forward<Func>(func), 
-                                        std::forward<Fallback>(fallback), TypeListT{});
-}
-
-/// @brief 带 trait 检查的分发（不支持时抛出异常）
-template<template<typename> class Trait, typename TypeListT, typename Func>
-void dispatchWithTraitOrThrow(const std::string& dtype, Func&& func, const std::string& opName = "dispatchWithTrait") {
-    auto fallback = [&]<typename T>() {
-        throw std::runtime_error(opName + ": operation not supported for type: " + dtype);
-    };
-    if (!dispatchWithTrait<Trait, TypeListT>(dtype, std::forward<Func>(func), fallback)) {
-        throw std::runtime_error(opName + ": unsupported dtype: " + dtype);
-    }
-}
-
 } // namespace yt::kernel
