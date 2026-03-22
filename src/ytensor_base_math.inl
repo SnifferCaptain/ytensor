@@ -19,7 +19,7 @@
 #include "../include/kernel/broadcast.hpp"
 #include "../include/kernel/type_dispatch.hpp"
 #if YT_USE_AVX2
-#include "../include/kernel/gemm/sgemm.hpp"
+#include "../include/kernel/avx2/sgemm.hpp"
 #endif
 
 namespace yt{
@@ -979,7 +979,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
                     opFlat._offset = opOffset; opFlat._data = op._data;
                     opFlat._element_size = sizeof(float); opFlat._dtype = "float32";
                     
-                    yt::kernel::gemm::matmul(
+                    yt::kernel::avx2::matmul(
                         leftFlat.data<float>(), right2D.data<float>(), opFlat.data<float>(),
                         innerRows, bw, aw,
                         static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
@@ -1008,7 +1008,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
     
     // 使用broadcastInplace处理广播和并行化
     opMatView.broadcastInplace([](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
-        yt::kernel::gemm::matmul(
+        yt::kernel::avx2::matmul(
             A.data<float>(), B.data<float>(), C.data<float>(),
             A.shape(0), B.shape(1), A.shape(1),
             static_cast<int64_t>(A.stride_(0)), static_cast<int64_t>(A.stride_(1)),

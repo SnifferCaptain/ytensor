@@ -10,7 +10,7 @@
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
 #if YT_USE_AVX2
-#include "../include/kernel/gemm/sgemm.hpp"
+#include "../include/kernel/avx2/sgemm.hpp"
 #endif
 
 template <typename T, int dim>
@@ -820,7 +820,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                     opFlat._offset = opOffset; opFlat._data = op._data;
                     opFlat._element_size = sizeof(T); opFlat._dtype = yt::types::getTypeName<T>();
                     
-                    yt::kernel::gemm::matmul(
+                    yt::kernel::avx2::matmul(
                         leftFlat.data(), right2D.data(), opFlat.data(),
                         innerRows, bw, aw,
                         static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
@@ -853,7 +853,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         auto aStride = a.stride_();
         auto bStride = b.stride_();
         auto oStride = o.stride_();
-        yt::kernel::gemm::matmul(
+        yt::kernel::avx2::matmul(
             a.data(), b.data(), o.data(),
             m, n, k,
             static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
