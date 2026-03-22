@@ -81,8 +81,29 @@ inline void pack_b_generic(const float* B, float* packed, int kc, int nc, int64_
     }
 }
 
-alignas(64) static float g_blockA_row[GEMM_MC * GEMM_KC];
-alignas(64) static float g_blockB_row[GEMM_NC * GEMM_KC];
+static thread_local AlignedBuffer g_blockA_row_buf;
+static thread_local AlignedBuffer g_blockB_row_buf;
+
+struct LayoutConvertCache {
+    const float* src = nullptr;
+    int rows = 0;
+    int cols = 0;
+    int64_t rs = 0;
+    int64_t cs = 0;
+    AlignedBuffer buf;
+
+    bool match(const float* s, int r, int c, int64_t rs_, int64_t cs_) const {
+        return src == s && rows == r && cols == c && rs == rs_ && cs == cs_;
+    }
+
+    void update(const float* s, int r, int c, int64_t rs_, int64_t cs_) {
+        src = s;
+        rows = r;
+        cols = c;
+        rs = rs_;
+        cs = cs_;
+    }
+};
 
 inline void pack_blockA_row_single_tile(const float* A, float* dest, int i, int mr, int kc, int lda) {
     int p = 0;
@@ -209,18 +230,21 @@ inline void pack_blockA_row_par(const float* A, float* packed, int mc, int kc, i
 
 inline void sgemm_colmajor(const float* A, const float* B, float* C, int m, int n, int k) {
     static thread_local AlignedBuffer buf_a, buf_b;
-    size_t a_buf_size = ((size_t)(GEMM_MC + MR_COL - 1) / MR_COL) * MR_COL * GEMM_KC;
-    size_t b_buf_size = ((size_t)(GEMM_NC + NR_COL - 1) / NR_COL) * NR_COL * GEMM_KC;
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    size_t a_buf_size = ((size_t)(block_mc + MR_COL - 1) / MR_COL) * MR_COL * block_kc;
+    size_t b_buf_size = ((size_t)(block_nc + NR_COL - 1) / NR_COL) * NR_COL * block_kc;
     buf_a.ensure(a_buf_size);
     buf_b.ensure(b_buf_size);
-    for (int j = 0; j < n; j += GEMM_NC) {
-        int nc = std::min(GEMM_NC, n - j);
-        for (int p = 0; p < k; p += GEMM_KC) {
-            int kc = std::min(GEMM_KC, k - p);
+    for (int j = 0; j < n; j += block_nc) {
+        int nc = std::min(block_nc, n - j);
+        for (int p = 0; p < k; p += block_kc) {
+            int kc = std::min(block_kc, k - p);
             bool first = (p == 0);
             pack_b_col(B + j * k + p, buf_b.data, kc, nc, k);
-            for (int i = 0; i < m; i += GEMM_MC) {
-                int mc = std::min(GEMM_MC, m - i);
+            for (int i = 0; i < m; i += block_mc) {
+                int mc = std::min(block_mc, m - i);
                 pack_a_col(A + p * m + i, buf_a.data, mc, kc, m);
                 for (int jr = 0; jr < nc; jr += NR_COL) {
                     int nr = std::min(NR_COL, nc - jr);
@@ -239,6 +263,16 @@ inline void sgemm_colmajor(const float* A, const float* B, float* C, int m, int 
 }
 
 inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int n, int k) {
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    const size_t block_a_size = ((size_t)(block_mc + MR_ROW - 1) / MR_ROW) * MR_ROW * block_kc;
+    const size_t block_b_size = ((size_t)(block_nc + NR_ROW - 1) / NR_ROW) * NR_ROW * block_kc;
+    g_blockA_row_buf.ensure(block_a_size);
+    g_blockB_row_buf.ensure(block_b_size);
+    float* blockA = g_blockA_row_buf.data;
+    float* blockB = g_blockB_row_buf.data;
+
     auto compute_block = [&](int ii, int mc, int kc, int nc, int jj, bool zero_init) {
 #ifdef _OPENMP
         if (g_num_threads > 1) {
@@ -247,8 +281,8 @@ inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int 
                 int mr = std::min(MR_ROW, mc - ir);
                 for (int jr = 0; jr < nc; jr += NR_ROW) {
                     int nr = std::min(NR_ROW, nc - jr);
-                    float* pa = g_blockA_row + (ir / MR_ROW) * MR_ROW * kc;
-                    float* pb = g_blockB_row + (jr / NR_ROW) * NR_ROW * kc;
+                    float* pa = blockA + (ir / MR_ROW) * MR_ROW * kc;
+                    float* pb = blockB + (jr / NR_ROW) * NR_ROW * kc;
                     float* cij = C + (ii + ir) * n + (jj + jr);
                     if (zero_init) {
                         if (mr == MR_ROW && nr == NR_ROW) kernel_row_full_fast(pa, pb, cij, kc, n);
@@ -266,8 +300,8 @@ inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int 
                 int mr = std::min(MR_ROW, mc - ir);
                 for (int jr = 0; jr < nc; jr += NR_ROW) {
                     int nr = std::min(NR_ROW, nc - jr);
-                    float* pa = g_blockA_row + (ir / MR_ROW) * MR_ROW * kc;
-                    float* pb = g_blockB_row + (jr / NR_ROW) * NR_ROW * kc;
+                    float* pa = blockA + (ir / MR_ROW) * MR_ROW * kc;
+                    float* pb = blockB + (jr / NR_ROW) * NR_ROW * kc;
                     float* cij = C + (ii + ir) * n + (jj + jr);
                     if (zero_init) {
                         if (mr == MR_ROW && nr == NR_ROW) kernel_row_full_fast(pa, pb, cij, kc, n);
@@ -281,21 +315,21 @@ inline void sgemm_rowmajor(const float* A, const float* B, float* C, int m, int 
         }
     };
 
-    for (int jj = 0; jj < n; jj += GEMM_NC) {
-        int nc = std::min(GEMM_NC, n - jj);
-        int kc = std::min(GEMM_KC, k);
-        pack_blockB_row_par(B + jj, g_blockB_row, nc, kc, n);
-        for (int ii = 0; ii < m; ii += GEMM_MC) {
-            int mc = std::min(GEMM_MC, m - ii);
-            pack_blockA_row_par(A + ii * k, g_blockA_row, mc, kc, k);
+    for (int jj = 0; jj < n; jj += block_nc) {
+        int nc = std::min(block_nc, n - jj);
+        int kc = std::min(block_kc, k);
+        pack_blockB_row_par(B + jj, blockB, nc, kc, n);
+        for (int ii = 0; ii < m; ii += block_mc) {
+            int mc = std::min(block_mc, m - ii);
+            pack_blockA_row_par(A + ii * k, blockA, mc, kc, k);
             compute_block(ii, mc, kc, nc, jj, true);
         }
-        for (int pp = kc; pp < k; pp += GEMM_KC) {
-            int kc2 = std::min(GEMM_KC, k - pp);
-            pack_blockB_row_par(B + pp * n + jj, g_blockB_row, nc, kc2, n);
-            for (int ii = 0; ii < m; ii += GEMM_MC) {
-                int mc = std::min(GEMM_MC, m - ii);
-                pack_blockA_row_par(A + ii * k + pp, g_blockA_row, mc, kc2, k);
+        for (int pp = kc; pp < k; pp += block_kc) {
+            int kc2 = std::min(block_kc, k - pp);
+            pack_blockB_row_par(B + pp * n + jj, blockB, nc, kc2, n);
+            for (int ii = 0; ii < m; ii += block_mc) {
+                int mc = std::min(block_mc, m - ii);
+                pack_blockA_row_par(A + ii * k + pp, blockA, mc, kc2, k);
                 compute_block(ii, mc, kc2, nc, jj, false);
             }
         }
@@ -328,21 +362,24 @@ inline void sgemm_masked(
     bool c_rowmajor = (csc == 1 && rsc >= n);
 
     static thread_local AlignedBuffer buf_a, buf_b;
-    size_t a_buf_size = ((size_t)(GEMM_MC + MR_ROW - 1) / MR_ROW) * MR_ROW * GEMM_KC;
-    size_t b_buf_size = ((size_t)(GEMM_NC + NR_ROW - 1) / NR_ROW) * NR_ROW * GEMM_KC;
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    size_t a_buf_size = ((size_t)(block_mc + MR_ROW - 1) / MR_ROW) * MR_ROW * block_kc;
+    size_t b_buf_size = ((size_t)(block_nc + NR_ROW - 1) / NR_ROW) * NR_ROW * block_kc;
     buf_a.ensure(a_buf_size);
     buf_b.ensure(b_buf_size);
 
     alignas(32) float tmp_c[MR_ROW * NR_ROW];
 
-    for (int jj = 0; jj < n; jj += GEMM_NC) {
-        int nc = std::min(GEMM_NC, n - jj);
-        for (int pp = 0; pp < k; pp += GEMM_KC) {
-            int kc = std::min(GEMM_KC, k - pp);
+    for (int jj = 0; jj < n; jj += block_nc) {
+        int nc = std::min(block_nc, n - jj);
+        for (int pp = 0; pp < k; pp += block_kc) {
+            int kc = std::min(block_kc, k - pp);
             bool first = (pp == 0);
             pack_b_generic(B + pp * rsb + jj * csb, buf_b.data, kc, nc, rsb, csb);
-            for (int ii = 0; ii < m; ii += GEMM_MC) {
-                int mc = std::min(GEMM_MC, m - ii);
+            for (int ii = 0; ii < m; ii += block_mc) {
+                int mc = std::min(block_mc, m - ii);
                 pack_a_generic(A + ii * rsa + pp * csa, buf_a.data, mc, kc, rsa, csa);
                 for (int ir = 0; ir < mc; ir += MR_ROW) {
                     int mr = std::min(MR_ROW, mc - ir);
@@ -508,30 +545,41 @@ inline void sgemm(
     }
 
     if (a_rowmajor_exact && b_colmajor_exact && c_rowmajor_exact && alpha == 1.0f && beta == 0.0f) {
-        static thread_local AlignedBuffer b_row_buf;
-        b_row_buf.ensure((size_t)k * (size_t)n);
-        float* B_row = b_row_buf.data;
-        for (int p = 0; p < k; ++p)
-            for (int j = 0; j < n; ++j)
-                B_row[p * n + j] = B[j * k + p];
+        static thread_local LayoutConvertCache b_col_to_row_cache;
+        if (!b_col_to_row_cache.match(B, k, n, rsb, csb)) {
+            b_col_to_row_cache.buf.ensure((size_t)k * (size_t)n);
+            float* B_row_build = b_col_to_row_cache.buf.data;
+            for (int p = 0; p < k; ++p)
+                for (int j = 0; j < n; ++j)
+                    B_row_build[p * n + j] = B[p * rsb + j * csb];
+            b_col_to_row_cache.update(B, k, n, rsb, csb);
+        }
+        float* B_row = b_col_to_row_cache.buf.data;
         sgemm_rowmajor(A, B_row, C, m, n, k);
         return;
     }
 
     if (a_colmajor_exact && b_rowmajor_exact && c_rowmajor_exact && alpha == 1.0f && beta == 0.0f) {
-        static thread_local AlignedBuffer a_row_buf;
-        a_row_buf.ensure((size_t)m * (size_t)k);
-        float* A_row = a_row_buf.data;
-        for (int i = 0; i < m; ++i)
-            for (int p = 0; p < k; ++p)
-                A_row[i * k + p] = A[p * m + i];
+        static thread_local LayoutConvertCache a_col_to_row_cache;
+        if (!a_col_to_row_cache.match(A, m, k, rsa, csa)) {
+            a_col_to_row_cache.buf.ensure((size_t)m * (size_t)k);
+            float* A_row_build = a_col_to_row_cache.buf.data;
+            for (int i = 0; i < m; ++i)
+                for (int p = 0; p < k; ++p)
+                    A_row_build[i * k + p] = A[i * rsa + p * csa];
+            a_col_to_row_cache.update(A, m, k, rsa, csa);
+        }
+        float* A_row = a_col_to_row_cache.buf.data;
         sgemm_rowmajor(A_row, B, C, m, n, k);
         return;
     }
 
     static thread_local AlignedBuffer buf_a, buf_b;
-    size_t a_sz = ((size_t)(GEMM_MC + MR_ROW - 1) / MR_ROW) * MR_ROW * GEMM_KC;
-    size_t b_sz = ((size_t)(GEMM_NC + NR_ROW - 1) / NR_ROW) * NR_ROW * GEMM_KC;
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    size_t a_sz = ((size_t)(block_mc + MR_ROW - 1) / MR_ROW) * MR_ROW * block_kc;
+    size_t b_sz = ((size_t)(block_nc + NR_ROW - 1) / NR_ROW) * NR_ROW * block_kc;
     buf_a.ensure(a_sz);
     buf_b.ensure(b_sz);
 
@@ -564,33 +612,33 @@ inline void sgemm(
         }
     };
 
-    for (int jj = 0; jj < n; jj += GEMM_NC) {
-        int nc = std::min(GEMM_NC, n - jj);
-        for (int pp = 0; pp < k; pp += GEMM_KC) {
-            int kc = std::min(GEMM_KC, k - pp);
+    for (int jj = 0; jj < n; jj += block_nc) {
+        int nc = std::min(block_nc, n - jj);
+        for (int pp = 0; pp < k; pp += block_kc) {
+            int kc = std::min(block_kc, k - pp);
             bool first = (pp == 0);
             pack_b_generic(B + pp * rsb + jj * csb, buf_b.data, kc, nc, rsb, csb);
             float* packed_b = buf_b.data;
 
 #ifdef _OPENMP
             if (g_num_threads > 1) {
-                int m_blocks = (m + GEMM_MC - 1) / GEMM_MC;
+                int m_blocks = (m + block_mc - 1) / block_mc;
                 #pragma omp parallel num_threads(g_num_threads) proc_bind(close)
                 {
                     AlignedBuffer buf_a_thread;
                     buf_a_thread.ensure(a_sz);
                     #pragma omp for schedule(static)
                     for (int bi = 0; bi < m_blocks; ++bi) {
-                        int ii = bi * GEMM_MC;
-                        int mc = std::min(GEMM_MC, m - ii);
+                        int ii = bi * block_mc;
+                        int mc = std::min(block_mc, m - ii);
                         compute_ii_block(ii, jj, pp, mc, nc, kc, first, buf_a_thread.data, packed_b);
                     }
                 }
             } else
 #endif
             {
-                for (int ii = 0; ii < m; ii += GEMM_MC) {
-                    int mc = std::min(GEMM_MC, m - ii);
+                for (int ii = 0; ii < m; ii += block_mc) {
+                    int mc = std::min(block_mc, m - ii);
                     compute_ii_block(ii, jj, pp, mc, nc, kc, first, buf_a.data, packed_b);
                 }
             }

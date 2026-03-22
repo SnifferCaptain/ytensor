@@ -2,6 +2,27 @@
 
 namespace yt::kernel::avx2 {
 
+struct F16ToF32Cache {
+    const yt::float16* src = nullptr;
+    int rows = 0;
+    int cols = 0;
+    int64_t rs = 0;
+    int64_t cs = 0;
+    AlignedBuffer buf;
+
+    bool match(const yt::float16* s, int r, int c, int64_t rs_, int64_t cs_) const {
+        return src == s && rows == r && cols == c && rs == rs_ && cs == cs_;
+    }
+
+    void update(const yt::float16* s, int r, int c, int64_t rs_, int64_t cs_) {
+        src = s;
+        rows = r;
+        cols = c;
+        rs = rs_;
+        cs = cs_;
+    }
+};
+
 #if __F16C__
 inline void f16_to_f32_block(const yt::float16* src, float* dst, int count) {
     int i = 0;
@@ -136,24 +157,83 @@ inline void hgemm(
         return;
     }
 
+    bool a_rowmajor_exact = (csa == 1 && rsa == k);
+    bool b_rowmajor_exact = (csb == 1 && rsb == n);
+    bool c_rowmajor_exact = (csc == 1 && rsc == n);
     bool c_rowmajor = (csc == 1 && rsc >= n);
 
+    if (alpha == 1.0f && beta == 0.0f && a_rowmajor_exact && b_rowmajor_exact && c_rowmajor_exact) {
+        static thread_local F16ToF32Cache a_cache, b_cache;
+        static thread_local AlignedBuffer c_f32_buf;
+
+        if (!a_cache.match(A, m, k, rsa, csa)) {
+            a_cache.buf.ensure((size_t)m * (size_t)k);
+            float* A32 = a_cache.buf.data;
+#if __F16C__
+            for (int i = 0; i < m; ++i)
+                f16_to_f32_block(A + (size_t)i * (size_t)k, A32 + (size_t)i * (size_t)k, k);
+#else
+            for (int i = 0; i < m; ++i)
+                for (int p = 0; p < k; ++p)
+                    A32[(size_t)i * (size_t)k + (size_t)p] = static_cast<float>(A[(size_t)i * (size_t)k + (size_t)p]);
+#endif
+            a_cache.update(A, m, k, rsa, csa);
+        }
+
+        if (!b_cache.match(B, k, n, rsb, csb)) {
+            b_cache.buf.ensure((size_t)k * (size_t)n);
+            float* B32 = b_cache.buf.data;
+#if __F16C__
+            for (int p = 0; p < k; ++p)
+                f16_to_f32_block(B + (size_t)p * (size_t)n, B32 + (size_t)p * (size_t)n, n);
+#else
+            for (int p = 0; p < k; ++p)
+                for (int j = 0; j < n; ++j)
+                    B32[(size_t)p * (size_t)n + (size_t)j] = static_cast<float>(B[(size_t)p * (size_t)n + (size_t)j]);
+#endif
+            b_cache.update(B, k, n, rsb, csb);
+        }
+
+        c_f32_buf.ensure((size_t)m * (size_t)n);
+        float* C32 = c_f32_buf.data;
+
+        sgemm(a_cache.buf.data, b_cache.buf.data, C32,
+              m, n, k,
+              1.0f, 0.0f,
+              k, 1,
+              n, 1,
+              n, 1);
+
+#if __F16C__
+        for (int i = 0; i < m; ++i)
+            f32_to_f16_block(C32 + (size_t)i * (size_t)n, C + (size_t)i * (size_t)n, n);
+#else
+        for (int i = 0; i < m; ++i)
+            for (int j = 0; j < n; ++j)
+                C[(size_t)i * (size_t)n + (size_t)j] = yt::float16(C32[(size_t)i * (size_t)n + (size_t)j]);
+#endif
+        return;
+    }
+
     static thread_local AlignedBuffer buf_a, buf_b;
-    size_t a_sz = ((size_t)(GEMM_MC + MR_ROW - 1) / MR_ROW) * MR_ROW * GEMM_KC;
-    size_t b_sz = ((size_t)(GEMM_NC + NR_ROW - 1) / NR_ROW) * NR_ROW * GEMM_KC;
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    size_t a_sz = ((size_t)(block_mc + MR_ROW - 1) / MR_ROW) * MR_ROW * block_kc;
+    size_t b_sz = ((size_t)(block_nc + NR_ROW - 1) / NR_ROW) * NR_ROW * block_kc;
     buf_a.ensure(a_sz);
     buf_b.ensure(b_sz);
 
     alignas(32) float c_tmp[MR_ROW * NR_ROW];
 
-    for (int jj = 0; jj < n; jj += GEMM_NC) {
-        int nc = std::min(GEMM_NC, n - jj);
-        for (int pp = 0; pp < k; pp += GEMM_KC) {
-            int kc = std::min(GEMM_KC, k - pp);
+    for (int jj = 0; jj < n; jj += block_nc) {
+        int nc = std::min(block_nc, n - jj);
+        for (int pp = 0; pp < k; pp += block_kc) {
+            int kc = std::min(block_kc, k - pp);
             bool first = (pp == 0);
             pack_b_generic_f16(B + pp * rsb + jj * csb, buf_b.data, kc, nc, rsb, csb);
-            for (int ii = 0; ii < m; ii += GEMM_MC) {
-                int mc = std::min(GEMM_MC, m - ii);
+            for (int ii = 0; ii < m; ii += block_mc) {
+                int mc = std::min(block_mc, m - ii);
                 pack_a_generic_f16(A + ii * rsa + pp * csa, buf_a.data, mc, kc, rsa, csa);
                 for (int ir = 0; ir < mc; ir += MR_ROW) {
                     int mr = std::min(MR_ROW, mc - ir);

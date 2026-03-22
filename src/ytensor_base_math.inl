@@ -20,6 +20,7 @@
 #include "../include/kernel/type_dispatch.hpp"
 #if YT_USE_AVX2
 #include "../include/kernel/avx2/sgemm.hpp"
+#include "../include/kernel/avx2/hgemm.hpp"
 #endif
 
 namespace yt{
@@ -636,7 +637,13 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
     }
     
     // 检查是否是需要转换的扩展浮点类型
-    bool needsCastToFloat32 = (_dtype == "bfloat16" || _dtype == "float16" || 
+    bool canUseFp16Avx2 = false;
+#if YT_USE_AVX2
+    canUseFp16Avx2 = (_dtype == "float16" && backend == yt::infos::MatmulBackend::AVX2);
+#endif
+
+    bool needsCastToFloat32 = (_dtype == "bfloat16" || 
+                               (_dtype == "float16" && !canUseFp16Avx2) ||
                                _dtype == "float8_e5m2" || _dtype == "float8_e4m3" || 
                                _dtype == "float8_e8m0" || _dtype == "float8_ue8m0");
     
@@ -655,7 +662,7 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
             
         case yt::infos::MatmulBackend::AVX2:
 #if YT_USE_AVX2
-            if (_dtype == "float32") {
+            if (_dtype == "float32" || _dtype == "float16") {
                 return matmul_avx2_backend(other);
             }
 #endif
@@ -910,7 +917,7 @@ inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Fun
 
 #if YT_USE_AVX2
 inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) const {
-    if (_dtype != "float32") {
+    if (_dtype != "float32" && _dtype != "float16") {
 #if YT_USE_EIGEN
         return matmul_eigen_backend(other);
 #else
@@ -929,95 +936,119 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
     int bw = other.shape(otherDim - 1);
     int ah = (selfDim >= 2) ? shape(selfDim - 2) : 1;
 
-    // ==================== Fastpath检测 ====================
-    if (selfDim > 2) {
-        bool rightIs2D = (otherDim <= 2);
-        if (!rightIs2D) {
-            rightIs2D = true;
-            for (int i = 0; i < otherDim - 2; ++i) {
-                if (other.shape(i) != 1) { rightIs2D = false; break; }
-            }
-        }
-        if (rightIs2D) {
-            int contiguousStart = isContiguousFrom(0, -1);
-            if (contiguousStart < selfDim - 1) {
-                // 可以使用fastpath
-                int outerSize = 1, innerRows = 1;
-                for (int i = 0; i < contiguousStart; ++i) outerSize *= shape(i);
-                for (int i = contiguousStart; i < selfDim - 1; ++i) innerRows *= shape(i);
-                
-                // 准备输出
-                std::vector<int> opShape;
-                for (int i = 0; i < selfDim - 1; ++i) opShape.push_back(shape(i));
-                opShape.push_back(bw);
-                YTensorBase op(opShape, "float32");
-                
-                // 右矩阵2D view
-                YTensorBase right2D;
-                right2D._shape = {aw, bw}; right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
-                right2D._offset = other._offset; right2D._data = other._data;
-                right2D._element_size = sizeof(float); right2D._dtype = "float32";
-                
-                int innerStride = (contiguousStart == 0) ? aw : stride_(contiguousStart);
-                int opInnerStride = (contiguousStart == 0) ? bw : op.stride_(contiguousStart);
-                
-                for (int outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
-                    int leftOffset = 0, opOffset = 0;
-                    if (contiguousStart > 0) {
-                        int idx = outerIdx;
-                        for (int i = contiguousStart - 1; i >= 0; --i) {
-                            int coord = idx % shape(i); idx /= shape(i);
-                            leftOffset += coord * stride_(i);
-                            opOffset += coord * op.stride_(i);
-                        }
-                    }
-                    YTensorBase leftFlat, opFlat;
-                    leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, stride_(selfDim - 1)};
-                    leftFlat._offset = _offset + leftOffset; leftFlat._data = _data;
-                    leftFlat._element_size = sizeof(float); leftFlat._dtype = "float32";
-                    opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
-                    opFlat._offset = opOffset; opFlat._data = op._data;
-                    opFlat._element_size = sizeof(float); opFlat._dtype = "float32";
-                    
-                    yt::kernel::avx2::matmul(
-                        leftFlat.data<float>(), right2D.data<float>(), opFlat.data<float>(),
-                        innerRows, bw, aw,
-                        static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
-                        static_cast<int64_t>(right2D.stride_(0)), static_cast<int64_t>(right2D.stride_(1)),
-                        static_cast<int64_t>(opFlat.stride_(0)), static_cast<int64_t>(opFlat.stride_(1)));
+    auto runAvx2TypedMatmul = [&]<typename T>(const char* dtypeName, auto&& kernel) -> YTensorBase {
+        if (selfDim > 2) {
+            bool rightIs2D = (otherDim <= 2);
+            if (!rightIs2D) {
+                rightIs2D = true;
+                for (int i = 0; i < otherDim - 2; ++i) {
+                    if (other.shape(i) != 1) { rightIs2D = false; break; }
                 }
-                return op;
+            }
+            if (rightIs2D) {
+                int contiguousStart = isContiguousFrom(0, -1);
+                if (contiguousStart < selfDim - 1) {
+                    int outerSize = 1, innerRows = 1;
+                    for (int i = 0; i < contiguousStart; ++i) outerSize *= shape(i);
+                    for (int i = contiguousStart; i < selfDim - 1; ++i) innerRows *= shape(i);
+
+                    std::vector<int> opShape;
+                    for (int i = 0; i < selfDim - 1; ++i) opShape.push_back(shape(i));
+                    opShape.push_back(bw);
+                    YTensorBase op(opShape, dtypeName);
+
+                    YTensorBase right2D;
+                    right2D._shape = {aw, bw};
+                    right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
+                    right2D._offset = other._offset;
+                    right2D._data = other._data;
+                    right2D._element_size = sizeof(T);
+                    right2D._dtype = dtypeName;
+
+                    int innerStride = (contiguousStart == 0) ? aw : stride_(contiguousStart);
+                    int opInnerStride = (contiguousStart == 0) ? bw : op.stride_(contiguousStart);
+
+                    for (int outerIdx = 0; outerIdx < outerSize; ++outerIdx) {
+                        int leftOffset = 0, opOffset = 0;
+                        if (contiguousStart > 0) {
+                            int idx = outerIdx;
+                            for (int i = contiguousStart - 1; i >= 0; --i) {
+                                int coord = idx % shape(i); idx /= shape(i);
+                                leftOffset += coord * stride_(i);
+                                opOffset += coord * op.stride_(i);
+                            }
+                        }
+
+                        YTensorBase leftFlat, opFlat;
+                        leftFlat._shape = {innerRows, aw};
+                        leftFlat._stride = {innerStride, stride_(selfDim - 1)};
+                        leftFlat._offset = _offset + leftOffset;
+                        leftFlat._data = _data;
+                        leftFlat._element_size = sizeof(T);
+                        leftFlat._dtype = dtypeName;
+
+                        opFlat._shape = {innerRows, bw};
+                        opFlat._stride = {opInnerStride, 1};
+                        opFlat._offset = opOffset;
+                        opFlat._data = op._data;
+                        opFlat._element_size = sizeof(T);
+                        opFlat._dtype = dtypeName;
+
+                        kernel(
+                            leftFlat.data<T>(), right2D.data<T>(), opFlat.data<T>(),
+                            innerRows, bw, aw,
+                            static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
+                            static_cast<int64_t>(right2D.stride_(0)), static_cast<int64_t>(right2D.stride_(1)),
+                            static_cast<int64_t>(opFlat.stride_(0)), static_cast<int64_t>(opFlat.stride_(1))
+                        );
+                    }
+                    return op;
+                }
             }
         }
+
+        auto thisMatView = matView();
+        auto otherMatView = other.matView();
+        std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        int opBatchDim = std::max(std::max(0, selfDim - 2), std::max(0, otherDim - 2));
+
+        std::vector<int> opShape;
+        int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
+        for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) opShape.push_back(opBatchShape[i]);
+        opShape.push_back(ah);
+        opShape.push_back(bw);
+
+        YTensorBase op(opShape, dtypeName);
+        auto opMatView = op.matView();
+
+        opMatView.broadcastInplace([&kernel](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
+            kernel(
+                A.data<T>(), B.data<T>(), C.data<T>(),
+                A.shape(0), B.shape(1), A.shape(1),
+                static_cast<int64_t>(A.stride_(0)), static_cast<int64_t>(A.stride_(1)),
+                static_cast<int64_t>(B.stride_(0)), static_cast<int64_t>(B.stride_(1)),
+                static_cast<int64_t>(C.stride_(0)), static_cast<int64_t>(C.stride_(1))
+            );
+        }, thisMatView, otherMatView);
+
+        return op;
+    };
+
+    if (_dtype == "float16") {
+        auto hKernel = [](auto... args) {
+            yt::kernel::avx2::hmatmul(args...);
+        };
+        return runAvx2TypedMatmul.template operator()<yt::float16>(
+            "float16", hKernel
+        );
     }
 
-    // ==================== 普通路径（使用broadcastInplace简化） ====================
-    auto thisMatView = matView();
-    auto otherMatView = other.matView();
-    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
-    int opBatchDim = std::max(std::max(0, selfDim - 2), std::max(0, otherDim - 2));
-    
-    std::vector<int> opShape;
-    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
-    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) opShape.push_back(opBatchShape[i]);
-    opShape.push_back(ah);
-    opShape.push_back(bw);
-    
-    YTensorBase op(opShape, "float32");
-    auto opMatView = op.matView();
-    
-    // 使用broadcastInplace处理广播和并行化
-    opMatView.broadcastInplace([](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
-        yt::kernel::avx2::matmul(
-            A.data<float>(), B.data<float>(), C.data<float>(),
-            A.shape(0), B.shape(1), A.shape(1),
-            static_cast<int64_t>(A.stride_(0)), static_cast<int64_t>(A.stride_(1)),
-            static_cast<int64_t>(B.stride_(0)), static_cast<int64_t>(B.stride_(1)),
-            static_cast<int64_t>(C.stride_(0)), static_cast<int64_t>(C.stride_(1))
-        );
-    }, thisMatView, otherMatView);
-    
-    return op;
+    auto sKernel = [](auto... args) {
+        yt::kernel::avx2::matmul(args...);
+    };
+    return runAvx2TypedMatmul.template operator()<float>(
+        "float32", sKernel
+    );
 }
 #endif
 

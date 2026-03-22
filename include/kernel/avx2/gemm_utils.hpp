@@ -32,22 +32,82 @@ namespace yt::kernel::avx2 {
 // 配置参数
 // ============================================================================
 
+template<int MRRow_, int NRRow_, int MRCol_, int NRCol_>
+struct GemmKernelShape {
+    static constexpr int MR_ROW = MRRow_;
+    static constexpr int NR_ROW = NRRow_;
+    static constexpr int MR_COL = MRCol_;
+    static constexpr int NR_COL = NRCol_;
+    static_assert(NRRow_ % 8 == 0, "NR_ROW must be a multiple of 8 for AVX2 vector lanes");
+};
+
+using colMM6_16 = GemmKernelShape<6, 16, 16, 6>;
+using DefaultGemmKernelShape = colMM6_16;
+
 // 行主序微内核: MR_ROW行 × NR_ROW列
 // AVX2 YMM寄存器数量=16：MR_ROW=6时使用12个累加寄存器+2个B寄存器+1个A广播=15, 安全
-// NR_ROW必须是8的倍数（每组 NR_BLOCKS 个AVX向量, NR_ROW = NR_BLOCKS * 8）
-constexpr int MR_ROW    = 6;
-constexpr int NR_ROW    = 16;
-constexpr int NR_BLOCKS = NR_ROW / 8;  // = 2，每行存储用到的AVX向量个数
+constexpr int MR_ROW = DefaultGemmKernelShape::MR_ROW;
+constexpr int NR_ROW = DefaultGemmKernelShape::NR_ROW;
+constexpr int NR_BLOCKS = NR_ROW / 8;
 
 // 列主序微内核: MR_COL行 × NR_COL列
-constexpr int MR_COL = 16;
-constexpr int NR_COL = 6;
+constexpr int MR_COL = DefaultGemmKernelShape::MR_COL;
+constexpr int NR_COL = DefaultGemmKernelShape::NR_COL;
 
-// L1/L2 cache 友好的分块大小
-// GEMM_MC * GEMM_KC * 4 ≈ 1.28MB (当前)，可视 LLC 大小调整
-constexpr int GEMM_MC = 642;   // 必须是 MR_ROW 的倍数  642 = 107 * 6
-constexpr int GEMM_KC = 500;
-constexpr int GEMM_NC = 4800;  // 必须是 NR_ROW 的倍数 4800 = 300 * 16
+// L1/L2 cache 友好的分块大小（运行时可调）
+inline int g_gemm_mc = 642;   // 应为 MR_ROW 的倍数
+inline int g_gemm_kc = 500;
+inline int g_gemm_nc = 4800;  // 应为 NR_ROW 的倍数
+
+inline int align_down_to(int value, int align) {
+    if (align <= 0) return value;
+    return std::max(align, (value / align) * align);
+}
+
+inline void set_gemm_block_sizes(int mc, int kc, int nc) {
+    g_gemm_mc = align_down_to(std::max(mc, MR_ROW), MR_ROW);
+    g_gemm_kc = std::max(kc, 32);
+    g_gemm_nc = align_down_to(std::max(nc, NR_ROW), NR_ROW);
+}
+
+inline void set_gemm_cache_sizes_bytes(size_t l1_bytes, size_t l2_bytes, size_t l3_bytes) {
+    if (l1_bytes == 0 || l2_bytes == 0 || l3_bytes == 0) return;
+
+    constexpr double l1_use = 0.75;
+    constexpr double l2_use = 0.80;
+    constexpr double l3_use = 0.75;
+    constexpr size_t bytes_per_f32 = sizeof(float);
+
+    int kc_from_l1 = static_cast<int>((l1_bytes * l1_use) / (bytes_per_f32 * (MR_ROW + NR_ROW)));
+    int kc_from_l2 = static_cast<int>((l2_bytes * l2_use) / (bytes_per_f32 * (MR_ROW + NR_ROW + 40)));
+
+    int kc = std::min(kc_from_l1, kc_from_l2);
+    kc = align_down_to(std::max(kc, 128), 16);
+    kc = std::min(kc, 1536);
+
+    int mc_from_l2 = static_cast<int>((l2_bytes * 0.85) / (bytes_per_f32 * std::max(kc, 1)));
+    mc_from_l2 = align_down_to(std::max(mc_from_l2 - NR_ROW, MR_ROW), MR_ROW);
+    mc_from_l2 = std::min(mc_from_l2, 1024);
+
+    int nc_from_l3 = static_cast<int>((l3_bytes * l3_use) / (bytes_per_f32 * std::max(kc, 1)));
+    nc_from_l3 = align_down_to(std::max(nc_from_l3, NR_ROW), NR_ROW);
+    nc_from_l3 = std::min(nc_from_l3, 12288);
+
+    set_gemm_block_sizes(mc_from_l2, kc, nc_from_l3);
+}
+
+inline void set_gemm_cache_sizes_kb(int l1_kb, int l2_kb, int l3_kb) {
+    if (l1_kb <= 0 || l2_kb <= 0 || l3_kb <= 0) return;
+    set_gemm_cache_sizes_bytes(
+        static_cast<size_t>(l1_kb) * 1024ULL,
+        static_cast<size_t>(l2_kb) * 1024ULL,
+        static_cast<size_t>(l3_kb) * 1024ULL
+    );
+}
+
+inline int gemm_mc() { return g_gemm_mc; }
+inline int gemm_kc() { return g_gemm_kc; }
+inline int gemm_nc() { return g_gemm_nc; }
 
 // 线程数控制（仅影响本模块GEMM相关调度）
 inline int g_num_threads = 1;
@@ -202,8 +262,6 @@ inline void store_c_col(const __m256 c[][2], float* C, int mr, int nr, int ldc) 
 // 使用 std::integer_sequence 在编译期展开，支持任意MR（不限于6）
 // ============================================================================
 
-namespace detail {
-
 /// 单步FMA迭代器：展开 MR 行，使用 index sequence
 template<int MR, int NB, int... Is>
 __attribute__((always_inline))
@@ -229,8 +287,6 @@ inline void fma_col_step(const __m256 a0, const __m256 a1, const float* __restri
     }()), ...);
 }
 
-} // namespace detail
-
 /// @brief 行主序FMA循环，MR行 × (NR_BLOCKS*8列)，A已打包为[kc,MR_ROW]，B已打包为[kc/NR_ROW块,NR_ROW]
 template<int MR>
 __attribute__((hot))
@@ -243,7 +299,7 @@ inline void fma_loop_row(const float* __restrict A, const float* __restrict B,
         for (int jj = 0; jj < NR_BLOCKS; ++jj)
             b[jj] = _mm256_loadu_ps(B + p * NR_ROW + jj * 8);
         // A packed with stride MR_ROW (not MR), to allow masking extra rows with zeros
-        detail::fma_row_step<MR, NR_BLOCKS>(A + p * MR_ROW, b, c, seq);
+        fma_row_step<MR, NR_BLOCKS>(A + p * MR_ROW, b, c, seq);
     }
 }
 
@@ -257,7 +313,7 @@ inline void fma_loop_col(const float* __restrict A, const float* __restrict B,
     for (int p = 0; p < kc; ++p) {
         __m256 a0 = _mm256_loadu_ps(A + p * MR_COL);
         __m256 a1 = _mm256_loadu_ps(A + p * MR_COL + 8);
-        detail::fma_col_step<NR>(a0, a1, B + p * NR_COL, c, seq);
+        fma_col_step<NR>(a0, a1, B + p * NR_COL, c, seq);
     }
 }
 

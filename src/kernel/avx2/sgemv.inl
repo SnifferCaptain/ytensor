@@ -425,6 +425,17 @@ inline void gemv_col_simd(const float* A, const float* B, float* C,
                           int m, int k, float alpha, float beta,
                           int64_t rsa, int64_t csa, int64_t rsb, int64_t rsc) {
     if (csa == 1 && rsb == 1 && rsc == 1) {
+        if (g_num_threads > 1 && m >= 512) {
+            const int nth = std::min(g_num_threads, std::max(1, m / 64));
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static) num_threads(nth)
+#endif
+            for (int i = 0; i < m; ++i) {
+                float sum = sdot_contiguous(A + (size_t)i * (size_t)rsa, B, k);
+                C[i] = alpha * sum + beta * C[i];
+            }
+            return;
+        }
         int i = 0;
         for (; i + 8 <= m; i += 8) {
             __m256 acc[8];
@@ -453,15 +464,57 @@ inline void gemv_col_simd(const float* A, const float* B, float* C,
         return;
     }
     if (rsa == 1 && rsb == 1 && rsc == 1) {
-        if (beta == 0.0f) for (int i = 0; i < m; ++i) C[i] = 0.0f;
-        else if (beta != 1.0f) for (int i = 0; i < m; ++i) C[i] *= beta;
-        for (int p = 0; p < k; ++p) {
-            float b_val = alpha * B[p];
-            const float* a_col = A + p * csa;
-            __m256 vb = _mm256_set1_ps(b_val);
+        if (beta == 0.0f) {
+            std::memset(C, 0, (size_t)m * sizeof(float));
+        } else if (beta != 1.0f) {
+            __m256 vbeta = _mm256_set1_ps(beta);
             int i = 0;
             for (; i + 8 <= m; i += 8)
-                _mm256_storeu_ps(C + i, _mm256_fmadd_ps(_mm256_loadu_ps(a_col + i), vb, _mm256_loadu_ps(C + i)));
+                _mm256_storeu_ps(C + i, _mm256_mul_ps(_mm256_loadu_ps(C + i), vbeta));
+            for (; i < m; ++i) C[i] *= beta;
+        }
+
+        int p = 0;
+        for (; p + 4 <= k; p += 4) {
+            const float b0 = alpha * B[p + 0];
+            const float b1 = alpha * B[p + 1];
+            const float b2 = alpha * B[p + 2];
+            const float b3 = alpha * B[p + 3];
+
+            const float* a0 = A + (p + 0) * csa;
+            const float* a1 = A + (p + 1) * csa;
+            const float* a2 = A + (p + 2) * csa;
+            const float* a3 = A + (p + 3) * csa;
+
+            const __m256 vb0 = _mm256_set1_ps(b0);
+            const __m256 vb1 = _mm256_set1_ps(b1);
+            const __m256 vb2 = _mm256_set1_ps(b2);
+            const __m256 vb3 = _mm256_set1_ps(b3);
+
+            int i = 0;
+            for (; i + 8 <= m; i += 8) {
+                __m256 vc = _mm256_loadu_ps(C + i);
+                vc = _mm256_fmadd_ps(_mm256_loadu_ps(a0 + i), vb0, vc);
+                vc = _mm256_fmadd_ps(_mm256_loadu_ps(a1 + i), vb1, vc);
+                vc = _mm256_fmadd_ps(_mm256_loadu_ps(a2 + i), vb2, vc);
+                vc = _mm256_fmadd_ps(_mm256_loadu_ps(a3 + i), vb3, vc);
+                _mm256_storeu_ps(C + i, vc);
+            }
+            for (; i < m; ++i) {
+                C[i] += b0 * a0[i] + b1 * a1[i] + b2 * a2[i] + b3 * a3[i];
+            }
+        }
+
+        for (; p < k; ++p) {
+            const float b_val = alpha * B[p];
+            const float* a_col = A + p * csa;
+            const __m256 vb = _mm256_set1_ps(b_val);
+            int i = 0;
+            for (; i + 8 <= m; i += 8) {
+                __m256 vc = _mm256_loadu_ps(C + i);
+                vc = _mm256_fmadd_ps(_mm256_loadu_ps(a_col + i), vb, vc);
+                _mm256_storeu_ps(C + i, vc);
+            }
             for (; i < m; ++i) C[i] += b_val * a_col[i];
         }
         return;

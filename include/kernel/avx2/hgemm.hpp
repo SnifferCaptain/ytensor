@@ -5,6 +5,7 @@
  ***************/
 
 #include "gemm_utils.hpp"
+#include "sgemm.hpp"
 #include "../../types/float_spec.hpp"
 
 #if defined(__AVX2__) && defined(__FMA__)
