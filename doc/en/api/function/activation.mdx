@@ -1,50 +1,541 @@
 # Activation Functions
 
-Common activation functions in the `yt::functional` or global namespace.
+This page documents activation functions in the `yt::function` namespace.
 
-## ReLU
+Normalization-related ops such as Softmax / LogSoftmax / LayerNorm are documented in [normalization.mdx](./normalization.mdx).
 
-$$ \text{ReLU}(x) = \max(0, x) $$
+## Overview
 
-```cpp
-auto y = tensor.relu();
-// or
-yt::functional::relu(tensor);
-```
+Conventions:
 
-## Sigmoid
+- If a function takes `order`, `0` usually means the function value and `1` means a per-element (diagonal) derivative form.
+- Unsupported `order` values throw `std::invalid_argument`.
 
-$$ \text{Sigmoid}(x) = \frac{1}{1 + e^{-x}} $$
+| Function | In-place | `order` | Notes |
+| --- | --- | --- | --- |
+| `relu()` | `relu_()` | supports negative/0/1 (see below) | arithmetic `T` |
+| `exp()` | `exp_()` | ignored | exp-compatible `T` |
+| `sigmoid()` | `sigmoid_()` | `-1/0/1` | `order=-1` forwards to Softplus |
+| `leakyRelu()` | `leakyRelu_()` | `0/1` | arithmetic `T` |
+| `elu()` | `elu_()` | `0/1` | floating `T` |
+| `selu()` | `selu_()` | `0/1` | floating `T` |
+| `gelu()` | `gelu_()` | `0/1` | floating `T` |
+| `tanh()` | `tanh_()` | `0/1` | floating `T` |
+| `swish()` | `swish_()` | `0/1` | sigmoid-based |
+| `softplus()` | `softplus_()` | `0/1` | stable softplus |
+| `mish()` | `mish_()` | `0/1` | uses softplus + tanh |
+| `hardSigmoid()` | `hardSigmoid_()` | `0/1` | arithmetic `T` |
+| `hardSwish()` | `hardSwish_()` | `0/1` | arithmetic `T` |
 
-```cpp
-auto y = tensor.sigmoid();
-```
+---
 
-## Tanh
+## `relu()` / `relu_()`
 
-$$ \text{Tanh}(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}} $$
+### Core behavior
 
-```cpp
-auto y = tensor.tanh();
-```
+Applies ReLU element-wise.
 
-## Softmax
+- `order = 0`: $f(x)=\max(0, x)$
+- `order = 1`: $f'(x)=1$ if $x>0$ else $0$
+- `order > 1`: returns all zeros (implementation convention)
+- `order < 0`: returns an integral-form variant for $x>0$ (see implementation details)
 
-Computes softmax along a specified dimension.
-
-$$ \text{Softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}} $$
-
-```cpp
-// Along the last dimension
-auto y = tensor.softmax(-1);
-```
-
-**Note**: Softmax is typically numerically stable (implements max-subtraction trick).
-
-## GELU
-
-Gaussian Error Linear Unit.
+### Signature
 
 ```cpp
-auto y = tensor.gelu();
+template<typename T, int dim>
+YTensor<T, dim> relu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& relu_(YTensor<T, dim>& x, int order = 0);
 ```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | order selector |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+#include "ytensor_function.hpp"
+
+auto x = yt::YTensor<float, 1>({5}, {-2, -1, 0, 1, 2});
+auto y = yt::function::relu(x);
+yt::function::relu_(x);
+```
+
+---
+
+## `exp()` / `exp_()`
+
+### Core behavior
+
+Computes $e^x$ element-wise. The `order` parameter is currently ignored.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& exp_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | ignored |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 2.0f});
+auto y = yt::function::exp(x);
+yt::function::exp_(x);
+```
+
+---
+
+## `sigmoid()` / `sigmoid_()`
+
+### Core behavior
+
+Applies a numerically stable sigmoid element-wise.
+
+- `order = 0`: $\sigma(x)=\frac{1}{1+e^{-x}}$
+- `order = 1`: $\sigma(x)(1-\sigma(x))$
+- `order = -1`: forwards to Softplus ($\log(1+e^x)$)
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& sigmoid_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `-1/0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1.0f, 0.0f, 1.0f});
+auto y0 = yt::function::sigmoid(x, 0);
+auto y1 = yt::function::sigmoid(x, 1);
+auto sp = yt::function::sigmoid(x, -1);
+```
+
+---
+
+## `leakyRelu()` / `leakyRelu_()`
+
+### Core behavior
+
+Leaky ReLU:
+
+- `order = 0`: $\max(x, \alpha x)$
+- `order = 1`: derivative form (`1` for $x>0$, else `alpha`)
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> leakyRelu(const YTensor<T, dim>& x, T alpha = static_cast<T>(0.01), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& leakyRelu_(YTensor<T, dim>& x, T alpha = static_cast<T>(0.01), int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `alpha` | `T` | `0.01` | slope for the negative side |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-2, -1, 1, 2});
+auto y = yt::function::leakyRelu(x, 0.1f);
+```
+
+---
+
+## `elu()` / `elu_()`
+
+### Core behavior
+
+ELU:
+
+- `order = 0`: $x>0?x:\alpha(e^x-1)$
+- `order = 1`: $x>0?1:\alpha e^x$
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> elu(const YTensor<T, dim>& x, T alpha = static_cast<T>(1.0), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& elu_(YTensor<T, dim>& x, T alpha = static_cast<T>(1.0), int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `alpha` | `T` | `1.0` | negative-side scale |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-1, 0, 1, 2});
+auto y = yt::function::elu(x);
+```
+
+---
+
+## `selu()` / `selu_()`
+
+### Core behavior
+
+SELU (Scaled ELU) with fixed constants $\lambda$ and $\alpha$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> selu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& selu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-1, 0, 1, 2});
+auto y = yt::function::selu(x);
+```
+
+---
+
+## `gelu()` / `gelu_()`
+
+### Core behavior
+
+GELU (erf-based): $0.5x(1+\mathrm{erf}(x/\sqrt{2}))$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> gelu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& gelu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-2, -1, 0, 1});
+auto y = yt::function::gelu(x);
+```
+
+---
+
+## `tanh()` / `tanh_()`
+
+### Core behavior
+
+- `order = 0`: $\tanh(x)$
+- `order = 1`: $1-\tanh^2(x)$
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> tanh(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& tanh_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::tanh(x);
+```
+
+---
+
+## `swish()` / `swish_()`
+
+### Core behavior
+
+Swish / SiLU: $x\cdot\sigma(x)$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> swish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& swish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::swish(x);
+```
+
+---
+
+## `softplus()` / `softplus_()`
+
+### Core behavior
+
+Softplus: $\log(1+e^x)$, implemented in a numerically stable way.
+
+- `order = 1` forwards to `sigmoid`.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softplus(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& softplus_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-2, 0, 2});
+auto y = yt::function::softplus(x);
+```
+
+---
+
+## `mish()` / `mish_()`
+
+### Core behavior
+
+Mish: $x\tanh(\mathrm{softplus}(x))$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> mish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& mish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::mish(x);
+```
+
+---
+
+## `hardSigmoid()` / `hardSigmoid_()`
+
+### Core behavior
+
+Hard Sigmoid: $\mathrm{clip}(x/6+0.5, 0, 1)$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> hardSigmoid(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& hardSigmoid_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({5}, {-4, -2, 0, 2, 4});
+auto y = yt::function::hardSigmoid(x);
+```
+
+---
+
+## `hardSwish()` / `hardSwish_()`
+
+### Core behavior
+
+Hard Swish, a piecewise-linear approximation of Swish.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> hardSwish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& hardSwish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({5}, {-4, -2, 0, 2, 4});
+auto y = yt::function::hardSwish(x);
+```
+
+---
+
+## See also
+
+- [Normalization](./normalization.mdx)

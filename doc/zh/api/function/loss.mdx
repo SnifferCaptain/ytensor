@@ -1,0 +1,214 @@
+# 损失函数
+
+本文档介绍 `yt::function` 命名空间中的损失函数。
+
+## 概述
+
+本库当前损失函数的实现**默认返回逐元素（element-wise）损失**，即返回张量 shape 与输入（以及 target）一致，而不是对 batch/类别维度做 reduction。
+
+- 如果你想要标量 loss，可在外部对返回值执行 `sum()` / `mean()`（取决于你项目里对应 API）。
+- `order = 1` 返回对输入 `input` 的导数（逐元素形式）。
+
+| 函数 | 说明 | 原地版本 | `order` 支持 | 类型约束 |
+| --- | --- | --- | --- | --- |
+| `mseLoss()` | 均方误差 $(x-y)^2$ | `mseLoss_()` | `0/1` | `T` 为浮点 |
+| `crossEntropyLoss()` | 交叉熵（含 logSoftmax 推导） | - | `0/1` | `T` 为浮点 |
+| `binaryCrossEntropyLoss()` | 二元交叉熵 | `binaryCrossEntropyLoss_()` | `0/1` | `T` 为浮点 |
+| `huberLoss()` | Huber（Smooth L1） | `huberLoss_()` | `0/1` | `T` 为浮点 |
+
+---
+
+## `mseLoss()` / `mseLoss_()`
+
+### 核心功能描述
+
+逐元素均方误差：
+
+- `order = 0`：$(input - target)^2$
+- `order = 1`：$2(input - target)$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> mseLoss(const YTensor<T, dim>& input, const YTensor<T, dim>& target, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& mseLoss_(YTensor<T, dim>& input, const YTensor<T, dim>& target, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `input` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 预测值 |
+| `target` | `const YTensor<T, dim>&` | - | 目标值（需与 input 可广播兼容/同 shape，视 broadcast 实现而定） |
+| `order` | `int` | `0` | 支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`（把 `input` 就地改写为 loss 或梯度）
+
+### 使用示例
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example_mse() {
+    auto pred = yt::YTensor<float, 1>({3}, {0.2f, 0.5f, 0.8f});
+    auto tgt  = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 1.0f});
+
+    auto loss = yt::function::mseLoss(pred, tgt);
+    auto grad = yt::function::mseLoss(pred, tgt, 1);
+
+    yt::function::mseLoss_(pred, tgt); // pred 原地变为 loss
+}
+```
+
+---
+
+## `crossEntropyLoss()`
+
+### 核心功能描述
+
+沿 `axis` 维度计算交叉熵相关的逐元素项。
+
+- `order = 0`：实现计算 `logSoftmax(input)`，并返回逐元素 `-target * logSoftmax(input)`。
+- `order = 1`：返回 `softmax(input) - target`。
+
+重要说明：该实现**不做 reduction**，也不做 “按类别维度 sum”，因此通常你需要在调用端对 `axis` 维度求和/平均，或者传入 one-hot target 后自行再聚合。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> crossEntropyLoss(const YTensor<T, dim>& input, const YTensor<T, dim>& target, int axis = -1, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `input` | `const YTensor<T, dim>&` | - | logits（未归一化得分） |
+| `target` | `const YTensor<T, dim>&` | - | 目标分布；实现按逐元素乘法使用，常见为 one-hot 或概率分布 |
+| `axis` | `int` | `-1` | 类别维度（支持负数索引） |
+| `order` | `int` | `0` | 支持 `0/1` |
+
+### 返回值
+
+- `YTensor<T, dim>`，shape 与 `input` 相同
+
+### 使用示例
+
+```cpp
+auto logits = yt::YTensor<float, 2>::randn({2, 4});
+auto onehot = yt::YTensor<float, 2>::zeros({2, 4});
+onehot.at(0, 1) = 1.0f;
+onehot.at(1, 3) = 1.0f;
+
+auto ce_elem = yt::function::crossEntropyLoss(logits, onehot, -1, 0);
+auto grad = yt::function::crossEntropyLoss(logits, onehot, -1, 1);
+```
+
+---
+
+## `binaryCrossEntropyLoss()` / `binaryCrossEntropyLoss_()`
+
+### 核心功能描述
+
+二元交叉熵（逐元素）：
+
+- `order = 0`：$-(t\log(p) + (1-t)\log(1-p))$
+- `order = 1`：$-t/p + (1-t)/(1-p)$
+
+实现会将 `input`（即 $p$）用 `eps = 1e-7` clamp 到 `[eps, 1-eps]`，避免 `log(0)` 或除 0。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> binaryCrossEntropyLoss(const YTensor<T, dim>& input, const YTensor<T, dim>& target, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& binaryCrossEntropyLoss_(YTensor<T, dim>& input, const YTensor<T, dim>& target, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `input` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 概率（通常应在 `[0,1]`） |
+| `target` | `const YTensor<T, dim>&` | - | 目标（通常为 0/1 或概率） |
+| `order` | `int` | `0` | 支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto p = yt::YTensor<float, 1>({3}, {0.1f, 0.8f, 0.6f});
+auto t = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 1.0f});
+
+auto loss = yt::function::binaryCrossEntropyLoss(p, t);
+auto grad = yt::function::binaryCrossEntropyLoss(p, t, 1);
+```
+
+---
+
+## `huberLoss()` / `huberLoss_()`
+
+### 核心功能描述
+
+Huber（Smooth L1）损失，设 $d = input-target$：
+
+- `order = 0`：
+  - 若 $|d| \le \delta$：$0.5d^2$
+  - 否则：$\delta(|d| - 0.5\delta)$
+- `order = 1`：
+  - 若 $|d| \le \delta$：$d$
+  - 否则：$\delta\,\mathrm{sign}(d)$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> huberLoss(const YTensor<T, dim>& input, const YTensor<T, dim>& target, T delta = static_cast<T>(1.0), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& huberLoss_(YTensor<T, dim>& input, const YTensor<T, dim>& target, T delta = static_cast<T>(1.0), int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `input` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 预测值 |
+| `target` | `const YTensor<T, dim>&` | - | 目标值 |
+| `delta` | `T` | `1.0` | 分段阈值 |
+| `order` | `int` | `0` | 支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto pred = yt::YTensor<float, 1>({3}, {0.0f, 2.0f, 10.0f});
+auto tgt  = yt::YTensor<float, 1>({3}, {0.0f, 0.0f, 0.0f});
+
+auto loss = yt::function::huberLoss(pred, tgt, 1.0f, 0);
+auto grad = yt::function::huberLoss(pred, tgt, 1.0f, 1);
+```
+
+---
+
+## 相关内容
+
+- [归一化](./normalization.mdx)
+- [融合算子](./fused.mdx)

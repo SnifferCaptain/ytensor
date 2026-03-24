@@ -310,6 +310,80 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     }
 }
 
+template <typename T, int dim> template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue,
+    yt::infos::MatmulBackend backend) const {
+    static_assert(yt::concepts::HAVE_ADD<T> && yt::concepts::HAVE_MUL<T>, "Type must have add and mul in masked_matmul");
+    static_assert(dim >= 1 && dim1 >= 1, "masked_matmul only support dim >= 1");
+    if(this->shape(-1) != other.shape(-2)){
+        throwShapeNotMatch("masked_matmul", other.shape());
+    }
+
+    const int outRows = this->shape(-2);
+    const int outCols = other.shape(-1);
+    if(mask.shape(0) != outRows || mask.shape(1) != outCols){
+        throw std::invalid_argument(
+            "Function \"masked_matmul\" mask shape not match: expected YTensor[" +
+            std::to_string(outRows) + ", " + std::to_string(outCols) +
+            "] but got YTensor[" + std::to_string(mask.shape(0)) + ", " + std::to_string(mask.shape(1)) + "]"
+        );
+    }
+
+    if constexpr (std::is_arithmetic_v<T>) {
+        switch (backend) {
+#if YT_USE_AVX2
+            case yt::infos::MatmulBackend::AVX2:
+                if constexpr (std::is_same_v<T, float>) return masked_matmul_avx2_backend(other, mask, maskedValue);
+                [[fallthrough]];
+#endif
+#if YT_USE_EIGEN
+            case yt::infos::MatmulBackend::Eigen:
+#endif
+            case yt::infos::MatmulBackend::Naive:
+            default:
+                return masked_matmul_naive_backend(other, mask, maskedValue);
+        }
+    } else {
+        return masked_matmul_naive_backend(other, mask, maskedValue);
+    }
+}
+
+template <typename T, int dim> template<int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue,
+    yt::infos::MatmulBackend backend) const {
+    static_assert(yt::concepts::HAVE_ADD<T> && yt::concepts::HAVE_MUL<T>, "Type must have add and mul in masked_matmul");
+    static_assert(dim >= 1 && dim1 >= 1, "masked_matmul only support dim >= 1");
+    static_assert(std::is_invocable_r_v<bool, std::decay_t<Func>, int, int>, "masked_matmul func must be callable as bool(int, int)");
+    if(this->shape(-1) != other.shape(-2)){
+        throwShapeNotMatch("masked_matmul", other.shape());
+    }
+
+    if constexpr (std::is_arithmetic_v<T>) {
+        switch (backend) {
+#if YT_USE_AVX2
+            case yt::infos::MatmulBackend::AVX2:
+                if constexpr (std::is_same_v<T, float>) return masked_matmul_avx2_backend(other, std::forward<Func>(func), maskedValue);
+                [[fallthrough]];
+#endif
+#if YT_USE_EIGEN
+            case yt::infos::MatmulBackend::Eigen:
+#endif
+            case yt::infos::MatmulBackend::Naive:
+            default:
+                return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
+        }
+    } else {
+        return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
+    }
+}
+
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) {
     axis = (axis % dim + dim) % dim;
@@ -627,6 +701,90 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     return op;
 }
 
+template <typename T, int dim> template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul_naive_backend(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue) const {
+    auto thisMatView = this->matView();
+    auto otherMatView = other.matView();
+    std::vector<int> opShape;
+    const int bw = other.shape(-1);
+    if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
+        opShape = {this->shape(-2), bw};
+    } else {
+        opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        opShape.push_back(this->shape(-2));
+        opShape.push_back(bw);
+    }
+
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    op.fill(maskedValue);
+    auto opMatView = op.matView();
+    opMatView.broadcastInplace([&mask](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        const int m = a.shape(0);
+        const int k = a.shape(1);
+        const int n = b.shape(1);
+        #pragma omp parallel for collapse(2) proc_bind(close)
+        for (int y = 0; y < m; ++y) {
+            for (int x = 0; x < n; ++x) {
+                if (!mask.at(y, x)) continue;
+                T sum = static_cast<T>(0);
+                #pragma omp simd reduction(+:sum)
+                for (int p = 0; p < k; ++p) {
+                    sum = sum + a.at(y, p) * b.at(p, x);
+                }
+                o.at(y, x) = sum;
+            }
+        }
+        return;
+    }, thisMatView, otherMatView);
+    return op;
+}
+
+template <typename T, int dim> template<int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul_naive_backend(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue) const {
+    Func&& predicate = std::forward<Func>(func);
+    auto thisMatView = this->matView();
+    auto otherMatView = other.matView();
+    std::vector<int> opShape;
+    const int bw = other.shape(-1);
+    if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
+        opShape = {this->shape(-2), bw};
+    } else {
+        opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        opShape.push_back(this->shape(-2));
+        opShape.push_back(bw);
+    }
+
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    op.fill(maskedValue);
+    auto opMatView = op.matView();
+    opMatView.broadcastInplace([&predicate](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        const int m = a.shape(0);
+        const int k = a.shape(1);
+        const int n = b.shape(1);
+        #pragma omp parallel for collapse(2) proc_bind(close)
+        for (int y = 0; y < m; ++y) {
+            for (int x = 0; x < n; ++x) {
+                if (!predicate(y, x)) continue;
+                T sum = static_cast<T>(0);
+                #pragma omp simd reduction(+:sum)
+                for (int p = 0; p < k; ++p) {
+                    sum = sum + a.at(y, p) * b.at(p, x);
+                }
+                o.at(y, x) = sum;
+            }
+        }
+        return;
+    }, thisMatView, otherMatView);
+    return op;
+}
+
 ///////////// Eigen support ////////////////
 
 #if YT_USE_EIGEN
@@ -859,6 +1017,86 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
             static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
             static_cast<int64_t>(bStride[0]), static_cast<int64_t>(bStride[1]),
             static_cast<int64_t>(oStride[0]), static_cast<int64_t>(oStride[1])
+        );
+    }, thisMatView, otherMatView);
+    return op;
+}
+
+template <typename T, int dim> template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul_avx2_backend(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue) const requires std::is_same_v<T, float> {
+    auto thisMatView = this->matView();
+    auto otherMatView = other.matView();
+    std::vector<int> opShape;
+    const int bw = other.shape(-1);
+    if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
+        opShape = {this->shape(-2), bw};
+    } else {
+        opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        opShape.push_back(this->shape(-2));
+        opShape.push_back(bw);
+    }
+
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    op.fill(maskedValue);
+    auto opMatView = op.matView();
+    yt::YTensor<bool, 2> maskContiguous = mask.isContiguous() ? mask : mask.contiguous();
+    const bool* maskPtr = maskContiguous.data();
+
+    opMatView.broadcastInplace([maskPtr](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        auto aStride = a.stride_();
+        auto bStride = b.stride_();
+        auto oStride = o.stride_();
+        yt::kernel::avx2::sgemm_masked(
+            a.data(), b.data(), o.data(),
+            a.shape(0), b.shape(1), a.shape(1),
+            1.0f, 0.0f,
+            static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
+            static_cast<int64_t>(bStride[0]), static_cast<int64_t>(bStride[1]),
+            static_cast<int64_t>(oStride[0]), static_cast<int64_t>(oStride[1]),
+            maskPtr
+        );
+    }, thisMatView, otherMatView);
+    return op;
+}
+
+template <typename T, int dim> template<int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::masked_matmul_avx2_backend(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue) const requires std::is_same_v<T, float> {
+    Func&& predicate = std::forward<Func>(func);
+    auto thisMatView = this->matView();
+    auto otherMatView = other.matView();
+    std::vector<int> opShape;
+    const int bw = other.shape(-1);
+    if constexpr(yt::concepts::CONSTEXPR_MAX({dim, dim1, 2}) == 2){
+        opShape = {this->shape(-2), bw};
+    } else {
+        opShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+        opShape.push_back(this->shape(-2));
+        opShape.push_back(bw);
+    }
+
+    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> op(opShape);
+    op.fill(maskedValue);
+    auto opMatView = op.matView();
+
+    opMatView.broadcastInplace([&predicate](yt::YTensor<T, 2>& o, const yt::YTensor<T, 2>& a, const yt::YTensor<T, 2>& b) {
+        auto aStride = a.stride_();
+        auto bStride = b.stride_();
+        auto oStride = o.stride_();
+        yt::kernel::avx2::sgemm_masked(
+            a.data(), b.data(), o.data(),
+            a.shape(0), b.shape(1), a.shape(1),
+            1.0f, 0.0f,
+            static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
+            static_cast<int64_t>(bStride[0]), static_cast<int64_t>(bStride[1]),
+            static_cast<int64_t>(oStride[0]), static_cast<int64_t>(oStride[1]),
+            predicate
         );
     }, thisMatView, otherMatView);
     return op;

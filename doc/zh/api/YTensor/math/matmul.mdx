@@ -125,6 +125,88 @@ auto c = a.matmul(b);                             // (2, 10, 3, 5)
 
 ---
 
+## masked_matmul()
+
+`masked_matmul` 在 `matmul` 的基础上增加输出位置掩码：仅掩码为真（或谓词返回真）的位置会写入矩阵乘结果，其余位置保持为 `maskedValue`。
+
+### 函数签名（布尔掩码）
+
+```cpp
+template <int dim1>
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+    const YTensor<T, dim1>& other,
+    const YTensor<bool, 2>& mask,
+    const T& maskedValue = static_cast<T>(0),
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+```
+
+### 函数签名（可调用谓词）
+
+```cpp
+template <int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+    const YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue = static_cast<T>(0),
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 说明 |
+| --- | --- | --- |
+| `other` | `const YTensor<T, dim1>&` | 右操作数张量 |
+| `mask` | `const YTensor<bool, 2>&` | 2D 布尔掩码，形状必须为 `[this.shape(-2), other.shape(-1)]` |
+| `func` | `Func&&` | 谓词，签名要求 `bool(int row, int col)` |
+| `maskedValue` | `const T&` | 非激活位置写入值（默认 `0`） |
+| `backend` | `MatmulBackend` | 与 `matmul` 相同的后端选择策略 |
+
+### 行为说明
+
+- 输出先整体填充 `maskedValue`。
+- 仅当 `mask(row, col) == true` 或 `func(row, col) == true` 时，计算并写入对应输出元素。
+- 其余位置不参与乘加，保持 `maskedValue`。
+- 广播规则与 `matmul` 一致，掩码仅作用于最后两个维度的输出平面。
+
+### AVX2 谓词优化（可选）
+
+当使用 `Func` 版本并走 AVX2 后端时，若谓词对象额外提供以下方法，可进行块级剪枝：
+
+```cpp
+bool tileAllTrue(int row0, int col0, int mr, int nr) const;
+bool tileAllFalse(int row0, int col0, int mr, int nr) const;
+```
+
+这两个方法不是必须项；未提供时会回退到逐元素判断。
+
+### 使用示例
+
+```cpp
+auto a = yt::YTensor<float, 2>::randn(4, 8);
+auto b = yt::YTensor<float, 2>::randn(8, 4);
+
+// 1) 布尔掩码版本：仅保留下三角
+auto mask = yt::YTensor<bool, 2>::zeros({4, 4});
+for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j <= i; ++j) {
+        mask.at(i, j) = true;
+    }
+}
+auto c0 = a.masked_matmul(b, mask, -1e9f);
+
+// 2) 谓词版本：仅保留对角线
+auto c1 = a.masked_matmul(
+    b,
+    [](int row, int col) { return row == col; },
+    0.0f
+);
+```
+
+---
+
 ## matView()
 
 将张量的最后两个维度视为矩阵，返回矩阵视图。

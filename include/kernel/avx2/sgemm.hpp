@@ -37,6 +37,17 @@ void sgemm_masked(
     const bool* mask
 );
 
+template <typename Func>
+void sgemm_masked(
+    const float* A, const float* B, float* C,
+    int m, int n, int k,
+    float alpha, float beta,
+    int64_t rsa, int64_t csa,
+    int64_t rsb, int64_t csb,
+    int64_t rsc, int64_t csc,
+    Func&& func
+);
+
 void sgemm(
     const float* A, const float* B, float* C,
     int m, int n, int k,

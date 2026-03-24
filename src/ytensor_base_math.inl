@@ -613,6 +613,51 @@ inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase&
     return op;
 }
 
+template<typename DType>
+inline YTensorBase masked_matmul_naive_impl(
+    const YTensorBase& self,
+    const YTensorBase& other,
+    const YTensorBase& mask,
+    double maskedValue) {
+    auto thisMatView = self.matView();
+    auto otherMatView = other.matView();
+
+    int ah = (self.ndim() >= 2) ? self.shape(self.ndim() - 2) : 1;
+    int aw = self.shape(self.ndim() - 1);
+    int bw = other.shape(other.ndim() - 1);
+
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    int opBatchDim = std::max(std::max(0, self.ndim() - 2), std::max(0, other.ndim() - 2));
+    std::vector<int> opShape;
+    for (int i = static_cast<int>(opBatchShape.size()) - opBatchDim; i < static_cast<int>(opBatchShape.size()); ++i) {
+        opShape.push_back(opBatchShape[i]);
+    }
+    opShape.push_back(ah);
+    opShape.push_back(bw);
+
+    const DType masked = static_cast<DType>(maskedValue);
+    YTensorBase op(opShape, self.dtype());
+    auto opMatView = op.matView();
+
+    opMatView.broadcastInplace([ah, aw, bw, &mask, masked](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
+        for (int i = 0; i < ah; ++i) {
+            for (int j = 0; j < bw; ++j) {
+                if (!mask.at<bool>({i, j})) {
+                    C.template at<DType>({i, j}) = masked;
+                    continue;
+                }
+                DType sum{};
+                for (int k = 0; k < aw; ++k) {
+                    sum += A.template at<DType>({i, k}) * B.template at<DType>({k, j});
+                }
+                C.template at<DType>({i, j}) = sum;
+            }
+        }
+    }, thisMatView, otherMatView);
+
+    return op;
+}
+
 inline YTensorBase YTensorBase::matmul(const YTensorBase& other, 
                                        yt::infos::MatmulBackend backend) const {
     // 验证维度
@@ -682,6 +727,70 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
     }
 }
 
+inline YTensorBase YTensorBase::masked_matmul(
+    const YTensorBase& other,
+    const YTensorBase& mask,
+    double maskedValue,
+    yt::infos::MatmulBackend backend) const {
+    if (ndim() < 1 || other.ndim() < 1) {
+        throw std::runtime_error("[YTensorBase::masked_matmul] Both tensors must have at least 1 dimension");
+    }
+    if (_dtype != other._dtype) {
+        throw std::runtime_error("[YTensorBase::masked_matmul] dtype mismatch: " + _dtype + " vs " + other._dtype);
+    }
+    if (mask.dtype() != "bool") {
+        throw std::runtime_error("[YTensorBase::masked_matmul] mask dtype must be bool");
+    }
+    if (mask.ndim() != 2) {
+        throw std::runtime_error("[YTensorBase::masked_matmul] mask must be 2D");
+    }
+
+    int thisRows = (ndim() >= 2) ? _shape[ndim() - 2] : 1;
+    int thisCols = _shape[ndim() - 1];
+    int otherRows = (other.ndim() >= 2) ? other._shape[other.ndim() - 2] : 1;
+    int otherCols = other._shape[other.ndim() - 1];
+    if (thisCols != otherRows) {
+        throw std::runtime_error("[YTensorBase::masked_matmul] Inner dimensions mismatch: " +
+            std::to_string(thisCols) + " vs " + std::to_string(otherRows));
+    }
+    if (mask.shape(0) != thisRows || mask.shape(1) != otherCols) {
+        throw std::runtime_error("[YTensorBase::masked_matmul] mask shape mismatch, expected [" +
+            std::to_string(thisRows) + ", " + std::to_string(otherCols) + "] but got [" +
+            std::to_string(mask.shape(0)) + ", " + std::to_string(mask.shape(1)) + "]");
+    }
+
+    bool needsCastToFloat32 = (_dtype == "bfloat16" || _dtype == "float16" ||
+                               _dtype == "float8_e5m2" || _dtype == "float8_e4m3" ||
+                               _dtype == "float8_e8m0" || _dtype == "float8_ue8m0");
+    if (needsCastToFloat32) {
+        YTensorBase thisF32 = this->cast("float32");
+        YTensorBase otherF32 = other.cast("float32");
+        YTensorBase resultF32 = thisF32.masked_matmul(otherF32, mask, maskedValue, backend);
+        return resultF32.cast(_dtype);
+    }
+
+    switch (backend) {
+        case yt::infos::MatmulBackend::Naive:
+            return masked_matmul_naive_backend(other, mask, maskedValue);
+
+        case yt::infos::MatmulBackend::AVX2:
+#if YT_USE_AVX2
+            if (_dtype == "float32") {
+                return masked_matmul_avx2_backend(other, mask, maskedValue);
+            }
+#endif
+            [[fallthrough]];
+
+        case yt::infos::MatmulBackend::Eigen:
+#if YT_USE_EIGEN
+#endif
+            [[fallthrough]];
+
+        default:
+            return masked_matmul_naive_backend(other, mask, maskedValue);
+    }
+}
+
 inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) const {
     YTensorBase result(_shape, _dtype);
     yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
@@ -692,6 +801,22 @@ inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) c
                 throw std::runtime_error("[YTensorBase::matmul_naive_backend] Type does not support multiplication");
             }
         }, "matmul_naive_backend");
+    return result;
+}
+
+inline YTensorBase YTensorBase::masked_matmul_naive_backend(
+    const YTensorBase& other,
+    const YTensorBase& mask,
+    double maskedValue) const {
+    YTensorBase result(_shape, _dtype);
+    yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
+        [&]<typename DType>() {
+            if constexpr (yt::concepts::HAVE_MUL<DType>) {
+                result = masked_matmul_naive_impl<DType>(*this, other, mask, maskedValue);
+            } else {
+                throw std::runtime_error("[YTensorBase::masked_matmul_naive_backend] Type does not support multiplication");
+            }
+        }, "masked_matmul_naive_backend");
     return result;
 }
 
@@ -1049,6 +1174,61 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
     return runAvx2TypedMatmul.template operator()<float>(
         "float32", sKernel
     );
+}
+
+inline YTensorBase YTensorBase::masked_matmul_avx2_backend(
+    const YTensorBase& other,
+    const YTensorBase& mask,
+    double maskedValue) const {
+    if (_dtype != "float32") {
+#if YT_USE_EIGEN
+        return masked_matmul_naive_backend(other, mask, maskedValue);
+#else
+        return masked_matmul_naive_backend(other, mask, maskedValue);
+#endif
+    }
+
+    auto thisMatView = matView();
+    auto otherMatView = other.matView();
+
+    int selfDim = ndim();
+    int otherDim = other.ndim();
+    int ah = (selfDim >= 2) ? shape(selfDim - 2) : 1;
+    int bw = other.shape(otherDim - 1);
+
+    std::vector<int> opBatchShape = yt::kernel::computeBroadcastShape({thisMatView.shape(), otherMatView.shape()});
+    int opBatchDim = std::max(std::max(0, selfDim - 2), std::max(0, otherDim - 2));
+
+    std::vector<int> opShape;
+    int skipDims = static_cast<int>(opBatchShape.size()) - opBatchDim;
+    for (int i = skipDims; i < static_cast<int>(opBatchShape.size()); ++i) opShape.push_back(opBatchShape[i]);
+    opShape.push_back(ah);
+    opShape.push_back(bw);
+
+    YTensorBase op(opShape, "float32");
+    float* opData = op.data<float>();
+    float mv = static_cast<float>(maskedValue);
+    yt::kernel::parallelFor(0, static_cast<int>(op.size()), [&](int i) {
+        opData[i] = mv;
+    });
+
+    YTensorBase maskContiguous = mask.isContiguous() ? mask : mask.contiguous();
+    const bool* maskPtr = maskContiguous.data<bool>();
+
+    auto opMatView = op.matView();
+    opMatView.broadcastInplace([maskPtr](YTensorBase& C, const YTensorBase& A, const YTensorBase& B) {
+        yt::kernel::avx2::sgemm_masked(
+            A.data<float>(), B.data<float>(), C.data<float>(),
+            A.shape(0), B.shape(1), A.shape(1),
+            1.0f, 0.0f,
+            static_cast<int64_t>(A.stride_(0)), static_cast<int64_t>(A.stride_(1)),
+            static_cast<int64_t>(B.stride_(0)), static_cast<int64_t>(B.stride_(1)),
+            static_cast<int64_t>(C.stride_(0)), static_cast<int64_t>(C.stride_(1)),
+            maskPtr
+        );
+    }, thisMatView, otherMatView);
+
+    return op;
 }
 #endif
 

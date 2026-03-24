@@ -1,0 +1,199 @@
+# Fused Operators
+
+This page documents fused / composite operators in the `yt::function` namespace.
+
+## Overview
+
+| Function | Purpose |
+| --- | --- |
+| `matmul()` | matrix multiplication with optional mask and order |
+| `logsumexp()` | numerically stable `log(sum(exp(x)))` over `axis` |
+| `scaledDotProductAttention()` | SDPA with optional `mask` and `bias` |
+| `sdpaBackend()` | returns backend name string |
+| `throwNotSupport()` | throws a runtime error for unsupported ops |
+
+---
+
+## `matmul()`
+
+### Core behavior
+
+Performs matrix multiplication. Supports optional masking and different execution modes via `order`.
+
+### Signature
+
+```cpp
+template<typename T, typename To = float>
+YTensor<To, 2> matmul(const YTensor<T, 2>& x, const YTensor<T, 2>& y, const YTensor<bool, 2>* mask = nullptr, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T,2>&` | - | left matrix `[m, k]` |
+| `y` | `const YTensor<T,2>&` | - | right matrix `[k, n]` |
+| `mask` | `const YTensor<bool,2>*` | `nullptr` | optional mask (implementation-defined semantics) |
+| `order` | `int` | `0` | selects algorithm / return mode |
+
+### Returns
+
+- `YTensor<To, 2>` with shape `[m, n]`
+
+### Example
+
+```cpp
+auto a = yt::YTensor<float, 2>({2, 3}, {1,2,3, 4,5,6});
+auto b = yt::YTensor<float, 2>({3, 4}, {1,0,0,1, 0,1,1,0, 1,1,0,0});
+auto c = yt::function::matmul(a, b);
+```
+
+---
+
+## `logsumexp()`
+
+### Core behavior
+
+Computes `log(sum(exp(x)))` along `axis` in a numerically stable way.
+
+Implementation detail: keeps the reduced dimension as size `1`.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> logsumexp(const YTensor<T, dim>& x, int axis = -1);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | input |
+| `axis` | `int` | `-1` | reduction axis (negative allowed) |
+
+### Returns
+
+- `YTensor<T, dim>` with the same `dim`, but size at `axis` is `1`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 2>({2, 3}, {1,2,3, 4,5,6});
+auto lse = yt::function::logsumexp(x, -1); // shape [2,1]
+```
+
+---
+
+## `scaledDotProductAttention()`
+
+### Core behavior
+
+Computes scaled dot-product attention:
+
+$$\text{attn}(Q, K, V) = \text{softmax}(QK^T / \sqrt{d} + \text{bias} + \text{mask})\,V$$
+
+Masking behavior:
+
+- `mask` is a `YTensor<bool,2>*`.
+- Mask shape must be `[n0, n1]` where `n0 = Q.shape[0]` and `n1 = K.shape[0]`.
+- Masked positions are filled with a large negative value (e.g. `-1e9`) before softmax.
+
+### Signature
+
+```cpp
+template<typename T, typename To = float>
+YTensor<To, 2> scaledDotProductAttention(
+    const YTensor<T, 2>& q,
+    const YTensor<T, 2>& k,
+    const YTensor<T, 2>& v,
+    const YTensor<bool, 2>* mask = nullptr,
+    const YTensor<T, 2>* bias = nullptr,
+    int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `q` | `const YTensor<T,2>&` | - | query `[n0, d]` |
+| `k` | `const YTensor<T,2>&` | - | key `[n1, d]` |
+| `v` | `const YTensor<T,2>&` | - | value `[n1, dv]` |
+| `mask` | `const YTensor<bool,2>*` | `nullptr` | optional boolean mask `[n0, n1]` |
+| `bias` | `const YTensor<T,2>*` | `nullptr` | optional bias added to logits `[n0, n1]` |
+| `order` | `int` | `0` | selects backend / mode |
+
+### Returns
+
+- `YTensor<To,2>` output `[n0, dv]`
+
+### Example
+
+```cpp
+auto q = yt::YTensor<float, 2>({2, 4}, {0.1,0.0,0.2,0.3,  0.0,0.4,0.2,0.1});
+auto k = yt::YTensor<float, 2>({3, 4}, {0.2,0.1,0.0,0.3,  0.0,0.2,0.4,0.1,  0.3,0.0,0.1,0.2});
+auto v = yt::YTensor<float, 2>({3, 5}, {1,0,0,0,0,  0,1,0,0,0,  0,0,1,0,0});
+
+// allow only first 2 keys for first query token
+auto mask = yt::YTensor<bool, 2>({2, 3}, {true,true,false,  true,true,true});
+
+auto out = yt::function::scaledDotProductAttention(q, k, v, &mask, nullptr, 0);
+```
+
+---
+
+## `sdpaBackend()`
+
+### Core behavior
+
+Returns the name of the SDPA backend used by the library.
+
+### Signature
+
+```cpp
+std::string sdpaBackend();
+```
+
+### Parameters
+
+- None
+
+### Returns
+
+- `std::string`
+
+### Example
+
+```cpp
+auto name = yt::function::sdpaBackend();
+```
+
+---
+
+## `throwNotSupport()`
+
+### Core behavior
+
+Throws `std::runtime_error` with a descriptive message.
+
+### Signature
+
+```cpp
+void throwNotSupport(const std::string& opName);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `opName` | `const std::string&` | operator name |
+
+### Returns
+
+- Does not return
+
+### Example
+
+```cpp
+yt::function::throwNotSupport("someOp");
+```

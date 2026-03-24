@@ -40,11 +40,10 @@ namespace yt::function{
         yt::YTensor<T, dim>& key,
         yt::YTensor<T, dim>& value,
         T scale = static_cast<T>(0.0),
-        yt::YTensor<T, 2>* mask = nullptr,
+        yt::YTensor<bool, 2>* mask = nullptr,
+        yt::YTensor<T, 2>* bias = nullptr,
         sdpaBackend backend = sdpaBackend::MATH
     );
-
-    // ========== 激活函数 ==========
 
     /// @brief exp原地版本
     template<typename T, int dim>
@@ -124,8 +123,6 @@ namespace yt::function{
     template<typename T, int dim>
     yt::YTensor<T, dim>& hardSwish_(yt::YTensor<T, dim>& x, int order = 0);
 
-    // ========== 融合算子 ==========
-
     /// @brief LogSumExp融合算子，沿指定轴计算log(sum(exp(x)))
     template<typename T, int dim>
     yt::YTensor<T, dim> logsumexp(const yt::YTensor<T, dim>& x, int axis = -1);
@@ -137,16 +134,12 @@ namespace yt::function{
     template<typename T, int dim>
     yt::YTensor<T, dim>& logSoftmax_(yt::YTensor<T, dim>& x, int axis = -1, int order = 0);
 
-    // ========== 归一化 ==========
-
     /// @brief Layer Normalization，沿指定轴进行归一化
     template<typename T, int dim>
     yt::YTensor<T, dim> layerNorm(const yt::YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
 
     template<typename T, int dim>
     yt::YTensor<T, dim>& layerNorm_(yt::YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
-
-    // ========== 池化 ==========
 
     /// @brief 1D最大池化，沿指定轴进行
     template<typename T, int dim>
@@ -155,8 +148,6 @@ namespace yt::function{
     /// @brief 1D平均池化，沿指定轴进行
     template<typename T, int dim>
     yt::YTensor<T, dim> avgPool1d(const yt::YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1, int order = 0);
-
-    // ========== 损失函数 ==========
 
     /// @brief 均方误差损失: (input - target)^2
     template<typename T, int dim>

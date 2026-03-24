@@ -112,10 +112,10 @@ yt::YTensor<float, 4> KVCache::get() const {
     }
 }
 
-yt::YTensor<float, 2> KVCache::get_mask(int query_len) const {
+yt::YTensor<bool, 2> KVCache::get_mask(int query_len) const {
     // 由于支持了循环写入拓展对话，causal mask的底层排布也与实际kv缓存不同了，因此需要根据kv cache的情况来生成causal mask
     int kv_len = cur_len;  // KV缓存的当前长度
-    yt::YTensor<float, 2> mask(query_len, kv_len);
+    yt::YTensor<bool, 2> mask(query_len, kv_len);
     
     if(!full()){
         // 没满的时候，标准causal mask: query[i]只能看到kv[0:start+i]
@@ -123,7 +123,7 @@ yt::YTensor<float, 2> KVCache::get_mask(int query_len) const {
         for(int qi = 0; qi < query_len; qi++){
             for(int ki = 0; ki < kv_len; ki++){
                 // causal: 只能看到 ki <= start + qi
-                mask.at(qi, ki) = (ki <= start + qi) ? 0.0f : -1e9f;
+                mask.at(qi, ki) = (ki <= start + qi);
             }
         }
     }else{
@@ -135,7 +135,7 @@ yt::YTensor<float, 2> KVCache::get_mask(int query_len) const {
                 // 计算物理位置ki对应的逻辑位置
                 int k_logical = (ki - write_pos + max_len) % max_len;
                 // causal: 只能看到 k_logical <= q_logical
-                mask.at(qi, ki) = (k_logical <= q_logical) ? 0.0f : -1e9f;
+                mask.at(qi, ki) = (k_logical <= q_logical);
             }
         }
     }
@@ -250,7 +250,7 @@ yt::YTensor<float, 3> PEGA2::forward(
     yt::YTensor<float, 5> q_5d = q_full.reshape(b, 2, hh, l, hd);
     
     // 获取causal mask
-    yt::YTensor<float, 2> causal_mask = kv_cache->get_mask(l);
+    yt::YTensor<bool, 2> causal_mask = kv_cache->get_mask(l);
     
     // 使用 scaledDotProductAttention完成标准注意力计算。
     // q_5d, k_5d, v_5d: [b, 2, hh, l, hd]

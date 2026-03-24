@@ -1,0 +1,231 @@
+# Loss Functions
+
+This page documents loss functions in the `yt::function` namespace.
+
+## Overview
+
+- Unless otherwise stated, losses return element-wise values (no implicit reduction).
+- Some losses have in-place variants with a trailing underscore (e.g. `mseLoss_`).
+
+| Function | In-place | Notes |
+| --- | --- | --- |
+| `mseLoss()` / `mseLoss_()` | yes | mean squared error (element-wise) |
+| `crossEntropyLoss()` | - | uses `logSoftmax` internally |
+| `binaryCrossEntropyLoss()` | - | binary CE (element-wise) |
+| `huberLoss()` / `huberLoss_()` | yes | smooth L1 / Huber |
+
+---
+
+## `mseLoss()`
+
+### Core behavior
+
+Computes element-wise mean squared error: $(x - y)^2$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> mseLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | predictions |
+| `y` | `const YTensor<T, dim>&` | targets |
+
+### Returns
+
+- `YTensor<T, dim>` element-wise loss
+
+### Example
+
+```cpp
+auto pred = yt::YTensor<float, 2>({2, 3}, {1,2,3, 4,5,6});
+auto target = yt::YTensor<float, 2>({2, 3}, {1,1,2, 4,6,5});
+auto loss = yt::function::mseLoss(pred, target);
+```
+
+---
+
+## `mseLoss_()`
+
+### Core behavior
+
+In-place version of `mseLoss()`: writes the element-wise result back into `x`.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+void mseLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `x` | `YTensor<T, dim>&` | predictions (overwritten with loss) |
+| `y` | `const YTensor<T, dim>&` | targets |
+
+### Returns
+
+- `void`
+
+### Example
+
+```cpp
+auto pred = yt::YTensor<float, 1>({3}, {1,2,3});
+auto target = yt::YTensor<float, 1>({3}, {1,1,2});
+yt::function::mseLoss_(pred, target);
+```
+
+---
+
+## `crossEntropyLoss()`
+
+### Core behavior
+
+Computes cross entropy loss.
+
+Commonly used for classification.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> crossEntropyLoss(const YTensor<T, dim>& logits, const YTensor<T, dim>& target, int axis = -1);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `logits` | `const YTensor<T, dim>&` | - | unnormalized scores |
+| `target` | `const YTensor<T, dim>&` | - | target distribution / labels tensor |
+| `axis` | `int` | `-1` | class dimension |
+
+### Returns
+
+- `YTensor<T, dim>` element-wise loss
+
+### Example
+
+```cpp
+auto logits = yt::YTensor<float, 2>({2, 4}, {0.2, 1.0, -0.1, 0.0,  1.2, -0.3, 0.1, 0.5});
+auto target = yt::YTensor<float, 2>({2, 4}, {0,1,0,0,  1,0,0,0});
+auto loss = yt::function::crossEntropyLoss(logits, target, -1);
+```
+
+---
+
+## `binaryCrossEntropyLoss()`
+
+### Core behavior
+
+Computes binary cross entropy loss.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> binaryCrossEntropyLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y);
+```
+
+### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | probabilities / predictions |
+| `y` | `const YTensor<T, dim>&` | targets |
+
+### Returns
+
+- `YTensor<T, dim>` element-wise loss
+
+### Example
+
+```cpp
+auto p = yt::YTensor<float, 1>({3}, {0.9f, 0.2f, 0.7f});
+auto t = yt::YTensor<float, 1>({3}, {1.0f, 0.0f, 1.0f});
+auto loss = yt::function::binaryCrossEntropyLoss(p, t);
+```
+
+---
+
+## `huberLoss()`
+
+### Core behavior
+
+Computes Huber loss (smooth L1):
+
+$$
+L(\delta) = \begin{cases}
+0.5\delta^2, & |\delta| \le \text{delta}\\
+\text{delta}(|\delta| - 0.5\,\text{delta}), & |\delta| > \text{delta}
+\end{cases}
+$$
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> huberLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y, float delta = 1.0f);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | predictions |
+| `y` | `const YTensor<T, dim>&` | - | targets |
+| `delta` | `float` | `1.0f` | transition point |
+
+### Returns
+
+- `YTensor<T, dim>` element-wise loss
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {1.0f, 2.0f, 10.0f});
+auto y = yt::YTensor<float, 1>({3}, {1.5f, 1.0f, 7.0f});
+auto loss = yt::function::huberLoss(x, y, 1.0f);
+```
+
+---
+
+## `huberLoss_()`
+
+### Core behavior
+
+In-place version of `huberLoss()`: writes the element-wise result back into `x`.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+void huberLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y, float delta = 1.0f);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `YTensor<T, dim>&` | - | predictions (overwritten with loss) |
+| `y` | `const YTensor<T, dim>&` | - | targets |
+| `delta` | `float` | `1.0f` | transition point |
+
+### Returns
+
+- `void`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {1.0f, 2.0f, 10.0f});
+auto y = yt::YTensor<float, 1>({3}, {1.5f, 1.0f, 7.0f});
+yt::function::huberLoss_(x, y, 1.0f);
+```

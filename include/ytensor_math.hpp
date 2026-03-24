@@ -72,6 +72,33 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul(
     const yt::YTensor<T, dim1> &other, 
     yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
 
+/// @brief 对张量的最后两个维度进行带输出掩码的广播矩阵乘法运算。
+/// @param other 右张量输入。
+/// @param mask 2D布尔掩码，shape必须为[this.shape(-2), other.shape(-1)]。
+/// @param maskedValue 输出张量的默认填充值，仅mask为true的位置会被矩阵乘法结果覆盖。
+/// @param backend 矩阵乘法后端，默认使用编译时自动选择的最优后端。
+/// @return 带mask的矩阵乘法结果张量。
+template <int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue = static_cast<T>(0),
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
+
+/// @brief 对张量的最后两个维度进行带可调用输出掩码的广播矩阵乘法运算。
+/// @param other 右张量输入。
+/// @param func 任意可调用对象，签名要求为 bool func(int row, int col)。
+///             若同时提供 tileAllTrue(row0, col0, mr, nr) / tileAllFalse(...)，AVX2后端会用它们做块级剪枝。
+/// @param maskedValue 输出张量的默认填充值，仅func(row, col)为true的位置会被矩阵乘法结果覆盖。
+/// @param backend 矩阵乘法后端，默认使用编译时自动选择的最优后端。
+template <int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue = static_cast<T>(0),
+    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend) const;
+
 /// @brief 对指定轴求和
 /// @param axis: 轴索引，当张量的维度为1时，取值无关结果。
 /// @return 求和结果
@@ -101,6 +128,20 @@ std::pair<T, int> max(int axis = 0) const requires (dim == 1);
 template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_naive_backend(const yt::YTensor<T, dim1>& other) const;
 
+/// @brief 带2D输出掩码的矩阵乘法无优化后端实现。
+template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul_naive_backend(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue) const;
+
+template<int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul_naive_backend(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue) const;
+
 /////////////// Eigen support ///////////////
 #if YT_USE_EIGEN
 /// @brief Eigen类型转换
@@ -125,6 +166,20 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_eigen_backend
 /// @note 使用高性能GEMM内核，支持自动布局检测。
 template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> matmul_avx2_backend(const yt::YTensor<T, dim1>& other) const requires std::is_same_v<T, float>;
+
+/// @brief 带2D输出掩码的矩阵乘法AVX2后端实现，仅支持float类型。
+template<int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul_avx2_backend(
+    const yt::YTensor<T, dim1>& other,
+    const yt::YTensor<bool, 2>& mask,
+    const T& maskedValue) const requires std::is_same_v<T, float>;
+
+template<int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul_avx2_backend(
+    const yt::YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue) const requires std::is_same_v<T, float>;
 #endif // YT_USE_AVX2
 
 public: // end of ytensor_math.hpp

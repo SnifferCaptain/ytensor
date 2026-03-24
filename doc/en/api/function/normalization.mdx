@@ -1,0 +1,150 @@
+# Normalization
+
+This page documents normalization-related functions in the `yt::function` namespace (Softmax / LogSoftmax / LayerNorm).
+
+## Overview
+
+- Negative axes are normalized by: `axis = (axis % dim + dim) % dim`.
+- `order = 1` returns a per-element (diagonal) derivative form, not a full Jacobian.
+
+| Function | In-place | `order` | Type constraints |
+| --- | --- | --- | --- |
+| `softmax()` | `softmax_()` | - | exp-compatible `T` |
+| `logSoftmax()` | `logSoftmax_()` | `0/1` | floating `T` |
+| `layerNorm()` | `layerNorm_()` | `0/1` | floating `T` |
+
+---
+
+## `softmax()` / `softmax_()`
+
+### Core behavior
+
+Computes Softmax along `axis` using a numerically stable implementation (max subtraction).
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `axis` | `int` | `-1` | normalization axis |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+#include "ytensor_function.hpp"
+
+auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
+auto y = yt::function::softmax(x, -1);
+yt::function::softmax_(x, -1);
+```
+
+---
+
+## `logSoftmax()` / `logSoftmax_()`
+
+### Core behavior
+
+Computes LogSoftmax along `axis`:
+
+$$\mathrm{logSoftmax}(x) = x - \log\sum\exp(x)$$
+
+- `order = 0`: logSoftmax values.
+- `order = 1`: diagonal derivative form: $1 - \mathrm{softmax}(x)$.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> logSoftmax(const YTensor<T, dim>& x, int axis = -1, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& logSoftmax_(YTensor<T, dim>& x, int axis = -1, int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `axis` | `int` | `-1` | axis |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
+- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 2>::randn({2, 4});
+auto y = yt::function::logSoftmax(x, -1, 0);
+auto diag = yt::function::logSoftmax(x, -1, 1);
+```
+
+---
+
+## `layerNorm()` / `layerNorm_()`
+
+### Core behavior
+
+Applies LayerNorm along `axis` (no affine parameters):
+
+$$y = \frac{x - \mu}{\sqrt{\sigma^2 + \varepsilon}}$$
+
+- `order = 0`: normalized output.
+- `order = 1`: a diagonal derivative form used by the implementation.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `axis` | `int` | `-1` | axis |
+| `eps` | `T` | `1e-5` | epsilon for numerical stability |
+| `order` | `int` | `0` | supports `0/1` |
+
+### Returns
+
+- out-of-place: `YTensor<T, dim>`
++- in-place: `YTensor<T, dim>&`
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 2>::randn({2, 4});
+auto y = yt::function::layerNorm(x, -1);
+yt::function::layerNorm_(x, -1);
+```
+
+---
+
+## See also
+
+- [Activation Functions](./activation.mdx)
+- [Fused Operators](./fused.mdx)

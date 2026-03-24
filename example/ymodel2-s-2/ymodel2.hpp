@@ -2,6 +2,7 @@
 // #define YT_USE_EIGEN 1   // 让库自动查看否支持Eigen
 // #define YT_USE_AVX2 1    // 让库自动查看否支持AVX2加速
 #include "../../ytensor.hpp"
+// #include "../../single-header/ytensor_single.hpp"
 #include <vector>
 #include <string>
 #include <cmath>
@@ -36,7 +37,7 @@ public:
     int get_global_position() const { return total_written; }
 
     // 获取kv缓存对应的自回归掩码[query_len, kv_len]
-    yt::YTensor<float, 2> get_mask(int query_len) const;
+    yt::YTensor<bool, 2> get_mask(int query_len) const;
 };
 
 struct YConfig2 {

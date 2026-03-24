@@ -1,0 +1,262 @@
+# 融合算子
+
+本文档介绍 `yt::function` 命名空间中的融合算子/高阶算子（矩阵乘、LogSumExp、Scaled Dot-Product Attention 等）。
+
+## 概述
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `matmul()` | 算子包装 | `a.matmul(b)` 的 `yt::function` 入口 |
+| `logsumexp()` | 融合算子 | 稳定计算 `log(sum(exp(x)))` |
+| `scaledDotProductAttention()` | 融合算子 | SDPA（支持 bool mask 与 bias） |
+| `sdpaBackend` | 枚举 | SDPA 后端选择（当前仅 `MATH`） |
+| `throwNotSupport()` | 辅助 | 内部抛异常工具（一般不应直接调用） |
+
+---
+
+## `matmul()`
+
+### 核心功能描述
+
+矩阵乘法/批量矩阵乘法的函数库入口；实现直接调用 `YTensor::matmul`。
+
+- 返回张量维度为 `max(dim0, dim1, 2)`（由模板返回类型约束）。
+- 具体的广播/批量维处理由 `YTensor::matmul` 决定。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim0, int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})>
+matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `a` | `const YTensor<T, dim0>&` | - | 左操作数 |
+| `b` | `const YTensor<T, dim1>&` | - | 右操作数 |
+
+### 返回值
+
+- `YTensor<T, max(dim0, dim1, 2)>`
+
+### 使用示例
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example_matmul() {
+    auto a = yt::YTensor<float, 2>::randn({2, 3});
+    auto b = yt::YTensor<float, 2>::randn({3, 4});
+    auto c = yt::function::matmul(a, b);
+}
+```
+
+---
+
+## `logsumexp()`
+
+### 核心功能描述
+
+沿指定轴稳定计算 LogSumExp：
+
+$$\mathrm{logsumexp}(x)=\log\sum_i e^{x_i}$$
+
+实现采用数值稳定版本：
+
+1. 计算 `max = max(x)`
+2. 计算 `sum_exp = sum(exp(x - max))`
+3. 输出 `log(sum_exp) + max`
+
+输出张量保持 `dim` 不变，但会将 `axis` 维度设置为 `1`。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> logsumexp(const YTensor<T, dim>& x, int axis = -1);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` | - | 输入张量（要求 `T` 为浮点） |
+| `axis` | `int` | `-1` | 归约轴（支持负数索引） |
+
+### 返回值
+
+- `YTensor<T, dim>`
+- shape：与 `x` 相同，但 `axis` 维度为 `1`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 2>::randn({2, 4});
+auto y = yt::function::logsumexp(x, -1); // shape {2, 1}
+```
+
+---
+
+## `scaledDotProductAttention()`
+
+### 核心功能描述
+
+Scaled Dot-Product Attention（SDPA）。对 `query/key/value` 的最后两维执行注意力计算：
+
+- `query`：`[..., n0, c0]`
+- `key`：`[..., n1, c0]`
+- `value`：`[..., n1, c1]`
+
+实现流程（`sdpaBackend::MATH`）：
+
+1. 若 `scale == 0`，自动设置 `scale = 1/sqrt(c0)`
+2. 计算 `score = query @ key^T`（若提供 `mask`，则使用 `masked_matmul` 并把被屏蔽位置填为 `-1e9`）
+3. `score *= scale`
+4. 若提供 `bias`：`score += bias`
+5. `softmax_(score, -1)`
+6. 输出 `out = score @ value`
+
+其中：
+
+- `mask` 为 `YTensor<bool, 2>`，形状必须是 `[n0, n1]`，`true` 表示保留、`false` 表示屏蔽。
+- `bias` 为 `YTensor<T, 2>`，形状必须是 `[n0, n1]`，在 softmax 之前加到 score 上。
+
+### 函数签名
+
+```cpp
+enum struct sdpaBackend{
+    MATH
+};
+
+template<typename T, int dim>
+YTensor<T, dim> scaledDotProductAttention(
+    YTensor<T, dim>& query,
+    YTensor<T, dim>& key,
+    YTensor<T, dim>& value,
+    T scale = static_cast<T>(0.0),
+    YTensor<bool, 2>* mask = nullptr,
+    YTensor<T, 2>* bias = nullptr,
+    sdpaBackend backend = sdpaBackend::MATH
+);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `query` | `YTensor<T, dim>&` | - | Query，形状 `[..., n0, c0]` |
+| `key` | `YTensor<T, dim>&` | - | Key，形状 `[..., n1, c0]` |
+| `value` | `YTensor<T, dim>&` | - | Value，形状 `[..., n1, c1]` |
+| `scale` | `T` | `0.0` | 缩放系数；传 `0` 自动用 `1/sqrt(c0)` |
+| `mask` | `YTensor<bool, 2>*` | `nullptr` | 可选 bool mask，形状必须为 `[n0, n1]` |
+| `bias` | `YTensor<T, 2>*` | `nullptr` | 可选加性偏置，形状必须为 `[n0, n1]` |
+| `backend` | `sdpaBackend` | `MATH` | 当前仅支持 `MATH` |
+
+### 返回值
+
+- `YTensor<T, dim>`
+- shape：`[..., n0, c1]`
+
+### 使用示例
+
+```cpp
+#include "ytensor_function.hpp"
+
+void example_sdpa() {
+    auto query = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+    auto key   = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+    auto value = yt::YTensor<float, 4>::randn({2, 4, 10, 64});
+
+    // 因果 mask：下三角为 true（保留）
+    auto mask = yt::YTensor<bool, 2>::zeros({10, 10});
+    for (int i = 0; i < 10; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            mask.at(i, j) = true;
+        }
+    }
+
+    auto bias = yt::YTensor<float, 2>::zeros({10, 10});
+
+    auto out0 = yt::function::scaledDotProductAttention(query, key, value);
+    auto out1 = yt::function::scaledDotProductAttention(query, key, value, 0.0f, &mask, &bias);
+}
+```
+
+---
+
+## `sdpaBackend`
+
+### 核心功能描述
+
+SDPA 的后端枚举。当前仅提供 `MATH`（纯数学实现路径）。
+
+### 函数签名
+
+```cpp
+enum struct sdpaBackend{
+    MATH
+};
+```
+
+### 参数说明
+
+无。
+
+### 返回值
+
+无。
+
+### 使用示例
+
+```cpp
+auto backend = yt::function::sdpaBackend::MATH;
+```
+
+---
+
+## `throwNotSupport()`
+
+### 核心功能描述
+
+内部辅助函数：用于在不支持的参数组合（如 `order` 不合法、未实现的 backend）时抛出 `std::invalid_argument`。
+
+一般情况下，用户不需要直接调用它。
+
+### 函数签名
+
+```cpp
+inline void throwNotSupport(const std::string& funcName, const std::string& caseDiscription);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `funcName` | `const std::string&` | - | 函数名 |
+| `caseDiscription` | `const std::string&` | - | 不支持的 case 描述 |
+
+### 返回值
+
+无（总是抛出异常）。
+
+### 使用示例
+
+```cpp
+try {
+    yt::function::throwNotSupport("demo", "unsupported");
+} catch (const std::invalid_argument& e) {
+    // handle
+}
+```
+
+---
+
+## 相关内容
+
+- [激活函数](./activation.mdx)
+- [归一化](./normalization.mdx)
+- [损失函数](./loss.mdx)
+- [池化](./pooling.mdx)

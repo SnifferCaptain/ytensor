@@ -1,28 +1,42 @@
 # 激活函数
 
-本文档介绍 `yt::function` 命名空间中的激活函数。
+本文档介绍 `yt::function` 命名空间中的激活函数（仅包含激活类；Softmax / LogSoftmax / LayerNorm 等归一化相关函数请见 [normalization.mdx](./normalization.mdx)）。
 
 ## 概述
 
-| 函数 | 说明 | 原地版本 |
-| --- | --- | --- |
-| `relu()` | ReLU 激活函数 | `relu_()` |
-| `exp()` | 指数函数 | - |
-| `sigmoid()` | Sigmoid 激活函数 | - |
-| `softmax()` | Softmax 归一化函数 | `softmax_()` |
+说明约定：
+
+- 下文若提到 `order`，通常 `0` 表示函数值、`1` 表示一阶导数（逐元素/对角线形式）；若传入实现不支持的 `order`，会抛出 `std::invalid_argument`。
+- 绝大多数函数返回张量形状与输入一致；原地版本（以 `_` 结尾）会修改输入并返回引用。
+
+| 函数 | 说明 | 原地版本 | `order` 支持 | 类型约束 |
+| --- | --- | --- | --- | --- |
+| `relu()` | ReLU | `relu_()` | `..., -1, 0, 1, 2...`（见正文） | `T` 为算术类型 |
+| `exp()` | 指数函数 $e^x$ | `exp_()` | 任意（忽略，恒为 exp） | 与 `std::exp` 兼容 |
+| `sigmoid()` | Sigmoid | `sigmoid_()` | `-1, 0, 1` | 与 exp 兼容 |
+| `leakyRelu()` | Leaky ReLU | `leakyRelu_()` | `0, 1` | `T` 为算术类型 |
+| `elu()` | ELU | `elu_()` | `0, 1` | `T` 为浮点类型 |
+| `selu()` | SELU | `selu_()` | `0, 1` | `T` 为浮点类型 |
+| `gelu()` | GELU（erf 版） | `gelu_()` | `0, 1` | `T` 为浮点类型 |
+| `tanh()` | Tanh | `tanh_()` | `0, 1` | `T` 为浮点类型 |
+| `swish()` | Swish / SiLU | `swish_()` | `0, 1` | 与 exp 兼容 |
+| `softplus()` | Softplus | `softplus_()` | `0, 1` | 与 exp/log1p 兼容 |
+| `mish()` | Mish | `mish_()` | `0, 1` | 与 exp/tanh 兼容 |
+| `hardSigmoid()` | Hard Sigmoid | `hardSigmoid_()` | `0, 1` | `T` 为算术类型 |
+| `hardSwish()` | Hard Swish | `hardSwish_()` | `0, 1` | `T` 为算术类型 |
 
 ---
 
-## `relu()`
-
-对输入张量进行整流线性单元（Rectified Linear Unit）激活操作。
+## `relu()` / `relu_()`
 
 ### 核心功能描述
 
-该函数对输入张量的每个元素应用 ReLU 函数。
-*   `order = 0`: 计算 $f(x) = \max(0, x)$
-*   `order = 1`: 计算导数 $f'(x) = 1 \text{ if } x > 0 \text{ else } 0$
-*   `order < 0`: 计算 n 次积分 $\frac{x^n}{n!} (x > 0)$
+对输入逐元素应用 ReLU：
+
+- `order = 0`：$f(x)=\max(0, x)$
+- `order = 1`：$f'(x)=\begin{cases}1,&x>0\\0,&\text{else}\end{cases}$
+- `order > 1`：返回全 0 张量（实现约定）
+- `order < 0`：返回 n 次积分形式（实现为 $x>0$ 时 $\frac{x^{(-order+1)}}{(-order+1)!}$，否则为 0）
 
 ### 函数签名
 
@@ -38,175 +52,538 @@ YTensor<T, dim>& relu_(YTensor<T, dim>& x, int order = 0);
 
 | 参数名 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
-| `order` | `int` | `0` | 导数阶数（0=函数值，1=一阶导数，-n=n次积分） |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 阶数控制（见“核心功能描述”） |
 
 ### 返回值
 
-*   **类型**: `YTensor<T, dim>`
-*   **说明**: 返回计算结果。非原地版本返回新张量，原地版本返回自身引用。
-
-### 使用示例
-
-```cpp
-#include "ytensor_single.hpp"
-
-void example() {
-    auto x = yt::YTensor<float, 2>({2, 3}, {-1, 0, 1, -2, 2, 3});
-    
-    // ReLU
-    auto y = yt::function::relu(x);
-    // y = {0, 0, 1, 0, 2, 3}
-    
-    // 原地操作
-    yt::function::relu_(x);
-    
-    // 一阶导数
-    auto dy = yt::function::relu(x, 1);
-    // dy = {0, 0, 1, 0, 1, 1}
-}
-```
-
----
-
-## `exp()`
-
-对输入张量进行指数运算。
-
-### 核心功能描述
-
-计算 $e^x$。
-
-### 函数签名
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
-```
-
-### 参数说明
-
-| 参数名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
-| `order` | `int` | `0` | 导数阶数（保留参数，目前仅支持 0） |
-
-### 返回值
-
-*   **类型**: `YTensor<T, dim>`
-*   **说明**: 返回指数运算后的新张量。
-
-### 使用示例
-
-```cpp
-auto x = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 2.0f});
-auto y = yt::function::exp(x);
-// y ≈ {1.0, 2.718, 7.389}
-```
-
----
-
-## `sigmoid()`
-
-对输入张量进行 Sigmoid 激活操作。
-
-### 核心功能描述
-
-该函数对每个元素应用 Sigmoid 函数：
-*   `order = 0`: $\sigma(x) = \frac{1}{1 + e^{-x}}$
-*   `order = 1`: $\sigma'(x) = \sigma(x)(1 - \sigma(x))$
-*   `order = -1`: $\log(1 + e^x)$ (SoftPlus)
-
-### 函数签名
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
-```
-
-### 参数说明
-
-| 参数名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
-| `order` | `int` | `0` | 导数阶数 |
-
-### 返回值
-
-*   **类型**: `YTensor<T, dim>`
-*   **说明**: 返回计算结果的新张量。
-
-### 使用示例
-
-```cpp
-auto x = yt::YTensor<float, 1>({3}, {-1.0f, 0.0f, 1.0f});
-
-auto y = yt::function::sigmoid(x);
-// y ≈ {0.269, 0.5, 0.731}
-
-auto dy = yt::function::sigmoid(x, 1);
-// dy ≈ {0.197, 0.25, 0.197}
-```
-
----
-
-## `softmax()`
-
-对输入张量进行 Softmax 归一化操作。
-
-### 核心功能描述
-
-该函数对指定轴进行 Softmax 归一化操作。
-
-### 函数签名
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
-
-template<typename T, int dim>
-YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
-```
-
-### 参数说明
-
-| 参数名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` | - | 输入张量 |
-| `axis` | `int` | `-1` | 计算 softmax 的轴（支持负数索引） |
-
-### 返回值
-
-- **类型**: `YTensor<T, dim>`
-- **说明**: 沿指定轴归一化后的张量
+- 非原地：`YTensor<T, dim>`，形状与 `x` 相同
+- 原地：`YTensor<T, dim>&`，返回 `x` 本身
 
 ### 使用示例
 
 ```cpp
 #include "ytensor_function.hpp"
 
-void example() {
-    auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
-    
-    // 沿最后一轴计算 softmax
-    auto y = yt::function::softmax(x, -1);
-    // 每行和为 1
-    
-    // 原地操作
-    yt::function::softmax_(x, -1);
+void example_relu() {
+        auto x = yt::YTensor<float, 2>({2, 3}, {-1, 0, 1, -2, 2, 3});
+        auto y = yt::function::relu(x);      // {0, 0, 1, 0, 2, 3}
+        auto dy = yt::function::relu(x, 1);  // {0, 0, 1, 0, 1, 1}
+        yt::function::relu_(x);              // 原地
 }
 ```
 
-### 实现细节
+---
 
-采用数值稳定的实现（减去最大值）：
+## `exp()` / `exp_()`
 
-1. 找到沿轴的最大值
-2. 计算 exp(x - max)
-3. 除以 sum(exp(x - max))
+### 核心功能描述
+
+对输入逐元素计算指数 $e^x$。
+
+- `exp(x, order)` 的 `order` 参数当前不参与计算（实现中忽略该参数）。
+- `exp_(x, order)` 同样忽略 `order`；并且由于 $\frac{d}{dx}e^x=e^x$，实现注释中也将其视为“任意阶导数/不计常数的原函数仍然是 exp”。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> exp(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& exp_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 当前实现忽略该参数 |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {0.0f, 1.0f, 2.0f});
+auto y = yt::function::exp(x);
+yt::function::exp_(x);
+```
+
+---
+
+## `sigmoid()` / `sigmoid_()`
+
+### 核心功能描述
+
+对输入逐元素应用 Sigmoid（实现使用数值稳定版本）：
+
+- `order = 0`：$\sigma(x)=\frac{1}{1+e^{-x}}$
+- `order = 1`：$\sigma(x)(1-\sigma(x))$
+- `order = -1`：返回 Softplus（实现上转发到 `softplus/softplus_`，即 $\log(1+e^x)$ 的稳定计算）
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> sigmoid(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& sigmoid_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `-1/0/1`（其他会抛异常） |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1.0f, 0.0f, 1.0f});
+
+auto y0 = yt::function::sigmoid(x, 0);
+auto y1 = yt::function::sigmoid(x, 1);
+
+auto sp = yt::function::sigmoid(x, -1); // 等价 softplus(x)
+
+yt::function::sigmoid_(x, 0);
+```
+
+---
+
+## `leakyRelu()` / `leakyRelu_()`
+
+### 核心功能描述
+
+逐元素 Leaky ReLU：
+
+- `order = 0`：$f(x)=\begin{cases}x,&x>0\\\alpha x,&\text{else}\end{cases}$
+- `order = 1`：$f'(x)=\begin{cases}1,&x>0\\\alpha,&\text{else}\end{cases}$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> leakyRelu(const YTensor<T, dim>& x, T alpha = static_cast<T>(0.01), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& leakyRelu_(YTensor<T, dim>& x, T alpha = static_cast<T>(0.01), int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `alpha` | `T` | `0.01` | 负半轴斜率 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-2, -1, 1, 2});
+auto y = yt::function::leakyRelu(x, 0.1f);
+yt::function::leakyRelu_(x, 0.1f, 1);
+```
+
+---
+
+## `elu()` / `elu_()`
+
+### 核心功能描述
+
+逐元素 ELU：
+
+- `order = 0`：$f(x)=\begin{cases}x,&x>0\\\alpha(e^x-1),&\text{else}\end{cases}$
+- `order = 1`：$f'(x)=\begin{cases}1,&x>0\\\alpha e^x,&\text{else}\end{cases}$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> elu(const YTensor<T, dim>& x, T alpha = static_cast<T>(1.0), int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& elu_(YTensor<T, dim>& x, T alpha = static_cast<T>(1.0), int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `alpha` | `T` | `1.0` | 负半轴缩放系数 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-1, 0, 1, 2});
+auto y = yt::function::elu(x, 1.0f, 0);
+yt::function::elu_(x, 1.0f, 1);
+```
+
+---
+
+## `selu()` / `selu_()`
+
+### 核心功能描述
+
+逐元素 SELU（Scaled ELU），使用固定常量 $\lambda$ 与 $\alpha$：
+
+- `order = 0`：$f(x)=\begin{cases}\lambda x,&x>0\\\lambda\alpha(e^x-1),&\text{else}\end{cases}$
+- `order = 1`：$f'(x)=\begin{cases}\lambda,&x>0\\\lambda\alpha e^x,&\text{else}\end{cases}$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> selu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& selu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-1, 0, 1, 2});
+auto y = yt::function::selu(x, 0);
+yt::function::selu_(x, 1);
+```
+
+---
+
+## `gelu()` / `gelu_()`
+
+### 核心功能描述
+
+逐元素 GELU（基于误差函数 `erf` 的实现）：
+
+- `order = 0`：$0.5x(1+\mathrm{erf}(x/\sqrt{2}))$
+- `order = 1`：$\Phi(x) + x\phi(x)$，其中 $\Phi$ 为标准正态 CDF、$\phi$ 为 PDF
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> gelu(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& gelu_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({4}, {-2, -1, 0, 1});
+auto y = yt::function::gelu(x);
+yt::function::gelu_(x, 1);
+```
+
+---
+
+## `tanh()` / `tanh_()`
+
+### 核心功能描述
+
+逐元素双曲正切：
+
+- `order = 0`：$\tanh(x)$
+- `order = 1`：$1-\tanh^2(x)$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> tanh(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& tanh_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::tanh(x);
+yt::function::tanh_(x, 1);
+```
+
+---
+
+## `swish()` / `swish_()`
+
+### 核心功能描述
+
+Swish / SiLU：$f(x)=x\sigma(x)$。
+
+- `order = 0`：$x\sigma(x)$
+- `order = 1`：$\sigma(x)\left(1 + x(1-\sigma(x))\right)$
+
+其中 $\sigma(x)$ 使用数值稳定 Sigmoid 实现。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> swish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& swish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::swish(x, 0);
+auto dy = yt::function::swish(x, 1);
+```
+
+---
+
+## `softplus()` / `softplus_()`
+
+### 核心功能描述
+
+Softplus：$\log(1+e^x)$。
+
+- `order = 0`：稳定实现（避免溢出），形式为：$\max(x,0)+\log(1+e^{-|x|})$
+- `order = 1`：等价于 `sigmoid(x, 0)`（原地版等价 `sigmoid_(x, 0)`）
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softplus(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& softplus_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-2, 0, 2});
+auto y = yt::function::softplus(x);
+auto dy = yt::function::softplus(x, 1); // 等价 sigmoid(x)
+```
+
+---
+
+## `mish()` / `mish_()`
+
+### 核心功能描述
+
+Mish：$f(x)=x\tanh(\mathrm{softplus}(x))$。
+
+- `order = 0`：$x\tanh(\mathrm{softplus}(x))$
+- `order = 1`：实现使用：$\tanh(sp) + x(1-\tanh(sp)^2)\sigma(x)$，其中 $sp=\mathrm{softplus}(x)$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> mish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& mish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({3}, {-1, 0, 1});
+auto y = yt::function::mish(x);
+yt::function::mish_(x, 1);
+```
+
+---
+
+## `hardSigmoid()` / `hardSigmoid_()`
+
+### 核心功能描述
+
+Hard Sigmoid（分段线性近似）：
+
+- `order = 0`：$\mathrm{clip}(x/6+0.5, 0, 1)$
+- `order = 1`：$x\in(-3,3)$ 时为 $1/6$，否则为 0
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> hardSigmoid(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& hardSigmoid_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({5}, {-4, -2, 0, 2, 4});
+auto y = yt::function::hardSigmoid(x);
+yt::function::hardSigmoid_(x, 1);
+```
+
+---
+
+## `hardSwish()` / `hardSwish_()`
+
+### 核心功能描述
+
+Hard Swish（Swish 的分段线性近似），实现为分段函数：
+
+- `order = 0`：
+    - $x\le-3$：0
+    - $x\ge 3$：$x$
+    - 否则：$x(x+3)/6$
+- `order = 1`：
+    - $x\le-3$：0
+    - $x\ge 3$：1
+    - 否则：$(2x+3)/6$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> hardSwish(const YTensor<T, dim>& x, int order = 0);
+
+template<typename T, int dim>
+YTensor<T, dim>& hardSwish_(YTensor<T, dim>& x, int order = 0);
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `order` | `int` | `0` | 仅支持 `0/1` |
+
+### 返回值
+
+- 非原地：`YTensor<T, dim>`
+- 原地：`YTensor<T, dim>&`
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 1>({5}, {-4, -2, 0, 2, 4});
+auto y = yt::function::hardSwish(x);
+yt::function::hardSwish_(x, 1);
+```
 
 ---
 
 ## 相关内容
 
-- [广播操作](../YTensor/math/broadcast.mdx) - 广播机制
+- [归一化函数](./normalization.mdx)
+- [广播操作](../YTensor/math/broadcast.mdx)

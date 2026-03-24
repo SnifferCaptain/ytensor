@@ -6,6 +6,49 @@ YTensor<T, 2> matmul(const YTensor<T, 2>& other) const;
 
 Performs matrix multiplication: `Result = (*this) @ other`.
 
+## `masked_matmul`
+
+`masked_matmul` computes matmul only on selected output positions. Unselected positions keep `maskedValue`.
+
+```cpp
+template <int dim1>
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+	const YTensor<T, dim1>& other,
+	const YTensor<bool, 2>& mask,
+	const T& maskedValue = static_cast<T>(0),
+	yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+
+template <int dim1, typename Func>
+requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
+	const YTensor<T, dim1>& other,
+	Func&& func,
+	const T& maskedValue = static_cast<T>(0),
+	yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+) const;
+```
+
+- `mask` shape must be `[this.shape(-2), other.shape(-1)]`
+- `func` must be callable as `bool(int row, int col)`
+- Broadcast rules are the same as `matmul`
+- Non-selected output positions remain `maskedValue`
+
+Example:
+
+```cpp
+auto A = YTensor<float, 2>::randn(4, 8);
+auto B = YTensor<float, 2>::randn(8, 4);
+
+auto M = YTensor<bool, 2>::zeros({4, 4});
+for (int i = 0; i < 4; ++i) {
+	for (int j = 0; j <= i; ++j) M.at(i, j) = true;
+}
+
+auto C0 = A.masked_matmul(B, M, -1e9f);
+auto C1 = A.masked_matmul(B, [](int r, int c) { return r == c; }, 0.0f);
+```
+
 ## Rules
 
 1.  Input must be 2D matrices (or viewable as 2D).

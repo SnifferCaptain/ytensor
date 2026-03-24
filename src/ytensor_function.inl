@@ -1,5 +1,62 @@
 #include "../include/ytensor_concepts.hpp"
 
+namespace yt::function::detail {
+
+template <typename T>
+inline T zero() {
+    return static_cast<T>(0);
+}
+
+template <typename T>
+inline T one() {
+    return static_cast<T>(1);
+}
+
+template <typename T>
+inline T expValue(const T& value) {
+    using std::exp;
+    return exp(value);
+}
+
+template <typename T>
+inline T log1pValue(const T& value) {
+    using std::log1p;
+    return log1p(value);
+}
+
+template <typename T>
+inline T tanhValue(const T& value) {
+    using std::tanh;
+    return tanh(value);
+}
+
+template <typename T>
+inline T absValue(const T& value) {
+    using std::abs;
+    return abs(value);
+}
+
+template <typename T>
+inline T stableSigmoid(const T& value) {
+    const T zero_v = zero<T>();
+    const T one_v = one<T>();
+    if (value >= zero_v) {
+        T z = expValue(-value);
+        return one_v / (one_v + z);
+    }
+    T z = expValue(value);
+    return z / (one_v + z);
+}
+
+template <typename T>
+inline T stableSoftplus(const T& value) {
+    const T zero_v = zero<T>();
+    const T positive = value > zero_v ? value : zero_v;
+    return positive + log1pValue(expValue(-absValue(value)));
+}
+
+}  // namespace yt::function::detail
+
 template <typename T, int dim0, int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> yt::function::matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b) {
     return a.matmul(b);
@@ -20,8 +77,7 @@ yt::YTensor<T, dim> yt::function::relu(const yt::YTensor<T, dim>& x, int order) 
         }, x);
     }
     else if(order > 1){
-        // op = yt::YTensor<T, dim>::zeros(x.shape());
-        throwNotSupport("yt::function::relu", "order > 1");
+        op = yt::YTensor<T, dim>::zeros(x.shape());
     }
     else{
         int pow = -order + 1;
@@ -86,22 +142,19 @@ yt::YTensor<T, dim> yt::function::exp(const yt::YTensor<T, dim>& x, int) {
 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::sigmoid(const yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in YTensorFunction::sigmoid()");
     if(order == 0){
         return yt::kernel::broadcast([](const T& a) {
-            return static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            return yt::function::detail::stableSigmoid(a);
         }, x);
     }
     else if(order == 1){
         return yt::kernel::broadcast([](const T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            return sig * (static_cast<T>(1) - sig);
+            T sig = yt::function::detail::stableSigmoid(a);
+            return sig * (yt::function::detail::one<T>() - sig);
         }, x);
     }
     else if(order == -1){
-        return yt::kernel::broadcast([](const T& a) {
-            return std::log(static_cast<T>(1) + std::exp(a));
-        }, x);
+        return yt::function::softplus(x, 0);
     }
     else{
         throwNotSupport("yt::function::sigmoid", "order != 0, 1, -1");
@@ -352,7 +405,8 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
     yt::YTensor<T, dim>& key,// [..., n1, c0]
     yt::YTensor<T, dim>& value,// [..., n1, c1]
     T scale,
-    yt::YTensor<T, 2>* mask,
+    yt::YTensor<bool, 2>* mask,
+    yt::YTensor<T, 2>* bias,
     sdpaBackend backend
 ) {
     if(static_cast<T>(0.0) == scale){
@@ -390,15 +444,33 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
         // std::cout << "V: " << dt4 << "us" << std::endl;
         // return op;
 
-        auto score = yt::function::matmul(query, key.transpose());// [..., n0, n1]
+        auto keyT = key.transpose();
+        yt::YTensor<T, dim> score;
+
+        if(mask != nullptr){
+            if(mask->shape(0) != query.shape(-2) || mask->shape(1) != key.shape(-2)){
+                throw std::invalid_argument("Mask shape must match the last two dimensions of the score tensor.");
+            }
+            score = query.masked_matmul(
+                keyT,
+                [mask](int row, int col) {
+                    return mask->at(row, col);
+                },
+                static_cast<T>(-1e9)
+            );
+        }
+        else{
+            score = yt::function::matmul(query, keyT);// [..., n0, n1]
+        }
+
         score.broadcastInplace([](T& a, const T& b) {
             a *= b; // scale
         }, scale);
-        if(mask != nullptr){
-            if(mask->shape(0) != score.shape(-2) || mask->shape(1) != score.shape(-1)){
-                throw std::invalid_argument("Mask shape must match the last two dimensions of the score tensor.");
+        if(bias != nullptr){
+            if(bias->shape(0) != score.shape(-2) || bias->shape(1) != score.shape(-1)){
+                throw std::invalid_argument("Bias shape must match the last two dimensions of the score tensor.");
             }
-            score += *mask;
+            score += *bias;
         }
         yt::function::softmax_(score, -1);// [..., n0, n1] inplace
         auto op = yt::function::matmul(score, value);// [..., n0, c1]
@@ -415,21 +487,12 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
 
 template <typename T, int dim>
 yt::YTensor<T, dim>& yt::function::exp_(yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::exp_()");
-    if(order == 0){
-        x.broadcastInplace([](T& a) {
-            a = std::exp(a);
-        });
-    }
-    else if(order == 1){
-        // exp的导数仍为exp
-        x.broadcastInplace([](T& a) {
-            a = std::exp(a);
-        });
-    }
-    else{
-        throwNotSupport("yt::function::exp_", "order != 0, 1");
-    }
+    (void)order;
+    // exp 的任意阶导数/不计常数的原函数仍然是 exp
+    x.broadcastInplace([](T& a) {
+        using std::exp;
+        a = exp(a);
+    });
     return x;
 }
 
@@ -437,22 +500,19 @@ yt::YTensor<T, dim>& yt::function::exp_(yt::YTensor<T, dim>& x, int order) {
 
 template <typename T, int dim>
 yt::YTensor<T, dim>& yt::function::sigmoid_(yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::sigmoid_()");
     if(order == 0){
         x.broadcastInplace([](T& a) {
-            a = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            a = yt::function::detail::stableSigmoid(a);
         });
     }
     else if(order == 1){
         x.broadcastInplace([](T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            a = sig * (static_cast<T>(1) - sig);
+            T sig = yt::function::detail::stableSigmoid(a);
+            a = sig * (yt::function::detail::one<T>() - sig);
         });
     }
     else if(order == -1){
-        x.broadcastInplace([](T& a) {
-            a = std::log(static_cast<T>(1) + std::exp(a));
-        });
+        return yt::function::softplus_(x, 0);
     }
     else{
         throwNotSupport("yt::function::sigmoid_", "order != 0, 1, -1");
@@ -686,17 +746,16 @@ yt::YTensor<T, dim>& yt::function::tanh_(yt::YTensor<T, dim>& x, int order) {
 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::swish(const yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::swish()");
     if(order == 0){
         return yt::kernel::broadcast([](const T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            T sig = yt::function::detail::stableSigmoid(a);
             return a * sig;
         }, x);
     }
     else if(order == 1){
         return yt::kernel::broadcast([](const T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            return sig * (static_cast<T>(1) + a * (static_cast<T>(1) - sig));
+            T sig = yt::function::detail::stableSigmoid(a);
+            return sig * (yt::function::detail::one<T>() + a * (yt::function::detail::one<T>() - sig));
         }, x);
     }
     else{
@@ -707,17 +766,16 @@ yt::YTensor<T, dim> yt::function::swish(const yt::YTensor<T, dim>& x, int order)
 
 template <typename T, int dim>
 yt::YTensor<T, dim>& yt::function::swish_(yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::swish_()");
     if(order == 0){
         x.broadcastInplace([](T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
+            T sig = yt::function::detail::stableSigmoid(a);
             a = a * sig;
         });
     }
     else if(order == 1){
         x.broadcastInplace([](T& a) {
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            a = sig * (static_cast<T>(1) + a * (static_cast<T>(1) - sig));
+            T sig = yt::function::detail::stableSigmoid(a);
+            a = sig * (yt::function::detail::one<T>() + a * (yt::function::detail::one<T>() - sig));
         });
     }
     else{
@@ -730,20 +788,13 @@ yt::YTensor<T, dim>& yt::function::swish_(yt::YTensor<T, dim>& x, int order) {
 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::softplus(const yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::softplus()");
     if(order == 0){
         return yt::kernel::broadcast([](const T& a) {
-            // 数值稳定：当a较大时直接返回a，避免exp溢出
-            if(a > static_cast<T>(20)) return a;
-            if(a < static_cast<T>(-20)) return static_cast<T>(0);
-            return std::log(static_cast<T>(1) + std::exp(a));
+            return yt::function::detail::stableSoftplus(a);
         }, x);
     }
     else if(order == 1){
-        // softplus的导数为sigmoid
-        return yt::kernel::broadcast([](const T& a) {
-            return static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-        }, x);
+        return yt::function::sigmoid(x, 0);
     }
     else{
         throwNotSupport("yt::function::softplus", "order != 0, 1");
@@ -753,18 +804,13 @@ yt::YTensor<T, dim> yt::function::softplus(const yt::YTensor<T, dim>& x, int ord
 
 template <typename T, int dim>
 yt::YTensor<T, dim>& yt::function::softplus_(yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::softplus_()");
     if(order == 0){
         x.broadcastInplace([](T& a) {
-            if(a > static_cast<T>(20)) return;
-            if(a < static_cast<T>(-20)){ a = static_cast<T>(0); return; }
-            a = std::log(static_cast<T>(1) + std::exp(a));
+            a = yt::function::detail::stableSoftplus(a);
         });
     }
     else if(order == 1){
-        x.broadcastInplace([](T& a) {
-            a = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-        });
+        return yt::function::sigmoid_(x, 0);
     }
     else{
         throwNotSupport("yt::function::softplus_", "order != 0, 1");
@@ -776,20 +822,19 @@ yt::YTensor<T, dim>& yt::function::softplus_(yt::YTensor<T, dim>& x, int order) 
 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::mish(const yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mish()");
     if(order == 0){
         return yt::kernel::broadcast([](const T& a) {
-            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
-            return a * std::tanh(sp);
+            T sp = yt::function::detail::stableSoftplus(a);
+            return a * yt::function::detail::tanhValue(sp);
         }, x);
     }
     else if(order == 1){
         // mish'(x) = tanh(sp) + x * (1 - tanh(sp)^2) * sigmoid(x)
         return yt::kernel::broadcast([](const T& a) {
-            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
-            T tsp = std::tanh(sp);
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            return tsp + a * (static_cast<T>(1) - tsp * tsp) * sig;
+            T sp = yt::function::detail::stableSoftplus(a);
+            T tsp = yt::function::detail::tanhValue(sp);
+            T sig = yt::function::detail::stableSigmoid(a);
+            return tsp + a * (yt::function::detail::one<T>() - tsp * tsp) * sig;
         }, x);
     }
     else{
@@ -800,19 +845,18 @@ yt::YTensor<T, dim> yt::function::mish(const yt::YTensor<T, dim>& x, int order) 
 
 template <typename T, int dim>
 yt::YTensor<T, dim>& yt::function::mish_(yt::YTensor<T, dim>& x, int order) {
-    static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mish_()");
     if(order == 0){
         x.broadcastInplace([](T& a) {
-            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
-            a = a * std::tanh(sp);
+            T sp = yt::function::detail::stableSoftplus(a);
+            a = a * yt::function::detail::tanhValue(sp);
         });
     }
     else if(order == 1){
         x.broadcastInplace([](T& a) {
-            T sp = a > static_cast<T>(20) ? a : (a < static_cast<T>(-20) ? static_cast<T>(0) : std::log(static_cast<T>(1) + std::exp(a)));
-            T tsp = std::tanh(sp);
-            T sig = static_cast<T>(1) / (static_cast<T>(1) + std::exp(-a));
-            a = tsp + a * (static_cast<T>(1) - tsp * tsp) * sig;
+            T sp = yt::function::detail::stableSoftplus(a);
+            T tsp = yt::function::detail::tanhValue(sp);
+            T sig = yt::function::detail::stableSigmoid(a);
+            a = tsp + a * (yt::function::detail::one<T>() - tsp * tsp) * sig;
         });
     }
     else{
@@ -1568,7 +1612,7 @@ yt::YTensor<T, dim> yt::function::maxPool1d(const yt::YTensor<T, dim>& x, int ke
                     }
                 }
                 full_indices[axis] = max_pos;
-                grad.at(full_indices) = static_cast<T>(1);
+                grad.at(full_indices) += static_cast<T>(1);
             }
         }
 

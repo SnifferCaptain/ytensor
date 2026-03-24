@@ -1,7 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <concepts>
 #include <cstring>
+#include <type_traits>
+#include <utility>
 
 namespace yt::kernel::avx2 {
 
@@ -428,6 +431,143 @@ inline void sgemm_masked(
                             for (int i = 0; i < mr; ++i) {
                                 for (int j = 0; j < nr; ++j) {
                                     if (mask[(ii + ir + i) * n + (jj + jr + j)]) {
+                                        float val = alpha * gemm_result[i][j];
+                                        if (first) val += beta * tmp_c[i * NR_ROW + j];
+                                        else val += tmp_c[i * NR_ROW + j];
+                                        C_ij[i * rsc + j * csc] = val;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <typename Func>
+inline bool masked_tile_all_true(const Func& func, int row0, int col0, int mr, int nr) {
+    if constexpr (requires { { func.tileAllTrue(row0, col0, mr, nr) } -> std::convertible_to<bool>; }) {
+        return func.tileAllTrue(row0, col0, mr, nr);
+    } else {
+        for (int i = 0; i < mr; ++i) {
+            for (int j = 0; j < nr; ++j) {
+                if (!func(row0 + i, col0 + j)) return false;
+            }
+        }
+        return true;
+    }
+}
+
+template <typename Func>
+inline bool masked_tile_all_false(const Func& func, int row0, int col0, int mr, int nr) {
+    if constexpr (requires { { func.tileAllFalse(row0, col0, mr, nr) } -> std::convertible_to<bool>; }) {
+        return func.tileAllFalse(row0, col0, mr, nr);
+    } else {
+        for (int i = 0; i < mr; ++i) {
+            for (int j = 0; j < nr; ++j) {
+                if (func(row0 + i, col0 + j)) return false;
+            }
+        }
+        return true;
+    }
+}
+
+template <typename Func>
+inline void sgemm_masked(
+    const float* A, const float* B, float* C,
+    int m, int n, int k,
+    float alpha, float beta,
+    int64_t rsa, int64_t csa,
+    int64_t rsb, int64_t csb,
+    int64_t rsc, int64_t csc,
+    Func&& func
+) {
+    static_assert(std::is_invocable_r_v<bool, std::decay_t<Func>, int, int>, "sgemm_masked func must be callable as bool(int, int)");
+    Func&& predicate = std::forward<Func>(func);
+    if (m == 0 || n == 0) return;
+    if (k == 0 || alpha == 0.0f) {
+        if (beta == 0.0f) {
+            for (int i = 0; i < m; ++i)
+                for (int j = 0; j < n; ++j)
+                    if (predicate(i, j)) C[i * rsc + j * csc] = 0.0f;
+        } else if (beta != 1.0f) {
+            for (int i = 0; i < m; ++i)
+                for (int j = 0; j < n; ++j)
+                    if (predicate(i, j)) C[i * rsc + j * csc] *= beta;
+        }
+        return;
+    }
+
+    bool c_rowmajor = (csc == 1 && rsc >= n);
+
+    static thread_local AlignedBuffer buf_a, buf_b;
+    const int block_mc = gemm_mc();
+    const int block_kc = gemm_kc();
+    const int block_nc = gemm_nc();
+    size_t a_buf_size = ((size_t)(block_mc + MR_ROW - 1) / MR_ROW) * MR_ROW * block_kc;
+    size_t b_buf_size = ((size_t)(block_nc + NR_ROW - 1) / NR_ROW) * NR_ROW * block_kc;
+    buf_a.ensure(a_buf_size);
+    buf_b.ensure(b_buf_size);
+
+    alignas(32) float tmp_c[MR_ROW * NR_ROW];
+
+    for (int jj = 0; jj < n; jj += block_nc) {
+        int nc = std::min(block_nc, n - jj);
+        for (int pp = 0; pp < k; pp += block_kc) {
+            int kc = std::min(block_kc, k - pp);
+            bool first = (pp == 0);
+            pack_b_generic(B + pp * rsb + jj * csb, buf_b.data, kc, nc, rsb, csb);
+            for (int ii = 0; ii < m; ii += block_mc) {
+                int mc = std::min(block_mc, m - ii);
+                pack_a_generic(A + ii * rsa + pp * csa, buf_a.data, mc, kc, rsa, csa);
+                for (int ir = 0; ir < mc; ir += MR_ROW) {
+                    int mr = std::min(MR_ROW, mc - ir);
+                    for (int jr = 0; jr < nc; jr += NR_ROW) {
+                        int nr = std::min(NR_ROW, nc - jr);
+                        const int row0 = ii + ir;
+                        const int col0 = jj + jr;
+
+                        if (masked_tile_all_false(predicate, row0, col0, mr, nr)) continue;
+
+                        float* pa = buf_a.data + (ir / MR_ROW) * MR_ROW * kc;
+                        float* pb = buf_b.data + (jr / NR_ROW) * NR_ROW * kc;
+                        float* C_ij = C + row0 * rsc + col0 * csc;
+
+                        if (masked_tile_all_true(predicate, row0, col0, mr, nr)) {
+                            if (c_rowmajor) {
+                                if (alpha == 1.0f) {
+                                    if (first && beta == 0.0f) kernel_row_zero(pa, pb, C_ij, mr, nr, kc, (int)rsc);
+                                    else if (first) {
+                                        for (int i = 0; i < mr; ++i)
+                                            for (int j = 0; j < nr; ++j) C_ij[i * rsc + j] *= beta;
+                                        kernel_row_load(pa, pb, C_ij, mr, nr, kc, (int)rsc);
+                                    } else {
+                                        kernel_row_load(pa, pb, C_ij, mr, nr, kc, (int)rsc);
+                                    }
+                                } else {
+                                    kernel_row_alphabeta(pa, pb, C_ij, mr, nr, kc, (int)rsc, alpha, beta, first);
+                                }
+                            } else {
+                                kernel_row_generic_store(pa, pb, C_ij, mr, nr, kc, rsc, csc, alpha, beta, first);
+                            }
+                        } else {
+                            memset(tmp_c, 0, sizeof(tmp_c));
+                            for (int i = 0; i < mr; ++i)
+                                for (int j = 0; j < nr; ++j)
+                                    tmp_c[i * NR_ROW + j] = C_ij[i * rsc + j * csc];
+
+                            __m256 c_reg[MR_ROW][NR_BLOCKS] = {};
+                            dispatch_fma_row<MR_ROW>(pa, pb, c_reg, mr, kc);
+                            alignas(32) float gemm_result[MR_ROW][NR_ROW];
+                            for (int i = 0; i < MR_ROW; ++i)
+                                for (int jj2 = 0; jj2 < NR_BLOCKS; ++jj2)
+                                    _mm256_storeu_ps(&gemm_result[i][jj2 * 8], c_reg[i][jj2]);
+
+                            for (int i = 0; i < mr; ++i) {
+                                for (int j = 0; j < nr; ++j) {
+                                    if (predicate(row0 + i, col0 + j)) {
                                         float val = alpha * gemm_result[i][j];
                                         if (first) val += beta * tmp_c[i * NR_ROW + j];
                                         else val += tmp_c[i * NR_ROW + j];
