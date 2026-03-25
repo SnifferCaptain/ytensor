@@ -82,7 +82,12 @@ struct NaryIndexComputer {
         int& thisDataIdx)
     {
         if constexpr (N == 0) {
-            // 原地transform，返回空即可。一般来说不会到这里来
+            // unary原地操作：仍需要计算thisDataIdx
+            thisDataIdx = 0;
+            for (int d = 0; d < Dim; ++d) {
+                int posi = (index / logicStride[d]) % shape[d];
+                thisDataIdx += posi * thisStride[d];
+            }
             return {};
         }
         std::array<int, N> indices = {};
