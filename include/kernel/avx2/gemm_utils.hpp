@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <thread>
 #include <memory>
 #include <utility>       // std::integer_sequence / std::make_integer_sequence
 
@@ -110,7 +111,15 @@ inline int gemm_kc() { return g_gemm_kc; }
 inline int gemm_nc() { return g_gemm_nc; }
 
 // 线程数控制（仅影响本模块GEMM相关调度）
-inline int g_num_threads = 1;
+inline int default_num_threads() {
+#ifdef _OPENMP
+    return std::max(1, omp_get_max_threads());
+#else
+    return std::max(1, static_cast<int>(std::thread::hardware_concurrency()));
+#endif
+}
+
+inline int g_num_threads = default_num_threads();
 inline void set_num_threads(int n) { g_num_threads = std::max(1, n); }
 inline int  get_num_threads() { return g_num_threads; }
 

@@ -1,20 +1,19 @@
-legacy
-main.cpp
-CMakeLists.txt
 _codeql*
-!src
-!include
-!single-header
-!example
+__pycache__
 .cache
 .vscode
 .clangd
-__pycache__
+.ignore
 build
-doc/index.html
-# doc/build.py
-# doc/template.html
-.ignore/
-example/ymodel2-s-2/model
-!example/ymodel2-s-2/model/.keep
-test/
+
+/main.cpp
+/CMakeLists.txt
+/legacy/*
+/test/*
+/doc/index.html
+
+!/src
+!/include
+!/single-header
+!/example
+

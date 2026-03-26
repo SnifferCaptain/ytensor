@@ -444,23 +444,20 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
         // std::cout << "V: " << dt4 << "us" << std::endl;
         // return op;
 
-        auto keyT = key.transpose();
         yt::YTensor<T, dim> score;
-
         if(mask != nullptr){
             if(mask->shape(0) != query.shape(-2) || mask->shape(1) != key.shape(-2)){
                 throw std::invalid_argument("Mask shape must match the last two dimensions of the score tensor.");
             }
             score = query.masked_matmul(
-                keyT,
-                [mask](int row, int col) {
-                    return mask->at(row, col);
-                },
+                key.transpose(),
+                *mask,
                 static_cast<T>(-1e9)
             );
         }
         else{
-            score = yt::function::matmul(query, keyT);// [..., n0, n1]
+            score =
+                yt::function::matmul(query, key.transpose());  // [..., n0, n1]
         }
 
         score.broadcastInplace([](T& a, const T& b) {
