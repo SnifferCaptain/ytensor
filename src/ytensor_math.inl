@@ -6,7 +6,6 @@
 #include <string>
 #include <typeinfo>
 #include "../include/ytensor_infos.hpp"
-#include "../include/kernel/math_utils.hpp"
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
 #if YT_USE_AVX2

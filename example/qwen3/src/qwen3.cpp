@@ -329,7 +329,14 @@ bool Qwen3Model::load(const std::string& path) {
 		if (io.load(base, p + "self_attn.k_proj.weight")) { k_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (io.load(base, p + "self_attn.v_proj.weight")) { v_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (q_w.size() > 0 && k_w.size() > 0 && v_w.size() > 0) {
-			layers[i].attn.qkv_proj = yt::YTensor<float, 2>(q_w.concat(k_w.concat(v_w, 0), 0));
+			auto qkv = yt::YTensor<float, 2>(q_w.concat(k_w.concat(v_w, 0), 0));
+			// concat() 会强制把输入变为 contiguous(行主序) 再拷贝，
+			// 这会破坏 toFloat(..., useTranspose=true) 为 Eigen 准备的“列主序”布局。
+			// 为了保持 Eigen 下 weight.transpose() 的连续性，这里需要对合并后的权重重新做一次布局转换。
+			if (useTranspose) {
+				qkv = qkv.transpose().contiguous().transpose();
+			}
+			layers[i].attn.qkv_proj = qkv;
 		}
 		if (io.load(base, p + "self_attn.o_proj.weight")) { layers[i].attn.o_proj = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (io.load(base, p + "self_attn.q_norm.weight")) { layers[i].attn.q_norm.weight = toFloat<1>(base); loaded_count++; }
@@ -339,7 +346,11 @@ bool Qwen3Model::load(const std::string& path) {
 		if (io.load(base, p + "mlp.up_proj.weight")) { up_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (io.load(base, p + "mlp.down_proj.weight")) { layers[i].mlp.down = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (gate_w.size() > 0 && up_w.size() > 0) {
-			layers[i].mlp.gate_up = yt::YTensor<float, 2>(gate_w.concat(up_w, 0));
+			auto gate_up = yt::YTensor<float, 2>(gate_w.concat(up_w, 0));
+			if (useTranspose) {
+				gate_up = gate_up.transpose().contiguous().transpose();
+			}
+			layers[i].mlp.gate_up = gate_up;
 		}
 		if (io.load(base, p + "input_layernorm.weight")) { layers[i].norm1.weight = toFloat<1>(base); loaded_count++; }
 		if (io.load(base, p + "post_attention_layernorm.weight")) { layers[i].norm2.weight = toFloat<1>(base); loaded_count++; }
