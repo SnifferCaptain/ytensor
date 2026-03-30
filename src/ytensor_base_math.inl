@@ -14,7 +14,6 @@
 #include "../include/ytensor_infos.hpp"
 #include "../include/ytensor_types.hpp"
 #include "../include/kernel/parallel_for.hpp"
-#include "../include/kernel/math_utils.hpp"
 #include "../include/kernel/memory_utils.hpp"
 #include "../include/kernel/broadcast.hpp"
 #include "../include/kernel/type_dispatch.hpp"
