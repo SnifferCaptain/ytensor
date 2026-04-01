@@ -5,11 +5,11 @@
 
 namespace yt{
 
-inline std::vector<int> YTensorBase::shape() const {
+YT_IMPL_INLINE std::vector<int> YTensorBase::shape() const {
     return _shape;
 }
 
-inline YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string& dtype) {
+YT_IMPL_INLINE YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string& dtype) {
     _shape = shape;
     _offset = 0;
     int d = ndim();
@@ -63,7 +63,7 @@ inline YTensorBase::YTensorBase(const std::vector<int>& shape, const std::string
     _offset = 0;
 }
 
-inline YTensorBase::YTensorBase(const YTensorBase& other) {
+YT_IMPL_INLINE YTensorBase::YTensorBase(const YTensorBase& other) {
     _shape = other._shape;
     _stride = other._stride;
     _offset = other._offset;
@@ -72,7 +72,7 @@ inline YTensorBase::YTensorBase(const YTensorBase& other) {
     _dtype = other._dtype;
 }
 
-inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
     if (this != &other) {
         _shape = other._shape;
         _stride = other._stride;
@@ -84,7 +84,7 @@ inline YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
     return *this;
 }
 
-inline int YTensorBase::shape(int atDim) const {
+YT_IMPL_INLINE int YTensorBase::shape(int atDim) const {
     // 循环索引，与 YTensor::shape 相同
     int d = ndim();
     if (d == 0) {
@@ -94,7 +94,7 @@ inline int YTensorBase::shape(int atDim) const {
     return _shape[atDim];
 }
 
-inline std::vector<int> YTensorBase::stride() const {
+YT_IMPL_INLINE std::vector<int> YTensorBase::stride() const {
     std::vector<int> op(ndim());
     int d = ndim();
     if (d > 0) {
@@ -106,11 +106,11 @@ inline std::vector<int> YTensorBase::stride() const {
     return op;
 }
 
-inline std::vector<int> YTensorBase::stride_() const {
+YT_IMPL_INLINE std::vector<int> YTensorBase::stride_() const {
     return _stride;
 }
 
-inline int YTensorBase::stride_(int atDim) const {
+YT_IMPL_INLINE int YTensorBase::stride_(int atDim) const {
     int d = ndim();
     if (d == 0) {
         throw std::out_of_range("[YTensorBase::stride_] Cannot access stride of a 0-dim tensor.");
@@ -119,7 +119,7 @@ inline int YTensorBase::stride_(int atDim) const {
     return _stride[atDim];
 }
 
-inline int YTensorBase::stride(int atDim) const {
+YT_IMPL_INLINE int YTensorBase::stride(int atDim) const {
     // 循环索引处理，与 YTensor::stride 保持一致
     int d = ndim();
     if (d == 0) {
@@ -130,7 +130,7 @@ inline int YTensorBase::stride(int atDim) const {
     return _stride[atDim];
 }
 
-inline size_t YTensorBase::size() const {
+YT_IMPL_INLINE size_t YTensorBase::size() const {
     size_t total_size = 1;
     for (int i = 0; i < ndim(); ++i) {
         total_size *= _shape[i];
@@ -138,64 +138,18 @@ inline size_t YTensorBase::size() const {
     return total_size;
 }
 
-inline int YTensorBase::ndim() const {
+YT_IMPL_INLINE int YTensorBase::ndim() const {
     return static_cast<int>(_shape.size());
 }
 
-inline int YTensorBase::shapeSize() const {
+YT_IMPL_INLINE int YTensorBase::shapeSize() const {
     return ndim();
 }
 
 // element_size() and dtype() are intentionally not implemented here; they are
 // not part of the YTensor interface that YTensorBase mirrors.
 
-template <typename... Args>
-inline int YTensorBase::offset(Args... index) const {
-    static_assert(sizeof...(index) <= 0 || sizeof...(index) >= 0, "offset template forwarded to toIndex_");
-    // zero-pad / forward behavior is provided in YTensor; here forward to vector overload
-    std::vector<int> indices = {index...};
-    return this->toIndex_(indices);
-}
-
-inline int YTensorBase::offset(const std::vector<int>& index) const {
-    // forward to toIndex_
-    return static_cast<int>(this->toIndex_(index));
-}
-
-template <typename... Args>
-inline int YTensorBase::offset_(Args... index) const {
-    return _offset + offset(index...);
-}
-
-inline int YTensorBase::offset_(const std::vector<int>& index) const {
-    return _offset + offset(index);
-}
-
-// 数据访问：提供模板化的按类型访问，以及 float 的便捷重载
-#include <cstring>
-
-template <typename T>
-inline T* YTensorBase::data() {
-    if (!_data) return nullptr;
-    // _data 是 char[]，按元素类型 T 返回指针
-    return reinterpret_cast<T*>(_data.get()) + _offset;
-}
-
-template <typename T>
-inline const T* YTensorBase::data() const {
-    if (!_data) return nullptr;
-    return reinterpret_cast<const T*>(_data.get()) + _offset;
-}
-
-inline float* YTensorBase::data() {
-    return data<float>();
-}
-
-inline const float* YTensorBase::data() const {
-    return data<float>();
-}
-
-inline bool YTensorBase::shapeMatch(const std::vector<int> &otherShape) const {
+YT_IMPL_INLINE bool YTensorBase::shapeMatch(const std::vector<int> &otherShape) const {
     if (static_cast<int>(otherShape.size()) != ndim()) return false;
     if (_shape.size() != otherShape.size()) return false;
     for (int i = 0; i < ndim(); ++i) {
@@ -204,7 +158,7 @@ inline bool YTensorBase::shapeMatch(const std::vector<int> &otherShape) const {
     return true;
 }
 
-inline void YTensorBase::shallowCopyTo(YTensorBase &other) const {
+YT_IMPL_INLINE void YTensorBase::shallowCopyTo(YTensorBase &other) const {
     other._shape = _shape;
     other._stride = this->stride();
     other._offset = _offset;
@@ -213,7 +167,7 @@ inline void YTensorBase::shallowCopyTo(YTensorBase &other) const {
     other._dtype = _dtype;
 }
 
-inline YTensorBase YTensorBase::clone() const {
+YT_IMPL_INLINE YTensorBase YTensorBase::clone() const {
     YTensorBase op;
     op._shape = _shape;
     op._dtype = _dtype;
@@ -300,7 +254,7 @@ inline YTensorBase YTensorBase::clone() const {
     return op;
 }
 
-inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     // 验证shape一致
     if (!this->shapeMatch(src.shape())) {
         throw std::runtime_error("copy_: source and destination shapes must match");
@@ -475,10 +429,10 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     return *this;
 }
 
-inline std::string YTensorBase::dtype() const { return _dtype; }
-inline size_t YTensorBase::elementSize() const { return _element_size; }
+YT_IMPL_INLINE std::string YTensorBase::dtype() const { return _dtype; }
+YT_IMPL_INLINE size_t YTensorBase::elementSize() const { return _element_size; }
 
-inline bool YTensorBase::isContiguous(int fromDim, int toDim) const {
+YT_IMPL_INLINE bool YTensorBase::isContiguous(int fromDim, int toDim) const {
     if (_data == nullptr) {
         return false;
     }
@@ -514,7 +468,7 @@ inline bool YTensorBase::isContiguous(int fromDim, int toDim) const {
     return true;
 }
 
-inline int YTensorBase::isContiguousFrom(int fromDim, int toDim) const {
+YT_IMPL_INLINE int YTensorBase::isContiguousFrom(int fromDim, int toDim) const {
     if (_data == nullptr) {
         return ndim();
     }
@@ -549,7 +503,7 @@ inline int YTensorBase::isContiguousFrom(int fromDim, int toDim) const {
     return fromDim; // 全部连续
 }
 
-inline size_t YTensorBase::toIndex_(const std::vector<int> &pos) const {
+YT_IMPL_INLINE size_t YTensorBase::toIndex_(const std::vector<int> &pos) const {
     // 与 YTensor::toIndex_ 对应
     if (static_cast<int>(pos.size()) != ndim()) {
         throw std::invalid_argument("toIndex_: position dimensions do not match ndim");
@@ -560,18 +514,7 @@ inline size_t YTensorBase::toIndex_(const std::vector<int> &pos) const {
     }
     return index;
 }
-template <typename... Args>
-inline size_t YTensorBase::toIndex(const Args... args) const {
-    std::vector<int> pos = {args...};
-    return toIndex(pos);
-}
-
-template <typename... Args>
-inline size_t YTensorBase::toIndex_(const Args... args) const {
-    std::vector<int> pos = {args...};
-    return toIndex_(pos);
-}
-inline size_t YTensorBase::toIndex(const std::vector<int> &pos) const {
+YT_IMPL_INLINE size_t YTensorBase::toIndex(const std::vector<int> &pos) const {
     // 与 YTensor::toIndex 对应（逻辑索引）
     if (static_cast<int>(pos.size()) != ndim()) {
         throw std::invalid_argument("toIndex: position dimensions do not match ndim");
@@ -584,7 +527,7 @@ inline size_t YTensorBase::toIndex(const std::vector<int> &pos) const {
     return index;
 }
 
-inline std::vector<int> YTensorBase::toCoord(size_t index) const {
+YT_IMPL_INLINE std::vector<int> YTensorBase::toCoord(size_t index) const {
     std::vector<int> pos(ndim());
     for (int i = ndim() - 1; i >= 0; --i) {
         pos[i] = (index % _shape[i]);
@@ -593,50 +536,10 @@ inline std::vector<int> YTensorBase::toCoord(size_t index) const {
     return pos;
 }
 
-template <typename T, typename... Args>
-inline T& YTensorBase::at(Args... args) {
-    std::vector<int> pos = {args...};
-    size_t phys = this->toIndex_(pos);
-    return this->data<T>()[phys];
-}
-
-template <typename T>
-inline T& YTensorBase::at(const std::vector<int>& pos) {
-    size_t phys = this->toIndex_(pos);
-    return this->data<T>()[phys];
-}
-
-template <typename T>
-inline const T& YTensorBase::at(const std::vector<int>& pos) const {
-    size_t phys = this->toIndex_(pos);
-    return this->data<T>()[phys];
-}
-
-template <typename T>
-inline T& YTensorBase::atData(int index) {
-    auto coord = toCoord(index);
-    return at<T>(coord);
-}
-
-template <typename T>
-inline const T& YTensorBase::atData(int index) const {
-    auto coord = toCoord(index);
-    return at<T>(coord);
-}
-
-template <typename T>
-inline T& YTensorBase::atData_(int index) {
-    return this->data<T>()[index + _offset];
-}
-
-template <typename T>
-inline const T& YTensorBase::atData_(int index) const {
-    return this->data<T>()[index + _offset];
-}
 
 // note: calculate_logical_stride removed; stride() returns logical strides
 
-inline bool YTensorBase::isDisjoint() const {
+YT_IMPL_INLINE bool YTensorBase::isDisjoint() const {
     if (_data == nullptr) {
         return false;
     }
@@ -658,7 +561,7 @@ inline bool YTensorBase::isDisjoint() const {
     return true;
 }
 
-inline std::vector<int> YTensorBase::autoShape(const std::vector<int>& shape) const {
+YT_IMPL_INLINE std::vector<int> YTensorBase::autoShape(const std::vector<int>& shape) const {
     // 参考 ytensor.inl 中的 autoShape 实现（支持一个 -1 推断）
     std::vector<int> op(shape.size());
     int autoDim = -1; // 自动推导的维度
@@ -699,13 +602,8 @@ inline std::vector<int> YTensorBase::autoShape(const std::vector<int>& shape) co
     return op;
 }
 
-template<typename... Args>
-std::vector<int> YTensorBase::autoShape(const Args... shape0) const {
-    std::vector<int> shape({shape0...});
-    return autoShape(shape);  // 委托给 vector 版本
-}
 
-inline YTensorBase YTensorBase::slice(int atDim, int start, int end, int step, bool autoFix) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::slice(int atDim, int start, int end, int step, bool autoFix) const {
     int d = ndim();
     if (d == 0) {
         throw std::out_of_range("[YTensorBase::slice] Cannot slice a 0-dim tensor.");
@@ -742,12 +640,12 @@ inline YTensorBase YTensorBase::slice(int atDim, int start, int end, int step, b
     return op;
 }
 
-inline YTensorBase& YTensorBase::slice_(int atDim, int start, int end, int step, bool autoFix) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::slice_(int atDim, int start, int end, int step, bool autoFix) {
     *this = slice(atDim, start, end, step, autoFix);
     return *this;
 }
 
-inline YTensorBase YTensorBase::permute(const std::vector<int>& newOrder) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::permute(const std::vector<int>& newOrder) const {
     // 参考 ytensor.inl: 支持循环索引（负数或超出范围会被映射回有效维度）
     if (newOrder.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("permute: order size must match ndim");
@@ -765,12 +663,8 @@ inline YTensorBase YTensorBase::permute(const std::vector<int>& newOrder) const 
     return op;
 }
 
-template<typename... Args>
-inline YTensorBase YTensorBase::permute(const Args... newOrder) const {
-    return permute(std::vector<int>{static_cast<int>(newOrder)...});
-}
 
-inline YTensorBase& YTensorBase::permute_(const std::vector<int>& newOrder) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::permute_(const std::vector<int>& newOrder) {
     if (newOrder.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("permute_: order size must match ndim");
     }
@@ -786,7 +680,7 @@ inline YTensorBase& YTensorBase::permute_(const std::vector<int>& newOrder) {
     return *this;
 }
 
-inline YTensorBase YTensorBase::transpose(int dim0, int dim1) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::transpose(int dim0, int dim1) const {
     int d = ndim();
     if (d == 0) {
         throw std::out_of_range("[YTensorBase::transpose] Cannot transpose a 0-dim tensor.");
@@ -804,7 +698,7 @@ inline YTensorBase YTensorBase::transpose(int dim0, int dim1) const {
     return op;
 }
 
-inline YTensorBase YTensorBase::view(const std::vector<int>& newShape) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::view(const std::vector<int>& newShape) const {
     if (!isContiguous()) {
         throw std::runtime_error("\"view\" requires contiguous tensor.");
     }
@@ -814,21 +708,13 @@ inline YTensorBase YTensorBase::view(const std::vector<int>& newShape) const {
     return op;
 }
 
-template<typename... Args>
-inline YTensorBase YTensorBase::view(const Args... newShape) const {
-    return view(std::vector<int>{static_cast<int>(newShape)...});
-}
 
-inline YTensorBase YTensorBase::reshape(const std::vector<int>& newShape) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::reshape(const std::vector<int>& newShape) const {
     return contiguous().view(newShape);
 }
 
-template<typename... Args>
-inline YTensorBase YTensorBase::reshape(const Args... newShape) const {
-    return reshape(std::vector<int>{static_cast<int>(newShape)...});
-}
 
-inline YTensorBase YTensorBase::unsqueeze(int dim) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::unsqueeze(int dim) const {
     int d = ndim();
     // 循环索引：dim 的有效范围是 [0, d]（共 d+1 个位置）
     dim = ((dim % (d + 1)) + (d + 1)) % (d + 1);
@@ -840,7 +726,7 @@ inline YTensorBase YTensorBase::unsqueeze(int dim) const {
     return op;
 }
 
-inline YTensorBase& YTensorBase::unsqueeze_(int dim) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::unsqueeze_(int dim) {
     int d = ndim();
     // 循环索引
     dim = ((dim % (d + 1)) + (d + 1)) % (d + 1);
@@ -850,7 +736,7 @@ inline YTensorBase& YTensorBase::unsqueeze_(int dim) {
     return *this;
 }
 
-inline YTensorBase YTensorBase::squeeze(int dim) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::squeeze(int dim) const {
     YTensorBase op = *this;
     if (dim >= 0) {
         // 移除指定维度
@@ -881,7 +767,7 @@ inline YTensorBase YTensorBase::squeeze(int dim) const {
     return op;
 }
 
-inline YTensorBase& YTensorBase::squeeze_(int dim) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::squeeze_(int dim) {
     if (dim >= 0) {
         int d = ndim();
         dim = (dim % d + d) % d;
@@ -908,7 +794,7 @@ inline YTensorBase& YTensorBase::squeeze_(int dim) {
     return *this;
 }
 
-inline YTensorBase YTensorBase::repeat(const std::vector<int>& times) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::repeat(const std::vector<int>& times) const {
     if (times.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("repeat: times size must match ndim");
     }
@@ -924,12 +810,8 @@ inline YTensorBase YTensorBase::repeat(const std::vector<int>& times) const {
     return op;
 }
 
-template<typename... Args>
-inline YTensorBase YTensorBase::repeat(const Args... times) const {
-    return repeat(std::vector<int>{static_cast<int>(times)...});
-}
 
-inline YTensorBase& YTensorBase::repeat_(const std::vector<int>& times) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::repeat_(const std::vector<int>& times) {
     if (times.size() != static_cast<size_t>(ndim())) {
         throw std::invalid_argument("repeat_: times size must match ndim");
     }
@@ -944,7 +826,7 @@ inline YTensorBase& YTensorBase::repeat_(const std::vector<int>& times) {
     return *this;
 }
 
-inline YTensorBase YTensorBase::unfold(int atDim, int kernel, int stride, int dilation) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::unfold(int atDim, int kernel, int stride, int dilation) const {
     // 参考 ytensor.inl 的实现，保证插入维度与步长计算一致
     if (kernel <= 0 || stride <= 0 || dilation <= 0) {
         throw std::invalid_argument("Invalid kernel/stride/dilation");
@@ -975,7 +857,7 @@ inline YTensorBase YTensorBase::unfold(int atDim, int kernel, int stride, int di
     return op;
 }
 
-inline YTensorBase& YTensorBase::unfold_(int atDim, int kernel, int stride, int dilation) {
+YT_IMPL_INLINE YTensorBase& YTensorBase::unfold_(int atDim, int kernel, int stride, int dilation) {
     if (kernel <= 0 || stride <= 0 || dilation <= 0) {
         throw std::invalid_argument("Invalid kernel/stride/dilation");
     }
@@ -1000,7 +882,7 @@ inline YTensorBase& YTensorBase::unfold_(int atDim, int kernel, int stride, int 
 }
 // non-inplace overloads removed; inplace versions with trailing '_' are provided above
 
-inline YTensorBase YTensorBase::mostContinuousView() const {
+YT_IMPL_INLINE YTensorBase YTensorBase::mostContinuousView() const {
     // 按照stride的大小顺序进行排序
     if (_data == nullptr) {
         YTensorBase op;
@@ -1032,12 +914,12 @@ inline YTensorBase YTensorBase::mostContinuousView() const {
     return op;
 }
 
-inline void YTensorBase::seed(unsigned int seed) {
+YT_IMPL_INLINE void YTensorBase::seed(unsigned int seed) {
     std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
     yt::infos::gen.seed(seed);
 }
 
-inline YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
     YTensorBase op(shape, dtype);
     size_t max = op.size();
     std::normal_distribution<double> dist(0.0, 1.0);
@@ -1070,7 +952,7 @@ inline YTensorBase YTensorBase::_RandnGenerator::operator()(const std::vector<in
     return op;
 }
 
-inline YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<int>& shape, std::string dtype) const {
     YTensorBase op(shape, dtype);
     size_t max = op.size();
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -1099,7 +981,7 @@ inline YTensorBase YTensorBase::_RanduGenerator::operator()(const std::vector<in
     return op;
 }
 
-inline YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype) {
+YT_IMPL_INLINE YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string dtype) {
     YTensorBase op(shape, dtype);
     
     // 检查是否为非POD类型
@@ -1117,7 +999,7 @@ inline YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std::string
     return op;
 }
 
-inline YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string dtype) {
+YT_IMPL_INLINE YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string dtype) {
     YTensorBase op(shape, dtype);
     size_t total = op.size();
     const std::string dt = op.dtype();
@@ -1148,7 +1030,7 @@ inline YTensorBase YTensorBase::ones(const std::vector<int>& shape, std::string 
     return op;
 }
 
-inline YTensorBase YTensorBase::contiguous() const {
+YT_IMPL_INLINE YTensorBase YTensorBase::contiguous() const {
     if (_data == nullptr) {
         return YTensorBase(_shape, _dtype);
     }
@@ -1159,7 +1041,7 @@ inline YTensorBase YTensorBase::contiguous() const {
     return clone();
 }
 
-inline YTensorBase& YTensorBase::contiguous_() {
+YT_IMPL_INLINE YTensorBase& YTensorBase::contiguous_() {
     if (_data == nullptr) return *this;
     if (isContiguous()) {
         return *this;  // 已经连续，无需操作
@@ -1173,7 +1055,7 @@ inline YTensorBase& YTensorBase::contiguous_() {
     return *this;
 }
 
-inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, int axis) {
+YT_IMPL_INLINE YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, int axis) {
     if (tensors.empty()) {
         throw std::invalid_argument("[YTensorBase::concat] Empty tensor list");
     }
@@ -1278,11 +1160,11 @@ inline YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& tensors, 
     return result;
 }
 
-inline YTensorBase YTensorBase::concat(const YTensorBase& other, int axis) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::concat(const YTensorBase& other, int axis) const {
     return YTensorBase::concat({*this, other}, axis);
 }
 
-inline std::vector<YTensorBase> YTensorBase::split(const std::vector<int>& splitSizes, int axis) const {
+YT_IMPL_INLINE std::vector<YTensorBase> YTensorBase::split(const std::vector<int>& splitSizes, int axis) const {
     int d = ndim();
     axis = (axis % d + d) % d;
     
@@ -1309,7 +1191,7 @@ inline std::vector<YTensorBase> YTensorBase::split(const std::vector<int>& split
     return result;
 }
 
-inline std::vector<YTensorBase> YTensorBase::split(int n, int axis) const {
+YT_IMPL_INLINE std::vector<YTensorBase> YTensorBase::split(int n, int axis) const {
     int d = ndim();
     axis = (axis % d + d) % d;
     int axisSize = _shape[axis];
@@ -1326,11 +1208,11 @@ inline std::vector<YTensorBase> YTensorBase::split(int n, int axis) const {
     return split(splitSizes, axis);
 }
 
-inline std::ostream &operator<<(std::ostream &out, const YTensorBase &tensor){
+YT_IMPL_INLINE std::ostream &operator<<(std::ostream &out, const YTensorBase &tensor){
     return tensor._cout(out);
 }
 
-inline std::ostream& YTensorBase::_cout(std::ostream& out) const {
+YT_IMPL_INLINE std::ostream& YTensorBase::_cout(std::ostream& out) const {
     out << "[YTensorBase]:<" << this->dtype() << ">" << std::endl;
     out << "[itemSize]: " << this->size() << std::endl;
     out << "[byteSize]: " << this->size() * this->elementSize() << std::endl;

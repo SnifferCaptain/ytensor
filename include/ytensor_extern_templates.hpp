@@ -6,20 +6,20 @@
  * @date: 2026-01-29
  * 
  * 说明：
- * 当定义了 YT_USE_STATIC_LIB 宏时，此文件为预编译的模板类型提供
+ * 当定义了 YT_USE_LIB=1 时，此文件为预编译的模板类型提供
  * extern template 声明，避免重复实例化，从而加速编译。
  * 
  * 使用方式：
- * 1. 链接 libytensor.a 静态库
- * 2. 在包含 ytensor.hpp 之前定义 YT_USE_STATIC_LIB：
- *    #define YT_USE_STATIC_LIB
+ * 1. 链接预编译的 libytensor 库
+ * 2. 在包含 ytensor.hpp 之前定义 YT_USE_LIB=1：
+ *    #define YT_USE_LIB 1
  *    #include "ytensor.hpp"
  * 
  * 或者通过CMake：
- *    target_compile_definitions(your_target PRIVATE YT_USE_STATIC_LIB)
+ *    target_compile_definitions(your_target PRIVATE YT_USE_LIB=1)
  **********************************************************************/
 
-#ifdef YT_USE_STATIC_LIB
+#if YT_USE_LIB
 
 namespace yt {
 
@@ -27,7 +27,11 @@ namespace yt {
 // YTensor extern template 声明
 //=============================================================================
 
-// 定义 extern 声明宏
+// 默认仅启用 YTensorBase 方法模板的 extern。
+// 若要实验性启用 YTensor 整类 extern，请额外定义 YT_ENABLE_YTENSOR_CLASS_EXTERN。
+#if defined(YT_ENABLE_YTENSOR_CLASS_EXTERN)
+
+// 定义 YTensor extern 声明宏
 #define EXTERN_YTENSOR(Type, Dim) \
     extern template class YTensor<Type, Dim>;
 
@@ -123,6 +127,10 @@ EXTERN_YTENSOR(yt::float8_e4m3, 2)
 EXTERN_YTENSOR(yt::float8_e4m3, 3)
 EXTERN_YTENSOR(yt::float8_e4m3, 4)
 
+#undef EXTERN_YTENSOR
+
+#endif // YT_ENABLE_YTENSOR_CLASS_EXTERN
+
 //=============================================================================
 // YTensorBase 模板方法 extern 声明
 //=============================================================================
@@ -152,9 +160,8 @@ EXTERN_YTENSOR_BASE_METHOD(yt::float16)
 EXTERN_YTENSOR_BASE_METHOD(yt::float8_e5m2)
 EXTERN_YTENSOR_BASE_METHOD(yt::float8_e4m3)
 
-#undef EXTERN_YTENSOR
 #undef EXTERN_YTENSOR_BASE_METHOD
 
 } // namespace yt
 
-#endif // YT_USE_STATIC_LIB
+#endif // YT_USE_LIB

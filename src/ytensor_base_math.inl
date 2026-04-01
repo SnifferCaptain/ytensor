@@ -180,7 +180,7 @@ YTensorBase& YTensorBase::broadcastInplace(Func&& func, Args&&... tensors) {
 // TypeListT: 类型列表（如 yt::types::AllNumericTypes）
 #define YT_IMPL_BINARY_OP(OP, OP_NAME, TypeListT)                                          \
 /* Tensor op Tensor - 非原地版本 */                                                         \
-inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
+YT_IMPL_INLINE YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
     auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
     YTensorBase result(opShape, _dtype);                                                   \
     result.copy_(*this);                                                                   \
@@ -191,7 +191,7 @@ inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {   
     return result;                                                                         \
 }                                                                                          \
 /* Tensor op Tensor - 原地版本 */                                                            \
-inline YTensorBase& YTensorBase::operator OP##=(const YTensorBase& other) {                \
+YT_IMPL_INLINE YTensorBase& YTensorBase::operator OP##=(const YTensorBase& other) {                \
     yt::kernel::dispatch<TypeListT>(_dtype,                                         \
         [&]<typename DType>() {                                                            \
             this->broadcastInplace([](DType& a, const DType& b) { a = a OP b; }, other);   \
@@ -235,7 +235,7 @@ YT_IMPL_BINARY_OP(>>, ">>", yt::types::IntegerTypes)
 
 #define YT_IMPL_CMP_OP(OP, OP_NAME)                                                        \
 /* Tensor op Tensor - 返回 bool 张量 */                                                      \
-inline YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
+YT_IMPL_INLINE YTensorBase YTensorBase::operator OP(const YTensorBase& other) const {              \
     auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});      \
     YTensorBase result(opShape, "bool");                                                   \
     yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,                       \
@@ -311,7 +311,7 @@ YT_IMPL_CMP_OP(!=, "!=")
 
 // ======================== sum ========================
 
-inline YTensorBase YTensorBase::sum(int axis) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::sum(int axis) const {
     int dim = ndim();
     if (dim == 0) {
         throw std::runtime_error("[YTensorBase::sum] Cannot sum a 0-dim tensor");
@@ -348,7 +348,7 @@ inline YTensorBase YTensorBase::sum(int axis) const {
     return op;
 }
 
-inline YTensorBase YTensorBase::sum(const std::vector<int>& axes) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::sum(const std::vector<int>& axes) const {
     // 简单实现：逐个轴求和
     YTensorBase result = *this;
     // 排序axes，从大到小，避免轴索引变化问题
@@ -362,7 +362,7 @@ inline YTensorBase YTensorBase::sum(const std::vector<int>& axes) const {
 
 // ======================== max ========================
 
-inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
+YT_IMPL_INLINE std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
     int dim = ndim();
     if (dim == 0) {
         throw std::runtime_error("[YTensorBase::max] Cannot max a 0-dim tensor");
@@ -409,7 +409,7 @@ inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) const {
     return {values, indices};
 }
 
-inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(const std::vector<int>& axes) const {
+YT_IMPL_INLINE std::pair<YTensorBase, YTensorBase> YTensorBase::max(const std::vector<int>& axes) const {
     // 简单实现：逐个轴求最大值
     YTensorBase values = *this;
     YTensorBase indices;
@@ -438,7 +438,7 @@ inline std::pair<YTensorBase, YTensorBase> YTensorBase::max(const std::vector<in
 // matView 返回的 YTensorBase 的 dtype 为 "YTensorBase<inner_dtype>"
 // 其中 inner_dtype 是原始张量的 dtype
 
-inline YTensorBase YTensorBase::matView() const {
+YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
     int dim = ndim();
     if (dim < 1) {
         throw std::runtime_error("[YTensorBase::matView] Tensor must have at least 1 dimension");
@@ -572,7 +572,7 @@ inline YTensorBase YTensorBase::matView() const {
 
 // 模板化的naive matmul实现（零后端）- 使用broadcastInplace简化
 template<typename DType>
-inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase& other) {
+YT_IMPL_INLINE YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase& other) {
     // 获取matView
     auto thisMatView = self.matView();
     auto otherMatView = other.matView();
@@ -613,7 +613,7 @@ inline YTensorBase matmul_naive_impl(const YTensorBase& self, const YTensorBase&
 }
 
 template<typename DType>
-inline YTensorBase masked_matmul_naive_impl(
+YT_IMPL_INLINE YTensorBase masked_matmul_naive_impl(
     const YTensorBase& self,
     const YTensorBase& other,
     const YTensorBase& mask,
@@ -657,7 +657,7 @@ inline YTensorBase masked_matmul_naive_impl(
     return op;
 }
 
-inline YTensorBase YTensorBase::matmul(const YTensorBase& other, 
+YT_IMPL_INLINE YTensorBase YTensorBase::matmul(const YTensorBase& other, 
                                        yt::infos::MatmulBackend backend) const {
     // 验证维度
     if (ndim() < 1 || other.ndim() < 1) {
@@ -726,7 +726,7 @@ inline YTensorBase YTensorBase::matmul(const YTensorBase& other,
     }
 }
 
-inline YTensorBase YTensorBase::masked_matmul(
+YT_IMPL_INLINE YTensorBase YTensorBase::masked_matmul(
     const YTensorBase& other,
     const YTensorBase& mask,
     double maskedValue,
@@ -790,7 +790,7 @@ inline YTensorBase YTensorBase::masked_matmul(
     }
 }
 
-inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) const {
     YTensorBase result(_shape, _dtype);
     yt::kernel::dispatch<yt::types::AllNumericTypes>(_dtype,
         [&]<typename DType>() {
@@ -803,7 +803,7 @@ inline YTensorBase YTensorBase::matmul_naive_backend(const YTensorBase& other) c
     return result;
 }
 
-inline YTensorBase YTensorBase::masked_matmul_naive_backend(
+YT_IMPL_INLINE YTensorBase YTensorBase::masked_matmul_naive_backend(
     const YTensorBase& other,
     const YTensorBase& mask,
     double maskedValue) const {
@@ -820,11 +820,11 @@ inline YTensorBase YTensorBase::masked_matmul_naive_backend(
 }
 
 
-inline void YTensorBase::throwOperatorNotSupport(const std::string& typeName, const std::string& opName) {
+YT_IMPL_INLINE void YTensorBase::throwOperatorNotSupport(const std::string& typeName, const std::string& opName) {
     throw std::runtime_error("[YTensorBase] Operator " + opName + " not support for type " + typeName);
 }
 
-inline void YTensorBase::throwShapeNotMatch(const std::string& opName, const std::vector<int>& otherShape) const {
+YT_IMPL_INLINE void YTensorBase::throwShapeNotMatch(const std::string& opName, const std::vector<int>& otherShape) const {
     std::string thisShapeStr = "[";
     for (size_t i = 0; i < _shape.size(); ++i) {
         thisShapeStr += std::to_string(_shape[i]);
@@ -856,19 +856,19 @@ using EigenConstStridedMap = Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, E
 
 /// @brief 从YTensorBase创建Eigen Map
 template<typename T>
-inline auto toEigenMap(YTensorBase& mat) {
+YT_IMPL_INLINE auto toEigenMap(YTensorBase& mat) {
     return EigenStridedMap<T>(mat.template data<T>(), mat.shape(0), mat.shape(1), 
                               Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(mat.stride_(0), mat.stride_(1)));
 }
 
 template<typename T>
-inline auto toEigenConstMap(const YTensorBase& mat) {
+YT_IMPL_INLINE auto toEigenConstMap(const YTensorBase& mat) {
     return EigenConstStridedMap<T>(mat.template data<T>(), mat.shape(0), mat.shape(1), 
                                    Eigen::Stride<Eigen::Dynamic, Eigen::Dynamic>(mat.stride_(0), mat.stride_(1)));
 }
 
 /// @brief Eigen后端主接口 - 简化版，借鉴YTensor设计
-inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) const {
     int selfDim = ndim(), otherDim = other.ndim();
     int ah = (selfDim >= 2) ? shape(selfDim - 2) : 1;
     int aw = shape(selfDim - 1), bw = other.shape(otherDim - 1);
@@ -961,7 +961,7 @@ inline YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& other) c
 
 /// @brief 通用Eigen单元操作 - 对每个2D矩阵应用func
 template<typename Func>
-inline YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opName) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opName) const {
     if (ndim() < 2) throw std::runtime_error("[YTensorBase::" + opName + "] requires at least 2 dimensions");
     
     // 扩展浮点类型转换为float32处理
@@ -996,7 +996,7 @@ inline YTensorBase YTensorBase::applyEigenOp(Func&& func, const std::string& opN
 
 /// @brief 通用Eigen二元操作 - 支持广播（使用broadcastInplace简化）
 template<typename Func>
-inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Func&& func, const std::string& opName) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Func&& func, const std::string& opName) const {
     if (ndim() < 2 || other.ndim() < 2) throw std::runtime_error("[YTensorBase::" + opName + "] requires at least 2 dimensions");
     if (_dtype != other._dtype) throw std::runtime_error("[YTensorBase::" + opName + "] dtype mismatch");
     
@@ -1040,7 +1040,7 @@ inline YTensorBase YTensorBase::applyEigenBinaryOp(const YTensorBase& other, Fun
 #endif // YT_USE_EIGEN
 
 #if YT_USE_AVX2
-inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) const {
     if (_dtype != "float32" && _dtype != "float16") {
 #if YT_USE_EIGEN
         return matmul_eigen_backend(other);
@@ -1175,7 +1175,7 @@ inline YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& other) co
     );
 }
 
-inline YTensorBase YTensorBase::masked_matmul_avx2_backend(
+YT_IMPL_INLINE YTensorBase YTensorBase::masked_matmul_avx2_backend(
     const YTensorBase& other,
     const YTensorBase& mask,
     double maskedValue) const {

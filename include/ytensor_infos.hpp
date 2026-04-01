@@ -21,6 +21,36 @@
 #include <vector>
 #include <memory>
 
+#ifndef YT_USE_LIB
+    #define YT_USE_LIB 0
+#endif
+
+/// @brief 控制是否启用Eigen库的宏，默认启用
+#ifndef YT_USE_EIGEN
+    #if __has_include(<Eigen/Core>)
+        #define YT_USE_EIGEN 1
+    #else
+        #define YT_USE_EIGEN 0
+    #endif
+#endif
+
+/// @brief 控制是否启用AVX2+FMA优化的宏，默认根据编译器支持自动检测
+#ifndef YT_USE_AVX2
+    #if defined(__AVX2__) && defined(__FMA__)
+        #define YT_USE_AVX2 1
+    #else
+        #define YT_USE_AVX2 0
+    #endif
+#endif
+
+#ifndef YT_IMPL_INLINE
+    #if defined(YT_LIBRARY_IMPLEMENTATION)
+        #define YT_IMPL_INLINE
+    #else
+        #define YT_IMPL_INLINE inline
+    #endif
+#endif
+
 namespace yt::infos{
     static constexpr double minParOps = 29609.;
     static constexpr double flopAdd = 1.;
@@ -76,10 +106,14 @@ namespace yt::infos{
 
     /// @brief 类型注册表
     /// @return 返回类型注册表的引用
+    #if YT_USE_LIB
+    std::unordered_map<std::string, yt::infos::TypeRegItem>& getTypeRegistry();
+    #else
     inline auto& getTypeRegistry() {
         static std::unordered_map<std::string, yt::infos::TypeRegItem> registry;
         return registry;
     }
+    #endif
 
     /// @brief 文件头标识
     static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
@@ -87,24 +121,6 @@ namespace yt::infos{
     /// @brief 文件版本
     static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
 
-    /// @brief 控制是否启用Eigen库的宏，默认启用
-    #ifndef YT_USE_EIGEN
-        #if __has_include(<Eigen/Core>)
-            #define YT_USE_EIGEN 1
-        #else
-            #define YT_USE_EIGEN 0
-        #endif
-    #endif
-
-    /// @brief 控制是否启用AVX2+FMA优化的宏，默认根据编译器支持自动检测
-    #ifndef YT_USE_AVX2
-        #if defined(__AVX2__) && defined(__FMA__)
-            #define YT_USE_AVX2 1
-        #else
-            #define YT_USE_AVX2 0
-        #endif
-    #endif
-    
     /// @brief 矩阵乘法后端枚举
     enum class MatmulBackend {
         Naive = 0,  // naive实现，无依赖

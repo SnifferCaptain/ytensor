@@ -15,12 +15,76 @@
 #include <iomanip>
 #include <optional>
 #include <functional>
+#include <sstream>
 #include "./ytensor_concepts.hpp"
 #include "./ytensor_infos.hpp"
 #include "./types/bfloat16.hpp"
 #include "./types/float_spec.hpp"
 
 namespace yt::types {
+
+inline std::optional<std::reference_wrapper<const yt::infos::TypeRegItem>>
+getBuiltinTypeInfo(const std::string& typeName) {
+    static const std::unordered_map<std::string, yt::infos::TypeRegItem> builtins = [] {
+        std::unordered_map<std::string, yt::infos::TypeRegItem> m;
+        auto addPod = [&](const std::string& name, int32_t size) {
+            yt::infos::TypeRegItem item;
+            item.name = name;
+            item.size = size;
+            item.isPOD = true;
+            m.emplace(name, std::move(item));
+        };
+        addPod("float32", sizeof(float));
+        addPod("float64", sizeof(double));
+        addPod("int8", sizeof(int8_t));
+        addPod("int16", sizeof(int16_t));
+        addPod("int32", sizeof(int32_t));
+        addPod("int64", sizeof(int64_t));
+        addPod("uint8", sizeof(uint8_t));
+        addPod("uint16", sizeof(uint16_t));
+        addPod("uint32", sizeof(uint32_t));
+        addPod("uint64", sizeof(uint64_t));
+        addPod("bool", sizeof(bool));
+        addPod("bfloat16", sizeof(yt::bfloat16));
+        addPod("float16", sizeof(yt::float16));
+        addPod("float8_e5m2", sizeof(yt::float8_e5m2));
+        addPod("float8_e4m3", sizeof(yt::float8_e4m3));
+        addPod("float8_e8m0", sizeof(yt::float8_e8m0));
+        addPod("float8_ue8m0", sizeof(yt::float8_ue8m0));
+
+        yt::infos::TypeRegItem str;
+        str.name = "string";
+        str.size = static_cast<int32_t>(sizeof(std::string));
+        str.isPOD = false;
+        str.toString = [](const void* data) -> std::string {
+            return *reinterpret_cast<const std::string*>(data);
+        };
+        str.defaultConstruct = [](void* dest) {
+            new (dest) std::string();
+        };
+        str.copyConstruct = [](void* dest, const void* src) {
+            new (dest) std::string(*reinterpret_cast<const std::string*>(src));
+        };
+        str.destructor = [](void* ptr) {
+            reinterpret_cast<std::string*>(ptr)->~basic_string();
+        };
+        str.serialize = [](const void* src) -> std::vector<char> {
+            const auto& s = *reinterpret_cast<const std::string*>(src);
+            return std::vector<char>(s.begin(), s.end());
+        };
+        str.deserialize = [](void* dst, const char* bytes, size_t len) {
+            reinterpret_cast<std::string*>(dst)->assign(bytes, len);
+        };
+        m.emplace("string", std::move(str));
+        return m;
+    }();
+
+    auto it = builtins.find(typeName);
+    if (it != builtins.end()) {
+        return std::cref(it->second);
+    }
+    return std::nullopt;
+}
 
 /// @brief 编译时类型列表模板
 template<typename... Types>
@@ -42,6 +106,20 @@ template<typename... T1, typename... T2>
 struct TypeListConcat<TypeList<T1...>, TypeList<T2...>> {
     using type = TypeList<T1..., T2...>;
 };
+
+/// @brief 判断类型是否属于某个 TypeList
+template<typename T, typename List>
+struct TypeListContains;
+
+template<typename T>
+struct TypeListContains<T, TypeList<>> : std::false_type {};
+
+template<typename T, typename Head, typename... Tail>
+struct TypeListContains<T, TypeList<Head, Tail...>>
+    : std::bool_constant<std::is_same_v<std::remove_cv_t<T>, Head> || TypeListContains<T, TypeList<Tail...>>::value> {};
+
+template<typename T, typename List>
+inline constexpr bool TypeListContains_v = TypeListContains<T, List>::value;
 
 /// @brief 标准整数类型（有符号 + 无符号）
 using StandardIntTypes = TypeList<
@@ -69,6 +147,10 @@ using IntegerTypes = StandardIntTypes;
 
 /// @brief Eigen 原生支持的类型（不含扩展浮点类型）
 using EigenNativeTypes = StandardNumericTypes;
+
+/// @brief 判断类型是否为库内置数值类型（用于数学编译后端）
+template<typename T>
+inline constexpr bool is_builtin_numeric_v = TypeListContains_v<std::remove_cv_t<T>, AllNumericTypes>;
 
 // dtype 规范化命名
 
@@ -256,6 +338,9 @@ constexpr int32_t getTypeSize() {
 /// @param typeName 类型名称
 /// @return 类型大小（字节），未知类型返回0
 inline int32_t getTypeSize(const std::string& typeName) {
+    if (auto builtin = getBuiltinTypeInfo(typeName); builtin) {
+        return builtin->get().size;
+    }
     if (typeName == "float32") return 4;
     else if (typeName == "float64") return 8;
     else if (typeName == "int8") return 1;
@@ -291,6 +376,9 @@ inline int32_t getTypeSize(const std::string& typeName) {
 /// @param typeName 类型名称
 /// @return 类型注册信息的optional引用，未找到返回std::nullopt
 inline std::optional<std::reference_wrapper<const yt::infos::TypeRegItem>> getTypeInfo(const std::string& typeName) {
+    if (auto builtin = getBuiltinTypeInfo(typeName); builtin) {
+        return builtin;
+    }
     auto& registry = yt::infos::getTypeRegistry();
     for (auto& [key, value] : registry) {
         if (value.name == typeName) {
@@ -304,14 +392,8 @@ inline std::optional<std::reference_wrapper<const yt::infos::TypeRegItem>> getTy
 /// @param typeName 类型名称
 /// @return true=POD类型，不需要特殊析构处理
 inline bool isPODType(const std::string& typeName) {
-    // 内置类型都是POD
-    if (typeName == "float32" || typeName == "float64" ||
-        typeName == "int8" || typeName == "int16" || typeName == "int32" || typeName == "int64" ||
-        typeName == "uint8" || typeName == "uint16" || typeName == "uint32" || typeName == "uint64" ||
-        typeName == "bool" || typeName == "bfloat16" ||
-        typeName == "float16" || typeName == "float8_e5m2" || 
-        typeName == "float8_e4m3" || typeName == "float8_e8m0" || typeName == "float8_ue8m0") {
-        return true;
+    if (auto builtin = getBuiltinTypeInfo(typeName); builtin) {
+        return builtin->get().isPOD;
     }
     // 检查注册的自定义类型
     auto info = getTypeInfo(typeName);

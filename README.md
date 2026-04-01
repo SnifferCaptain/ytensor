@@ -1,6 +1,6 @@
 # YTensor
 
-> 现代 C++20 轻量级多维张量库 —— header-only，极简集成，科研/竞赛/工程皆宜
+> 现代 C++20 轻量级多维张量库 —— 默认 header-only，支持 single-header 打包与 `YT_USE_LIB` 加速后端
 
 ## 特性亮点
 
@@ -123,6 +123,18 @@ std::cout << std::endl;
 
 ---
 
+## 三种使用形态（接口完全等价）
+
+YTensor 现在保持三种并存形态，外部 API 与用法保持一致：
+
+- **默认 header-only**（标准形态）：不定义任何库后端宏，直接包含 `ytensor.hpp` 或 `ytensor_single.hpp`。
+- **single-header**（发布打包形态）：使用 `single-header/ytensor_single.hpp`，行为与默认 header-only 一致。
+- **`YT_USE_LIB`**（编译加速后端）：定义 `YT_USE_LIB=1` 并链接 `libytensor`，仅改变实现归属以减少重复编译。
+
+> `YT_USE_LIB` 的唯一额外要求是 **链接库**；API、返回类型、支持类型集合与自定义类型能力保持一致。
+
+---
+
 ## 🧩 Header-only 零依赖
 只需下载 `single-header/ytensor_single.hpp`，放到你的工程目录：
 
@@ -138,6 +150,25 @@ int main() {
 > 只需一个头文件，零依赖，可以快速在任意 C++20 项目中使用。
 > 
 > **注意：** YTensor 使用了大量 C++20 特性，请确保你的编译器支持 C++20。
+
+### `YT_USE_LIB` 加速后端示例
+
+如果你希望减少用户侧重复编译，可使用预编译库后端：
+
+```cpp
+#define YT_USE_LIB 1
+#include "ytensor.hpp"   // 或 include <lib/include/ytensor.hpp>
+```
+
+```bash
+# 示例：链接 libytensor（Linux）
+g++ -std=c++20 -O2 -fopenmp main.cpp \
+  -I/path/to/ytensor \
+  -I/path/to/ytensor/lib/include \
+  -L/path/to/ytensor/lib/bin \
+  -Wl,-rpath,/path/to/ytensor/lib/bin \
+  -lytensor -lz -o main
+```
 
 ---
 
@@ -274,7 +305,7 @@ io.load(read1, "name1");    // 数据类型<float, 3>
 io.load(base0, "name0");    // 也可以加载到YTensorBase内
 io.close();
 
-// ⚠️：io模块对非POD类型（如std::string这种内部实现包含指针的）并不支持，后续有计划添加支持。
+// 支持非POD类型（如 std::string）I/O；自定义类型可通过 registerType 提供序列化/反序列化后进行保存与加载。
 ```
 同时，还可以使用example/convert目录下的转换函数。实现部分的数据格式转换（如numpy等）。
 > 适合模型权重、数据集等便捷存储。
@@ -326,11 +357,11 @@ io.close();
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
 │  ├─ ytensor_core.hpp                              | YTensor核心类
 │  └─ ytensor_types.hpp                             | 类型相关
-├─ lib/                                             | 预实例化静态库 【规划中】
-│  ├─ instantiate_config.def                        | 实例化配置文件
-│  ├─ ytensor_instantiate.cpp                       | 实例化实现
-│  ├─ CMakeLists.txt                                | 构建配置
-│  └─ README.md                                     | 使用说明
+├─ lib/                                             | `YT_USE_LIB` 预编译后端
+│  ├─ include/                                      | 对外头文件（含 ytensor.hpp）
+│  ├─ src/                                          | 库实现入口
+│  ├─ bin/                                          | 库产物目录（如 libytensor.so）
+│  └─ CMakeLists.txt                                | 构建配置
 ├─ single-header/                                   | 单头文件版本
 │  ├─ ytensor_single.hpp                            | 单头文件版本的YTensor，包含所有功能
 │  └─ packer.py                                     | 单头文件打包脚本
@@ -358,4 +389,3 @@ io.close();
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！
-

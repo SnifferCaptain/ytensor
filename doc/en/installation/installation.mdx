@@ -1,6 +1,12 @@
 # Installation Guide
 
-YTensor is a header-only C++ library, which means you don't need to compile or link any library files—simply include the headers in your project to start using it.
+YTensor supports three equivalent usage modes:
+
+- **Default header-only** (standard mode)
+- **Single-header package** (`ytensor_single.hpp`)
+- **`YT_USE_LIB` accelerated backend** (same API, plus one extra link step)
+
+By default, YTensor remains header-only. `YT_USE_LIB` only changes implementation ownership (precompiled runtime core) and does not change public API or custom-type support.
 
 ## System Requirements
 
@@ -88,14 +94,46 @@ If you need to modify the source code or contribute to development, you can use 
 
 3. **Include the Main Header**
 
-   ```cpp
-   #include "ytensor.hpp"
+    ```cpp
+    #include "ytensor.hpp"
    
    int main() {
        yt::YTensor<float, 2> tensor(3, 4);
        return 0;
-   }
+    }
+    ```
+
+### Method 3: Using `YT_USE_LIB` (Compile-time Acceleration)
+
+Use this mode when you want to reduce repeated compilation in consumer TUs.
+
+1. **Build the precompiled backend library**
+
+   ```bash
+   cd /path/to/ytensor
+   cmake -S . -B build-lib -DYTENSOR_BUILD_LIB=ON
+   cmake --build build-lib -j8
    ```
+
+2. **Enable `YT_USE_LIB` and link `libytensor`**
+
+   ```cpp
+   #define YT_USE_LIB
+   #include "ytensor.hpp"
+   ```
+
+   ```bash
+   g++ -std=c++20 -O2 -fopenmp main.cpp \
+     -I/path/to/ytensor \
+     -I/path/to/ytensor/lib/include \
+     -L/path/to/ytensor/lib/bin \
+     -Wl,-rpath,/path/to/ytensor/lib/bin \
+     -lytensor -lz -o main
+   ```
+
+:::info
+In `YT_USE_LIB` mode, the **only extra requirement** is linking the prebuilt library. API, return types, semantics, supported type set, and custom-type workflow stay equivalent.
+:::
 
 ## Enabling Optional Features
 
@@ -281,5 +319,4 @@ If you see the output, YTensor has been successfully installed!
 - Check [Build Options](./build_options.mdx) for more compilation configurations.
 - Read [Quick Start](../api/guides/quick_start.mdx) to begin using YTensor.
 - View [API Reference](../api/YTensor/overview.mdx) for detailed functionality.
-
 

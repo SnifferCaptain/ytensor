@@ -9,6 +9,7 @@ YTensor 提供了多个编译时宏定义，用于控制库的功能和性能特
 | `YT_USE_EIGEN` | 自动检测 | 是否启用 Eigen 库作为矩阵乘法后端 |
 | `YT_USE_AVX2` | 自动检测 | 是否启用 AVX2+FMA SIMD 优化 |
 | `YT_PREINSTANTIATE_TEMPLATES` | `1` | 是否预实例化常用类型模板 |
+| `YT_USE_LIB` | `0` | 使用预编译 runtime 后端（需链接 `libytensor`） |
 
 ## YT_USE_EIGEN
 
@@ -204,6 +205,46 @@ g++ -std=c++20 -DYT_PREINSTANTIATE_TEMPLATES=0 main.cpp -o main
 - 对于大型项目或频繁使用多种数据类型：保持默认启用
 - 对于小型项目或只使用单一数据类型：可以考虑禁用
 :::
+
+---
+
+## YT_USE_LIB
+
+### 说明
+
+将 YTensor 切换到预编译后端，用于承载封闭 runtime 核心（`YTensorBase` 的 runtime 分发 / copy-cast-clone / I/O 相关实现），同时保持开放模板逻辑仍在头文件。
+
+### 默认行为
+
+默认关闭（`YT_USE_LIB = 0`）。关闭时保持完整 header-only 行为。
+
+### 设置方式
+
+可在包含头文件前定义宏，或通过编译/CMake 参数设置：
+
+```cpp
+#define YT_USE_LIB
+#include "ytensor.hpp"
+```
+
+```bash
+g++ -std=c++20 -DYT_USE_LIB main.cpp \
+  -I/path/to/ytensor -I/path/to/ytensor/lib/include \
+  -L/path/to/ytensor/lib/bin -Wl,-rpath,/path/to/ytensor/lib/bin \
+  -lytensor -lz -o main
+```
+
+```cmake
+target_compile_definitions(my_target PRIVATE YT_USE_LIB)
+target_include_directories(my_target PRIVATE /path/to/ytensor /path/to/ytensor/lib/include)
+target_link_directories(my_target PRIVATE /path/to/ytensor/lib/bin)
+target_link_libraries(my_target PRIVATE ytensor ZLIB::ZLIB OpenMP::OpenMP_CXX)
+```
+
+### 影响
+
+- **唯一差异**：额外链接 `libytensor`。
+- 公开 API、返回类型、支持类型集合与自定义类型工作流与 header-only/single-header 保持等价。
 
 ---
 
