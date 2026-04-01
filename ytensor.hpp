@@ -48,3 +48,8 @@
 #include "src/ytensor_math.inl"
 
 #include "src/ytensor_function.inl"
+
+// In YT_USE_LIB consumer mode, suppress repeated builtin template instantiation.
+#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+#include "include/ytensor_extern_templates.hpp"
+#endif
