@@ -129,7 +129,7 @@ YTensor 现在保持三种并存形态，外部 API 与用法保持一致：
 
 - **默认 header-only**（标准形态）：不定义任何库后端宏，直接包含 `ytensor.hpp` 或 `ytensor_single.hpp`。
 - **single-header**（发布打包形态）：使用 `single-header/ytensor_single.hpp`，行为与默认 header-only 一致。
-- **`YT_USE_LIB`**（编译加速后端）：定义 `YT_USE_LIB` 并链接 `libytensor`，仅改变实现归属以减少重复编译。
+- **`YT_USE_LIB`**（编译加速后端）：定义 `YT_USE_LIB=1` 并链接 `libytensor`，仅改变实现归属以减少重复编译。
 
 > `YT_USE_LIB` 的唯一额外要求是 **链接库**；API、返回类型、支持类型集合与自定义类型能力保持一致。
 
@@ -156,7 +156,7 @@ int main() {
 如果你希望减少用户侧重复编译，可使用预编译库后端：
 
 ```cpp
-#define YT_USE_LIB
+#define YT_USE_LIB 1
 #include "ytensor.hpp"   // 或 include <lib/include/ytensor.hpp>
 ```
 
@@ -358,7 +358,7 @@ io.close();
 │  ├─ ytensor_core.hpp                              | YTensor核心类
 │  └─ ytensor_types.hpp                             | 类型相关
 ├─ lib/                                             | `YT_USE_LIB` 预编译后端
-│  ├─ include/                                      | 对外头文件（含 ytensor.hpp / ytensor_single.hpp）
+│  ├─ include/                                      | 对外头文件（含 ytensor.hpp）
 │  ├─ src/                                          | 库实现入口
 │  ├─ bin/                                          | 库产物目录（如 libytensor.so）
 │  └─ CMakeLists.txt                                | 构建配置

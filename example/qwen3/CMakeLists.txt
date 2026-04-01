@@ -24,6 +24,13 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(ZLIB REQUIRED)
 find_package(OpenMP REQUIRED)
 
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftime-trace")
+endif()
+
+option(YT_USE_LIB "Use prebuilt ytensor shared library backend" OFF)
+set(YTENSOR_LIB_ROOT "" CACHE PATH "Path to ytensor/lib directory (contains include/ and bin/)")
+
 set(SRC
 	main.cpp
 	src/qwen3.cpp
@@ -42,6 +49,23 @@ target_link_libraries(${PROJECT_NAME}
 	OpenMP::OpenMP_CXX
 	pthread
 )
+
+if(YT_USE_LIB)
+	if(NOT YTENSOR_LIB_ROOT)
+		set(YTENSOR_LIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../lib")
+	endif()
+	target_compile_definitions(${PROJECT_NAME} PRIVATE YT_USE_LIB)
+	target_include_directories(${PROJECT_NAME} PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/../../
+	)
+	target_include_directories(${PROJECT_NAME} PRIVATE
+		${YTENSOR_LIB_ROOT}/include
+	)
+	target_link_directories(${PROJECT_NAME} PRIVATE
+		${YTENSOR_LIB_ROOT}/bin
+	)
+	target_link_libraries(${PROJECT_NAME} ytensor)
+endif()
 
 if(use_blas)
 	find_package(BLAS REQUIRED)

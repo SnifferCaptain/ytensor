@@ -6,20 +6,20 @@
  * @date: 2026-01-29
  * 
  * 说明：
- * 当定义了 YT_USE_LIB 宏时，此文件为预编译的模板类型提供
+ * 当定义了 YT_USE_LIB=1 时，此文件为预编译的模板类型提供
  * extern template 声明，避免重复实例化，从而加速编译。
  * 
  * 使用方式：
- * 1. 链接 libytensor.a 静态库
- * 2. 在包含 ytensor.hpp 之前定义 YT_USE_LIB：
- *    #define YT_USE_LIB
+ * 1. 链接预编译的 libytensor 库
+ * 2. 在包含 ytensor.hpp 之前定义 YT_USE_LIB=1：
+ *    #define YT_USE_LIB 1
  *    #include "ytensor.hpp"
  * 
  * 或者通过CMake：
- *    target_compile_definitions(your_target PRIVATE YT_USE_LIB)
+ *    target_compile_definitions(your_target PRIVATE YT_USE_LIB=1)
  **********************************************************************/
 
-#ifdef YT_USE_LIB
+#if YT_USE_LIB
 
 namespace yt {
 

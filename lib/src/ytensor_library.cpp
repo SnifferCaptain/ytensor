@@ -1,4 +1,4 @@
-#define YT_USE_LIB
+#define YT_USE_LIB 1
 #define YT_LIBRARY_IMPLEMENTATION
 #include "../../ytensor.hpp"
 

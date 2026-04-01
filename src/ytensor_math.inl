@@ -292,7 +292,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     }
     
     if constexpr (yt::types::is_builtin_numeric_v<T>) {
-#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+#if YT_USE_LIB && !defined(YT_LIBRARY_IMPLEMENTATION)
         auto baseResult = static_cast<const yt::YTensorBase&>(*this).matmul(
             static_cast<const yt::YTensorBase&>(other), backend);
         return yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})>(baseResult);
@@ -337,7 +337,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         );
     }
 
-#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+#if YT_USE_LIB && !defined(YT_LIBRARY_IMPLEMENTATION)
     if constexpr (yt::types::is_builtin_numeric_v<T>) {
         auto baseResult = static_cast<const yt::YTensorBase&>(*this).masked_matmul(
             static_cast<const yt::YTensorBase&>(other),
@@ -383,7 +383,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         throwShapeNotMatch("masked_matmul", other.shape());
     }
 
-#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+#if YT_USE_LIB && !defined(YT_LIBRARY_IMPLEMENTATION)
     (void)backend;
     if constexpr (yt::types::is_builtin_numeric_v<T>) {
         return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
@@ -858,7 +858,7 @@ yt::YTensor<T, dim>::EigenMatrixMap yt::YTensor<T, dim>::matViewEigen() const re
     }
 }
 
- #if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
+#if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_eigen_backend(const yt::YTensor<T, dim1>& other) const{    
     int aw = this->shape(-1);
@@ -951,7 +951,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
 
 /////////////// AVX2 GEMM 后端 ///////////////
 #if YT_USE_AVX2
-#if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
+#if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_avx2_backend(const yt::YTensor<T, dim1>& other) const requires std::is_same_v<T, float> {    

@@ -8,7 +8,7 @@
 
 namespace yt::io {
 
-inline std::string checkCompressMethod(const std::string& method) {
+YT_IMPL_INLINE std::string checkCompressMethod(const std::string& method) {
     if (method == "zlib" ||
         method.empty()
     ) {
@@ -21,7 +21,7 @@ inline std::string checkCompressMethod(const std::string& method) {
     }
 }
 
-inline std::vector<char> string2data(const std::string& str) {
+YT_IMPL_INLINE std::vector<char> string2data(const std::string& str) {
     uint32_t length = static_cast<uint32_t>(str.length());
     std::vector<char> op(sizeof(uint32_t) + length);
     std::memcpy(op.data(), &length, sizeof(uint32_t));
@@ -31,7 +31,7 @@ inline std::vector<char> string2data(const std::string& str) {
     return op;
 }
 
-inline std::string data2string(std::fstream& file, bool seek) {
+YT_IMPL_INLINE std::string data2string(std::fstream& file, bool seek) {
     std::streampos originalPos = file.tellg();
     uint32_t length;
     if (!file.read(reinterpret_cast<char*>(&length), sizeof(uint32_t))) {
@@ -50,7 +50,7 @@ inline std::string data2string(std::fstream& file, bool seek) {
     return op;
 }
 
-inline std::vector<char> data2array(std::fstream& file, bool seek) {
+YT_IMPL_INLINE std::vector<char> data2array(std::fstream& file, bool seek) {
     std::streampos originalPos = file.tellg();
     uint64_t count;
     if (!file.read(reinterpret_cast<char*>(&count), sizeof(uint64_t))) {
@@ -69,7 +69,7 @@ inline std::vector<char> data2array(std::fstream& file, bool seek) {
     return op;
 }
 
-inline std::vector<char> decompressData(const std::vector<char>& input, size_t decompressedSize, const std::string& method) {
+YT_IMPL_INLINE std::vector<char> decompressData(const std::vector<char>& input, size_t decompressedSize, const std::string& method) {
     if (input.empty()) {
         return {};
     }
@@ -144,7 +144,7 @@ inline std::vector<char> decompressData(const std::vector<char>& input, size_t d
     }
 }
 
-inline std::vector<char> decompressData(std::fstream& file, size_t compressedSize, size_t decompressedSize, bool seek, const std::string& method) {
+YT_IMPL_INLINE std::vector<char> decompressData(std::fstream& file, size_t compressedSize, size_t decompressedSize, bool seek, const std::string& method) {
     if (compressedSize == 0) {
         return {};
     }
@@ -249,11 +249,11 @@ inline std::vector<char> decompressData(std::fstream& file, size_t compressedSiz
     return output;
 }
 
-inline YTensorIO::~YTensorIO() {
+YT_IMPL_INLINE YTensorIO::~YTensorIO() {
     close();
 }
 
-inline bool YTensorIO::open(const std::string& fileName, int fileMode) {
+YT_IMPL_INLINE bool YTensorIO::open(const std::string& fileName, int fileMode) {
     close();
     _fileName = fileName;
     _fileMode = fileMode;
@@ -310,7 +310,7 @@ inline bool YTensorIO::open(const std::string& fileName, int fileMode) {
     }
 }
 
-inline void YTensorIO::close() {
+YT_IMPL_INLINE void YTensorIO::close() {
     if (_file.is_open()) {
         if (_fileMode == yt::io::Write || _fileMode == yt::io::Append) {
             if (_fileMode == yt::io::Append) {
@@ -416,7 +416,7 @@ inline void YTensorIO::close() {
     _fileName.clear();
 }
 
-inline std::vector<std::string> YTensorIO::getTensorNames() const {
+YT_IMPL_INLINE std::vector<std::string> YTensorIO::getTensorNames() const {
     std::vector<std::string> names;
     for (const auto& tensorInfo : _tensorInfos) {
         names.push_back(tensorInfo.name);
@@ -424,7 +424,7 @@ inline std::vector<std::string> YTensorIO::getTensorNames() const {
     return names;
 }
 
-inline TensorInfo YTensorIO::getTensorInfo(const std::string& name) const {
+YT_IMPL_INLINE TensorInfo YTensorIO::getTensorInfo(const std::string& name) const {
     if (name.empty()) {
         // 缺省取第一个张量
         if (_tensorInfos.empty()) {
@@ -442,7 +442,7 @@ inline TensorInfo YTensorIO::getTensorInfo(const std::string& name) const {
     throw std::runtime_error("Tensor not found: " + name);
 }
 
-inline bool YTensorIO::validateFile() {
+YT_IMPL_INLINE bool YTensorIO::validateFile() {
     if (!_file.is_open() || !_fileMode) {
         return false;
     }
@@ -455,7 +455,7 @@ inline bool YTensorIO::validateFile() {
     return magic == yt::io::YTENSOR_FILE_MAGIC;
 }
 
-inline bool YTensorIO::readHeader() {
+YT_IMPL_INLINE bool YTensorIO::readHeader() {
     if (!_file.is_open()) {
         return false;
     }
@@ -484,7 +484,7 @@ inline bool YTensorIO::readHeader() {
     return true;
 }
 
-inline bool YTensorIO::writeHeader() {
+YT_IMPL_INLINE bool YTensorIO::writeHeader() {
     if (!_file.is_open() || _fileMode == yt::io::Read) {
         return false;
     }
@@ -505,7 +505,7 @@ inline bool YTensorIO::writeHeader() {
     return true;
 }
 
-inline bool YTensorIO::readIndex() {
+YT_IMPL_INLINE bool YTensorIO::readIndex() {
     if (!_file.is_open()) {
         return false;
     }
@@ -558,7 +558,7 @@ inline bool YTensorIO::readIndex() {
     return true;
 }
 
-inline bool YTensorIO::writeIndex(std::vector<uint64_t> offsets) {
+YT_IMPL_INLINE bool YTensorIO::writeIndex(std::vector<uint64_t> offsets) {
     if (!_file.is_open() || _fileMode == yt::io::Read) {
         return false;
     }
@@ -579,7 +579,7 @@ inline bool YTensorIO::writeIndex(std::vector<uint64_t> offsets) {
 /// @param tensor 要保存的张量（必须是连续的）
 /// @param info 张量信息（将被填充）
 /// @return 压缩后的数据
-inline std::vector<char> YTensorIO::encDense(const yt::YTensorBase& tensor) {
+YT_IMPL_INLINE std::vector<char> YTensorIO::encDense(const yt::YTensorBase& tensor) {
     size_t dataSize = tensor.size() * tensor.elementSize();
     std::vector<char> rawData(dataSize);
     std::memcpy(rawData.data(), tensor.contiguous().data(), dataSize);
@@ -590,7 +590,7 @@ inline std::vector<char> YTensorIO::encDense(const yt::YTensorBase& tensor) {
 /// @param tensor 要保存的张量（必须是连续的）
 /// @param info 张量信息（将被填充）
 /// @return 压缩后的数据，如果失败返回空vector且info.tensorType为空
-inline std::vector<char> YTensorIO::encMap(const yt::YTensorBase& tensor) {
+YT_IMPL_INLINE std::vector<char> YTensorIO::encMap(const yt::YTensorBase& tensor) {
     auto typeInfoOpt = yt::types::getTypeInfo(tensor.dtype());
     if (!typeInfoOpt || !typeInfoOpt->get().serialize) {
         if (verbose) {
@@ -630,7 +630,7 @@ inline std::vector<char> YTensorIO::encMap(const yt::YTensorBase& tensor) {
 /// @param info 张量信息
 /// @param rawData 解压后的原始数据
 /// @return 是否成功
-inline bool YTensorIO::loadDense(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
+YT_IMPL_INLINE bool YTensorIO::loadDense(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
     std::vector<int> shape(info.shape.begin(), info.shape.end());
     tensor = yt::YTensorBase(shape, info.typeName);
     if (!rawData.empty()) {
@@ -644,7 +644,7 @@ inline bool YTensorIO::loadDense(yt::YTensorBase& tensor, const TensorInfo& info
 /// @param info 张量信息
 /// @param rawData 解压后的原始数据
 /// @return 是否成功
-inline bool YTensorIO::loadMap(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
+YT_IMPL_INLINE bool YTensorIO::loadMap(yt::YTensorBase& tensor, const TensorInfo& info, const std::vector<char>& rawData) {
     auto typeInfoOpt = yt::types::getTypeInfo(info.typeName);
     if (!typeInfoOpt) {
         if (verbose) {
@@ -700,7 +700,7 @@ inline bool YTensorIO::loadMap(yt::YTensorBase& tensor, const TensorInfo& info, 
     return true;
 }
 
-inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& name) {
+YT_IMPL_INLINE bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& name) {
     if (!_file.is_open() || _fileMode == yt::io::Read) {
         if (verbose) {
             std::cerr << "Error: File not open for writing" << std::endl;
@@ -782,7 +782,7 @@ inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& na
     return true;
 }
 
-inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
+YT_IMPL_INLINE bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
     if (!_file.is_open() || !_fileMode) {
         if (verbose) {
             std::cerr << "Error: File not open for reading" << std::endl;
@@ -829,7 +829,7 @@ inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
 }
 
 // 便利函数实现
-inline bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& tensor, const std::string& name) {
+YT_IMPL_INLINE bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& tensor, const std::string& name) {
     YTensorIO io;
     if (!io.open(fileName, yt::io::Write)) {
         return false;
@@ -841,7 +841,7 @@ inline bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& t
     return true;
 }
 
-inline bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor, const std::string& name) {
+YT_IMPL_INLINE bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor, const std::string& name) {
     YTensorIO io;
     if (!io.open(fileName, yt::io::Read)) {
         return false;

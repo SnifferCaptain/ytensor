@@ -14,6 +14,11 @@
 #include "include/kernel/parallel_for.hpp"
 #include "include/kernel/type_dispatch.hpp"
 
+// AVX2 kernel
+#include "include/kernel/avx2/hgemm.hpp"
+#include "include/kernel/avx2/sgemm.hpp"
+#include "include/kernel/avx2/sgemv.hpp"
+
 // Backend switch: define YT_USE_LIB to use precompiled runtime backend.
 
 /////////// ytensor class def ////////////
@@ -28,31 +33,13 @@
 #include "src/ytensor_base_templates.inl"
 #include "src/ytensor_io_templates.inl"
 
-#if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
-#if defined(YT_LIBRARY_IMPLEMENTATION)
-// Emit YTensorBase/YTensorIO runtime symbols in the library TU.
-#define YT_RUNTIME_OUT_OF_LINE 1
-#define inline
-#endif
+#if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 #include "src/ytensor_base.inl"
 #include "src/ytensor_io.inl"
-#if defined(YT_RUNTIME_OUT_OF_LINE)
-#undef inline
-#undef YT_RUNTIME_OUT_OF_LINE
-#endif
 #endif
 
-#if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
-#if defined(YT_LIBRARY_IMPLEMENTATION)
-// Emit YTensorBase math symbols in the library TU.
-#define YT_RUNTIME_OUT_OF_LINE 1
-#define inline
-#endif
+#if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 #include "src/ytensor_base_math.inl"
-#if defined(YT_RUNTIME_OUT_OF_LINE)
-#undef inline
-#undef YT_RUNTIME_OUT_OF_LINE
-#endif
 #endif
 
 #include "src/ytensor_core.inl"
@@ -61,6 +48,6 @@
 #include "src/ytensor_function.inl"
 
 // In YT_USE_LIB consumer mode, suppress repeated builtin template instantiation.
-#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+#if YT_USE_LIB && !defined(YT_LIBRARY_IMPLEMENTATION)
 #include "include/ytensor_extern_templates.hpp"
 #endif

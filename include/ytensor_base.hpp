@@ -396,7 +396,7 @@ protected:
     virtual std::ostream& _cout(std::ostream &os) const;
 };
 
-inline YTensorBase YTensorBase::cast(const std::string& newDtype) const {
+YT_IMPL_INLINE YTensorBase YTensorBase::cast(const std::string& newDtype) const {
     if (_dtype == newDtype) return this->clone();
     YTensorBase res(this->shape(), newDtype);
     res.copy_(*this);
@@ -404,5 +404,4 @@ inline YTensorBase YTensorBase::cast(const std::string& newDtype) const {
 }
 
 } // namespace yt
-
 

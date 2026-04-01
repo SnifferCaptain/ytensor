@@ -837,7 +837,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::copy_(const yt::YTensorBase& src) {
 }
 
 template <typename T, int dim>
-inline std::ostream& yt::YTensor<T, dim>::_cout(std::ostream &out) const{
+YT_IMPL_INLINE std::ostream& yt::YTensor<T, dim>::_cout(std::ostream &out) const{
     out << "[YTensor]:<" << yt::types::getTypeName<T>() << ">" << std::endl;
     out << "[itemSize]: " << this->size() << std::endl;
     out << "[byteSize]: " << this->size() * sizeof(T) << std::endl;
