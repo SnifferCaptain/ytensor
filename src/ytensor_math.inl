@@ -291,8 +291,13 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         throwShapeNotMatch("matmul", other.shape());
     }
     
-    // 根据后端分派，各后端自己处理fastpath优化
-    if constexpr (std::is_arithmetic_v<T>) {
+    if constexpr (yt::types::is_builtin_numeric_v<T>) {
+#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+        auto baseResult = static_cast<const yt::YTensorBase&>(*this).matmul(
+            static_cast<const yt::YTensorBase&>(other), backend);
+        return yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})>(baseResult);
+#else
+        // 根据后端分派，各后端自己处理fastpath优化
         switch (backend) {
 #if YT_USE_AVX2
             case yt::infos::MatmulBackend::AVX2:
@@ -304,6 +309,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
 #endif
             default: return matmul_naive_backend(other);
         }
+#endif
     } else {
         return matmul_naive_backend(other);
     }
@@ -331,7 +337,19 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         );
     }
 
-    if constexpr (std::is_arithmetic_v<T>) {
+#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+    if constexpr (yt::types::is_builtin_numeric_v<T>) {
+        auto baseResult = static_cast<const yt::YTensorBase&>(*this).masked_matmul(
+            static_cast<const yt::YTensorBase&>(other),
+            static_cast<const yt::YTensorBase&>(mask),
+            maskedValue,
+            backend);
+        return yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})>(baseResult);
+    } else {
+        return masked_matmul_naive_backend(other, mask, maskedValue);
+    }
+#else
+    if constexpr (yt::types::is_builtin_numeric_v<T>) {
         switch (backend) {
 #if YT_USE_AVX2
             case yt::infos::MatmulBackend::AVX2:
@@ -348,6 +366,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     } else {
         return masked_matmul_naive_backend(other, mask, maskedValue);
     }
+#endif
 }
 
 template <typename T, int dim> template<int dim1, typename Func>
@@ -364,7 +383,15 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
         throwShapeNotMatch("masked_matmul", other.shape());
     }
 
-    if constexpr (std::is_arithmetic_v<T>) {
+#if defined(YT_USE_LIB) && !defined(YT_LIBRARY_IMPLEMENTATION)
+    (void)backend;
+    if constexpr (yt::types::is_builtin_numeric_v<T>) {
+        return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
+    } else {
+        return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
+    }
+#else
+    if constexpr (yt::types::is_builtin_numeric_v<T>) {
         switch (backend) {
 #if YT_USE_AVX2
             case yt::infos::MatmulBackend::AVX2:
@@ -381,6 +408,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     } else {
         return masked_matmul_naive_backend(other, std::forward<Func>(func), maskedValue);
     }
+#endif
 }
 
 template <typename T, int dim>
@@ -830,6 +858,7 @@ yt::YTensor<T, dim>::EigenMatrixMap yt::YTensor<T, dim>::matViewEigen() const re
     }
 }
 
+ #if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_eigen_backend(const yt::YTensor<T, dim1>& other) const{    
     int aw = this->shape(-1);
@@ -917,10 +946,12 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     }, thisMatView, otherMatView);
     return op;
 }
+#endif
 #endif //YT_USE_EIGEN
 
 /////////////// AVX2 GEMM 后端 ///////////////
 #if YT_USE_AVX2
+#if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
 
 template <typename T, int dim> template<int dim1>
 yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>::matmul_avx2_backend(const yt::YTensor<T, dim1>& other) const requires std::is_same_v<T, float> {    
@@ -1100,4 +1131,5 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
     }, thisMatView, otherMatView);
     return op;
 }
+#endif
 #endif // YT_USE_AVX2

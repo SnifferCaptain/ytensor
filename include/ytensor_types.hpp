@@ -107,6 +107,20 @@ struct TypeListConcat<TypeList<T1...>, TypeList<T2...>> {
     using type = TypeList<T1..., T2...>;
 };
 
+/// @brief 判断类型是否属于某个 TypeList
+template<typename T, typename List>
+struct TypeListContains;
+
+template<typename T>
+struct TypeListContains<T, TypeList<>> : std::false_type {};
+
+template<typename T, typename Head, typename... Tail>
+struct TypeListContains<T, TypeList<Head, Tail...>>
+    : std::bool_constant<std::is_same_v<std::remove_cv_t<T>, Head> || TypeListContains<T, TypeList<Tail...>>::value> {};
+
+template<typename T, typename List>
+inline constexpr bool TypeListContains_v = TypeListContains<T, List>::value;
+
 /// @brief 标准整数类型（有符号 + 无符号）
 using StandardIntTypes = TypeList<
     int8_t, int16_t, int32_t, int64_t,
@@ -133,6 +147,10 @@ using IntegerTypes = StandardIntTypes;
 
 /// @brief Eigen 原生支持的类型（不含扩展浮点类型）
 using EigenNativeTypes = StandardNumericTypes;
+
+/// @brief 判断类型是否为库内置数值类型（用于数学编译后端）
+template<typename T>
+inline constexpr bool is_builtin_numeric_v = TypeListContains_v<std::remove_cv_t<T>, AllNumericTypes>;
 
 // dtype 规范化命名
 

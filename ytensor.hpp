@@ -42,7 +42,18 @@
 #endif
 #endif
 
+#if !defined(YT_USE_LIB) || defined(YT_LIBRARY_IMPLEMENTATION)
+#if defined(YT_LIBRARY_IMPLEMENTATION)
+// Emit YTensorBase math symbols in the library TU.
+#define YT_RUNTIME_OUT_OF_LINE 1
+#define inline
+#endif
 #include "src/ytensor_base_math.inl"
+#if defined(YT_RUNTIME_OUT_OF_LINE)
+#undef inline
+#undef YT_RUNTIME_OUT_OF_LINE
+#endif
+#endif
 
 #include "src/ytensor_core.inl"
 #include "src/ytensor_math.inl"
