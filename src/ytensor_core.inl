@@ -84,21 +84,18 @@ yt::YTensor<T, dim>::YTensor(const std::vector<int> shape): YTensorBase() {
     _offset = 0;
     _element_size = sizeof(T);
     _dtype = yt::types::getTypeName<T>();
-    _data = std::shared_ptr<char[]>(new char[this->size() * sizeof(T)]());
+    *static_cast<yt::YTensorBase*>(this) = yt::YTensorBase(shape, _dtype);
 }
 
 template <typename T, int dim>
 template <typename... Args>
 yt::YTensor<T, dim>::YTensor(Args... args): YTensorBase() {
     static_assert(sizeof...(args) == dim, "Number of arguments must match the dimension");
-    _shape.resize(dim);
+    std::vector<int> shapeVec(dim);
     int a = 0;
-    ((_shape[a++] = args), ...);
-    _stride = this->stride();
-    _offset = 0;
-    _element_size = sizeof(T);
+    ((shapeVec[a++] = args), ...);
     _dtype = yt::types::getTypeName<T>();
-    _data = std::shared_ptr<char[]>(new char[this->size() * sizeof(T)]());
+    *static_cast<yt::YTensorBase*>(this) = yt::YTensorBase(shapeVec, _dtype);
 }
 
 template <typename T, int dim>
@@ -106,12 +103,8 @@ yt::YTensor<T, dim>::YTensor(std::initializer_list<int> list): YTensorBase() {
     if (list.size() != dim) {
         throwShapeSizeNotMatch("init", list.size());
     }
-    _shape = std::vector<int>(list);
-    _stride = this->stride();
-    _offset = 0;
-    _element_size = sizeof(T);
     _dtype = yt::types::getTypeName<T>();
-    _data = std::shared_ptr<char[]>(new char[this->size() * sizeof(T)]());
+    *static_cast<yt::YTensorBase*>(this) = yt::YTensorBase(std::vector<int>(list), _dtype);
 }
 
 template <typename T, int dim>
@@ -205,12 +198,8 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::reserve(const std::vector<int>& shape)
     if (shape.size() != dim) {
         throwShapeSizeNotMatch("reserve", shape.size());
     }
-    _shape = shape;
-    _stride = this->stride();
-    _offset = 0;
-    _element_size = sizeof(T);
     _dtype = yt::types::getTypeName<T>();
-    _data = std::shared_ptr<char[]>(new char[this->size() * sizeof(T)]());
+    *static_cast<yt::YTensorBase*>(this) = yt::YTensorBase(shape, _dtype);
     return *this;
 }
 

@@ -17,3 +17,5 @@ build
 !/single-header
 !/example
 
+
+lib/bin/libytensor.so

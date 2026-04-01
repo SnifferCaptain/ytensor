@@ -1,6 +1,12 @@
 # 安装指南
 
-YTensor 是一个纯头文件（header-only）的 C++ 库，这意味着您无需编译或链接任何库文件，只需将头文件包含到您的项目中即可使用。
+YTensor 支持三种等价使用形态：
+
+- **默认 header-only**（标准形态）
+- **single-header 打包**（`ytensor_single.hpp`）
+- **`YT_USE_LIB` 加速后端**（API 不变，仅多一步链接库）
+
+默认模式仍然是完整 header-only。`YT_USE_LIB` 仅改变实现归属（将封闭 runtime 核心预编译），不会改变公开 API 与自定义类型能力。
 
 ## 系统要求
 
@@ -88,14 +94,46 @@ YTensor 的核心功能无需任何第三方库，但以下库可以启用额外
 
 3. **在代码中包含主头文件**
 
-   ```cpp
-   #include "ytensor.hpp"
+    ```cpp
+    #include "ytensor.hpp"
    
    int main() {
        yt::YTensor<float, 2> tensor(3, 4);
        return 0;
-   }
+    }
+    ```
+
+### 方法三：使用 `YT_USE_LIB`（编译加速）
+
+当你希望减少用户工程里的重复编译时，可以使用该模式。
+
+1. **先构建预编译库**
+
+   ```bash
+   cd /path/to/ytensor
+   cmake -S . -B build-lib -DYTENSOR_BUILD_LIB=ON
+   cmake --build build-lib -j8
    ```
+
+2. **定义 `YT_USE_LIB` 并链接 `libytensor`**
+
+   ```cpp
+   #define YT_USE_LIB
+   #include "ytensor.hpp"
+   ```
+
+   ```bash
+   g++ -std=c++20 -O2 -fopenmp main.cpp \
+     -I/path/to/ytensor \
+     -I/path/to/ytensor/lib/include \
+     -L/path/to/ytensor/lib/bin \
+     -Wl,-rpath,/path/to/ytensor/lib/bin \
+     -lytensor -lz -o main
+   ```
+
+:::info
+`YT_USE_LIB` 的**唯一额外要求**是链接预编译库；API、返回类型、语义、支持类型集合和自定义类型工作流保持等价。
+:::
 
 ## 启用可选功能
 

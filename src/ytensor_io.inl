@@ -50,17 +50,6 @@ inline std::string data2string(std::fstream& file, bool seek) {
     return op;
 }
 
-template<typename T>
-std::vector<char> array2data(const std::vector<T>& data) {
-    uint64_t count = static_cast<uint64_t>(data.size() * sizeof(T));
-    std::vector<char> op(sizeof(uint64_t) + count);
-    std::memcpy(op.data(), &count, sizeof(uint64_t));
-    if (!data.empty()) {
-        std::memcpy(op.data() + sizeof(uint64_t), data.data(), count);
-    }
-    return op;
-}
-
 inline std::vector<char> data2array(std::fstream& file, bool seek) {
     std::streampos originalPos = file.tellg();
     uint64_t count;
@@ -78,42 +67,6 @@ inline std::vector<char> data2array(std::fstream& file, bool seek) {
         file.seekg(originalPos);
     }
     return op;
-}
-
-template<typename T>
-std::vector<char> compressData(const std::vector<T>& input) {
-    if (input.empty()) {
-        return {};
-    }
-    std::string cpm = checkCompressMethod(yt::io::compressMethod);
-    if (cpm == "zlib") {
-        z_stream stream;
-        std::memset(&stream, 0, sizeof(z_stream));
-        // 初始化压缩流zlib
-        if (deflateInit2(&stream, yt::io::compressLevel, Z_DEFLATED, 15, 8, Z_FILTERED) != Z_OK) {
-            return {}; // 初始化失败
-        }
-        stream.avail_in = input.size() * sizeof(T);
-        stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(input.data()));
-        // 预估压缩后大小，通常比原数据稍大一些作为缓冲
-        size_t estimated_size = deflateBound(&stream, stream.avail_in);
-        std::vector<char> compressed(estimated_size);
-        stream.avail_out = compressed.size();
-        stream.next_out = reinterpret_cast<Bytef*>(compressed.data());
-        int result = deflate(&stream, Z_FINISH);
-        deflateEnd(&stream);
-
-        if (result != Z_STREAM_END) {
-            return {}; // 压缩失败
-        }
-        compressed.resize(stream.total_out);
-        return compressed;
-    } else {
-        // 缺省值/fallback，不压缩
-        std::vector<char> op(input.size() * sizeof(T));
-        std::memcpy(op.data(), input.data(), input.size() * sizeof(T));
-        return op;
-    }
 }
 
 inline std::vector<char> decompressData(const std::vector<char>& input, size_t decompressedSize, const std::string& method) {
@@ -735,19 +688,11 @@ inline bool YTensorIO::loadMap(yt::YTensorBase& tensor, const TensorInfo& info, 
     char* dstData = reinterpret_cast<char*>(tensor.data());
     size_t elemSize = tensor.elementSize();
     
-    // 如果有析构函数，先析构默认构造的对象
-    auto destructor = typeInfo.destructor;
-    
     for (size_t i = 0; i < elemCount; ++i) {
         size_t elemStart = offsets[i];
         size_t elemEnd = (i + 1 < elemCount) ? offsets[i + 1] : serializedDataSize;
         size_t elemLen = elemEnd - elemStart;
-        
-        // 析构默认构造的对象
-        if (destructor) {
-            destructor(dstData + i * elemSize);
-        }
-        
+
         // 反序列化
         deserialize(dstData + i * elemSize, serializedData + elemStart, elemLen);
     }
@@ -837,13 +782,6 @@ inline bool YTensorIO::save(const yt::YTensorBase& tensor, const std::string& na
     return true;
 }
 
-// 模板方法实现：保存 YTensor<T, dim>
-template<typename T, int dim>
-bool YTensorIO::save(const yt::YTensor<T, dim>& tensor, const std::string& name) {
-    // YTensor 继承自 YTensorBase，直接调用基类版本
-    return save(static_cast<const yt::YTensorBase&>(tensor), name);
-}
-
 inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
     if (!_file.is_open() || !_fileMode) {
         if (verbose) {
@@ -890,19 +828,6 @@ inline bool YTensorIO::load(yt::YTensorBase& tensor, const std::string& name) {
     }
 }
 
-// 模板方法实现：加载 YTensor<T, dim>
-template<typename T, int dim>
-bool YTensorIO::load(yt::YTensor<T, dim>& tensor, const std::string& name) {
-    // 先加载为 YTensorBase
-    yt::YTensorBase base;
-    if (!load(base, name)) {
-        return false;
-    }
-    // 转换为 YTensor<T, dim>
-    tensor = yt::YTensor<T, dim>(base);
-    return true;
-}
-
 // 便利函数实现
 inline bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& tensor, const std::string& name) {
     YTensorIO io;
@@ -917,29 +842,6 @@ inline bool saveTensorBase(const std::string& fileName, const yt::YTensorBase& t
 }
 
 inline bool loadTensorBase(const std::string& fileName, yt::YTensorBase& tensor, const std::string& name) {
-    YTensorIO io;
-    if (!io.open(fileName, yt::io::Read)) {
-        return false;
-    }
-    return io.load(tensor, name);
-}
-
-// 便利函数模板实现
-template<typename T, int dim>
-bool saveTensor(const std::string& fileName, const yt::YTensor<T, dim>& tensor, const std::string& name) {
-    YTensorIO io;
-    if (!io.open(fileName, yt::io::Write)) {
-        return false;
-    }
-    if (!io.save(tensor, name)) {
-        return false;
-    }
-    io.close();
-    return true;
-}
-
-template<typename T, int dim>
-bool loadTensor(const std::string& fileName, yt::YTensor<T, dim>& tensor, const std::string& name) {
     YTensorIO io;
     if (!io.open(fileName, yt::io::Read)) {
         return false;

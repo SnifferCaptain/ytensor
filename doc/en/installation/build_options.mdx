@@ -9,6 +9,7 @@ YTensor provides several compile-time macro definitions to control the library's
 | `YT_USE_EIGEN` | Auto-detected | Whether to enable the Eigen library as a GEMM backend |
 | `YT_USE_AVX2` | Auto-detected | Whether to enable AVX2+FMA SIMD optimizations |
 | `YT_PREINSTANTIATE_TEMPLATES` | `1` | Whether to pre-instantiate common type templates |
+| `YT_USE_LIB` | `0` | Use precompiled runtime backend (requires linking `libytensor`) |
 
 ## YT_USE_EIGEN
 
@@ -208,6 +209,46 @@ g++ -std=c++20 -DYT_PREINSTANTIATE_TEMPLATES=0 main.cpp -o main
 
 ---
 
+## YT_USE_LIB
+
+### Description
+
+Switches YTensor to the precompiled backend for the closed runtime core (`YTensorBase` runtime dispatch / copy-cast-clone / I/O related implementation), while keeping template/open-world logic in headers.
+
+### Default Behavior
+
+Disabled by default (`YT_USE_LIB = 0`). In this mode, YTensor behaves as full header-only.
+
+### Setup
+
+Define macro before including headers, or via compiler/CMake flags:
+
+```cpp
+#define YT_USE_LIB
+#include "ytensor.hpp"
+```
+
+```bash
+g++ -std=c++20 -DYT_USE_LIB main.cpp \
+  -I/path/to/ytensor -I/path/to/ytensor/lib/include \
+  -L/path/to/ytensor/lib/bin -Wl,-rpath,/path/to/ytensor/lib/bin \
+  -lytensor -lz -o main
+```
+
+```cmake
+target_compile_definitions(my_target PRIVATE YT_USE_LIB)
+target_include_directories(my_target PRIVATE /path/to/ytensor /path/to/ytensor/lib/include)
+target_link_directories(my_target PRIVATE /path/to/ytensor/lib/bin)
+target_link_libraries(my_target PRIVATE ytensor ZLIB::ZLIB OpenMP::OpenMP_CXX)
+```
+
+### Impact
+
+- **Only difference**: an extra link step to `libytensor`.
+- Public API, return types, type support, and custom-type workflow remain equivalent to header-only/single-header modes.
+
+---
+
 ## Backend Priority
 
 At runtime, YTensor automatically selects a GEMM backend according to the compilation options. The priority is as follows:
@@ -385,5 +426,4 @@ clang++ -std=c++20 -O2 -fopenmp=libgomp main.cpp -o main -lgomp
 - Return to [Installation Guide](./installation.mdx) for basic installation steps.
 - Check [Backend Selection Strategy](../api/guides/backend_selection.mdx) for performance comparisons.
 - Read [Performance Optimization Tips](../api/guides/performance_tips.mdx) to improve code efficiency.
-
 

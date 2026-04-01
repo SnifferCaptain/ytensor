@@ -6,20 +6,20 @@
  * @date: 2026-01-29
  * 
  * 说明：
- * 当定义了 YT_USE_STATIC_LIB 宏时，此文件为预编译的模板类型提供
+ * 当定义了 YT_USE_LIB 宏时，此文件为预编译的模板类型提供
  * extern template 声明，避免重复实例化，从而加速编译。
  * 
  * 使用方式：
  * 1. 链接 libytensor.a 静态库
- * 2. 在包含 ytensor.hpp 之前定义 YT_USE_STATIC_LIB：
- *    #define YT_USE_STATIC_LIB
+ * 2. 在包含 ytensor.hpp 之前定义 YT_USE_LIB：
+ *    #define YT_USE_LIB
  *    #include "ytensor.hpp"
  * 
  * 或者通过CMake：
- *    target_compile_definitions(your_target PRIVATE YT_USE_STATIC_LIB)
+ *    target_compile_definitions(your_target PRIVATE YT_USE_LIB)
  **********************************************************************/
 
-#ifdef YT_USE_STATIC_LIB
+#ifdef YT_USE_LIB
 
 namespace yt {
 
@@ -157,4 +157,4 @@ EXTERN_YTENSOR_BASE_METHOD(yt::float8_e4m3)
 
 } // namespace yt
 
-#endif // YT_USE_STATIC_LIB
+#endif // YT_USE_LIB

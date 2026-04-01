@@ -76,10 +76,14 @@ namespace yt::infos{
 
     /// @brief 类型注册表
     /// @return 返回类型注册表的引用
+    #if defined(YT_USE_LIB)
+    std::unordered_map<std::string, yt::infos::TypeRegItem>& getTypeRegistry();
+    #else
     inline auto& getTypeRegistry() {
         static std::unordered_map<std::string, yt::infos::TypeRegItem> registry;
         return registry;
     }
+    #endif
 
     /// @brief 文件头标识
     static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
