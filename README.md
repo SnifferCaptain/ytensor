@@ -4,7 +4,7 @@
 
 ## 特性亮点
 
-- 🧩 **Header-only**：只需 `ytensor_single.hpp`，零第三方依赖，直接 `#include` 即用
+- 🧩 **Header-only**：直接包含 `ytensor.hpp` 或 `ytensor_single.hpp` 即用，零第三方依赖
 - 📐 **任意维度**：支持 shape、切片、转置、reshape、permute 等常用操作
 - ⚡ **多功能**：支持并行、广播、基础数学、少量常用的深度学习函数（matmul/softmax/attention）
 - 🛠️ **易扩展**：源码清晰，便于二次开发
@@ -311,6 +311,33 @@ io.close();
 > 适合模型权重、数据集等便捷存储。
 
 ---
+## 📦 可选预编译库
+
+定义 `YT_USE_LIB=1` 并链接库，可减少大型项目的重复编译开销，API 与 header-only 保持一致。
+
+首先构建库：
+```bash
+mkdir build && cd build
+cmake .. && make -j8
+```
+
+库文件输出到 `lib/bin/`。使用时定义宏并链接：
+```cpp
+#define YT_USE_LIB 1
+#include "ytensor.hpp"
+```
+
+```bash
+# Linux 链接示例
+g++ -std=c++20 -O2 -fopenmp main.cpp \
+  -I/path/to/ytensor -I/path/to/ytensor/lib/include \
+  -L/path/to/ytensor/lib/bin -Wl,-rpath,/path/to/ytensor/lib/bin \
+  -lytensor -lz -o main
+```
+
+> **提示**：库模式下统一使用 `YTensor<T>` 而非 `YTensorBase`，以获得对自定义类型的完整支持。
+
+---
 
 ## 文件结构
 
@@ -320,18 +347,32 @@ io.close();
 │  ├─ convert/                                      | 数据格式转换脚本
 │  │   ├─ __init__.py                               |
 │  │   ├─ numpy2yt.py                               | numpy格式转换为ytensor格式[待完善]
-│  │   ├─ savetensors2yt.py                         | 保存ytensor格式为numpy格式[待完善]
+│  │   ├─ safetensors2yt.py                         | safetensors格式转换为ytensor格式[待完善]
 │  │   └─ ytfile.py                                 | ytensor文件类[待完善]
+│  ├─ qwen3/                                        | Qwen3推理示例
+│  │   ├─ CMakeLists.txt                            | 构建配置文件
+│  │   ├─ include/                                  |
+│  │   │   ├─ json.hpp                              | nlohmann json解析库
+│  │   │   ├─ qwen3.hpp                             | Qwen3 模型接口与推理封装声明
+│  │   │   └─ tokenlizer.hpp                        | 分词器
+│  │   ├─ main.cpp                                  | 程序入口
+│  │   ├─ model/                                    | 模型权重与分词器文件存放目录
+│  │   │   ├─ config.json                           | Qwen3 模型配置文件
+│  │   │   ├─ tokenizer.json                        | 分词器词表文件
+│  │   │   └─ tokenizer_config.json                 | 分词器配置文件
+│  │   └─ src/                                      | 源码实现目录
+│  │       ├─ qwen3.cpp                             | Qwen3 模型推理实现
+│  │       └─ tokenlizer.cpp                        | 分词器实现
 │  └─ ymodel2-s-2/                                  | 推理ymodel2语言模型示例
-│      ├─ model/                                    | 模型权重、分词器文件存储
-│      │   ├─ tokenlizer.json                       | 词表文件，需要从huggingface下载
-│      │   ├─ tokenlizer_config.json                | 分词器配置文件，需要从huggingface下载
-│      │   └─ y2_sft_s-2.yt                         | 模型权重文件，需要从huggingface下载
 │      ├─ CMakeLists.txt                            |
 │      ├─ json.hpp                                  | nlohmann json解析库
 │      ├─ main.cpp                                  | 主程序入口
-│      ├─ tokenizer.cpp                             | 分词器实现
-│      ├─ tokenizer.hpp                             | 分词器头文件
+│      ├─ model/                                    | 模型权重、分词器文件存储
+│      │   ├─ tokenizer.json                        | 词表文件，需要从huggingface下载
+│      │   ├─ tokenizer_config.json                 | 分词器配置文件，需要从huggingface下载
+│      │   └─ y2_sft_s-2.yt                         | 模型权重文件，需要从huggingface下载
+│      ├─ tokenlizer.cpp                            | 分词器实现
+│      ├─ tokenlizer.hpp                            | 分词器头文件
 │      ├─ ymodel2.cpp                               | 模型实现✨
 │      └─ ymodel2.hpp                               | 模型头文件✨
 ├─ include/                                         | 头文件目录
@@ -342,7 +383,6 @@ io.close();
 │  │   ├─ gemm                                      | 矩阵乘法
 │  │   │   └─ sgemm.hpp                             | 单精度矩阵乘法
 │  │   ├─ math_utils.hpp                            | 数学工具[待完善]
-│  │   ├─ matmul_single.hpp [deprecated]            | 单个矩阵乘法[已经弃用，来自sgemm.c]
 │  │   ├─ memory_utils.hpp                          | 内存分配
 │  │   └─ parallel_for.hpp                          | 并行循环
 │  ├─ types/                                        | 类型相关
@@ -356,36 +396,35 @@ io.close();
 │  ├─ ytensor_io.hpp                                | 文件存储系统
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
 │  ├─ ytensor_core.hpp                              | YTensor核心类
+│  ├─ ytensor_extern_templates.hpp                  | 预实例化模板声明
 │  └─ ytensor_types.hpp                             | 类型相关
 ├─ lib/                                             | `YT_USE_LIB` 预编译后端
-│  ├─ include/                                      | 对外头文件（含 ytensor.hpp）
-│  ├─ src/                                          | 库实现入口
 │  ├─ bin/                                          | 库产物目录（如 libytensor.so）
-│  └─ CMakeLists.txt                                | 构建配置
+│  ├─ CMakeLists.txt                                | 构建配置
+│  └─ src/                                          |
+│      └─ ytensor_library.cpp                       | 库实现入口
 ├─ single-header/                                   | 单头文件版本
 │  ├─ ytensor_single.hpp                            | 单头文件版本的YTensor，包含所有功能
 │  └─ packer.py                                     | 单头文件打包脚本
 ├─ src/                                             | 源文件实现目录
 │  ├─ ytensor_base_math.inl                         | YTensor基类数学操作
 │  ├─ ytensor_base.inl                              | YTensor基类
+│  ├─ ytensor_base_templates.inl                    | YTensor基类模板实例化
 │  ├─ ytensor_core.inl                              | YTensor实现
 │  ├─ ytensor_function.inl                          | YTensor函数式编程
 │  ├─ ytensor_io.inl                                | YTensor文件存储系统
-│  ├─ ytensor_math.inl                              | YTensor数学操作
-│  └─ ytensor.inl                                   | YTensor实现[已废弃]
+│  ├─ ytensor_io_templates.inl                      | YTensor文件存储模板实例化
+│  └─ ytensor_math.inl                              | YTensor数学操作
 └─ ytensor.hpp                                      | 主头文件，包含所有必要的头文件
 ```
-> YTensor 版本：0.6【非正式】  
+> YTensor 版本：0.12  
 **注意： 当前版本仍在快速迭代中，部分不常用或底层API 可能会有较大变动，请密切关注更新日志。**
 
 ---
 
 ## 最新更新
 
-- 优化了avx2指令集sgemv的速度，现在能在单核4.2GHz的zen3+架构CPU上达到约20~35GFlops的连续性能，以及15%到50%损耗的非连续性能。
-- 为bf16等库内浮点数添加了更多支持，可以使用OpenMP的更多功能。
-- 优化了非POD类型的支持，现在可以直接存储std::string等类型的张量到文件。
-
+- 为ytensor添加了预编译库的构建支持，避免大量非用户自定义数据类型的重复编译。但是此项更改牺牲了YTensorBase类对用户自定义类型的分发支持。用户自定义类型请统一使用`YTensor<T>`进行定义。
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！
