@@ -6,7 +6,7 @@
 
 - 🧩 **Header-only**：直接包含 `ytensor.hpp` 或 `ytensor_single.hpp` 即用，零第三方依赖
 - 📐 **任意维度**：支持 shape、切片、转置、reshape、permute 等常用操作
-- ⚡ **多功能**：支持并行、广播、基础数学、少量常用的深度学习函数（matmul/softmax/attention）
+- ⚡ **多功能**：支持并行、广播、基础数学、常用深度学习函数、多轴归一化，以及 SDPA / Flash Attention
 - 🛠️ **易扩展**：源码清晰，便于二次开发
 - 🗂️ **I/O 支持**：可保存/加载 YTensor 支持的文件
 - 🔢 **广泛的类型支持**：支持常用的数据类型，如 float16，bfloat16等。
@@ -376,27 +376,41 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │      ├─ ymodel2.cpp                               | 模型实现✨
 │      └─ ymodel2.hpp                               | 模型头文件✨
 ├─ include/                                         | 头文件目录
-|  ├─ 3rd/                                          | 第三方依赖
+│  ├─ 3rd/                                          | 第三方依赖
 │  │   └─ backward.hpp                              | google堆栈追踪库，可以移除，方便调试用
+│  ├─ function/                                     | 函数式子模块
+│  │   ├─ activation.hpp                            | 激活相关函数声明
+│  │   ├─ loss.hpp                                  | 损失函数声明
+│  │   ├─ normalization.hpp                         | 归一化相关函数声明
+│  │   └─ ops.hpp                                   | 通用算子与融合算子声明
 │  ├─ kernel/                                       | 内核实现
+│  │   ├─ avx2/                                     | AVX2 内核
+│  │   │   ├─ flash_attention.hpp                   | Flash Attention 内核接口
+│  │   │   ├─ gemm_utils.hpp                        | AVX2 GEMM 辅助工具
+│  │   │   ├─ hdot.hpp                              | 半精度点积内核
+│  │   │   ├─ hgemm.hpp                             | 半精度 GEMM
+│  │   │   ├─ hgemv.hpp                             | 半精度 GEMV
+│  │   │   ├─ hger.hpp                              | 半精度 GER
+│  │   │   ├─ sdot.hpp                              | 单精度点积内核
+│  │   │   ├─ sgemm.hpp                             | 单精度 GEMM
+│  │   │   ├─ sgemv.hpp                             | 单精度 GEMV
+│  │   │   └─ sger.hpp                              | 单精度 GER
 │  │   ├─ broadcast.hpp                             | 广播运算
-│  │   ├─ gemm                                      | 矩阵乘法
-│  │   │   └─ sgemm.hpp                             | 单精度矩阵乘法
-│  │   ├─ math_utils.hpp                            | 数学工具[待完善]
 │  │   ├─ memory_utils.hpp                          | 内存分配
-│  │   └─ parallel_for.hpp                          | 并行循环
+│  │   ├─ parallel_for.hpp                          | 并行循环
+│  │   └─ type_dispatch.hpp                         | 类型分发辅助
 │  ├─ types/                                        | 类型相关
 │  │   ├─ bfloat16.hpp                              | bfloat16类型支持
 │  │   └─ float_spec.hpp                            | 多种浮点数类型支持
-│  ├─ ytensor_base_math.hpp                         | YTensor基类数学操作
 │  ├─ ytensor_base.hpp                              | YTensor基类
+│  ├─ ytensor_base_math.hpp                         | YTensor基类数学操作
 │  ├─ ytensor_concepts.hpp                          | 类型检查等概念
+│  ├─ ytensor_core.hpp                              | YTensor核心类
 │  ├─ ytensor_function.hpp                          | 函数式编程
+│  ├─ ytensor_extern_templates.hpp                  | 预实例化模板声明
 │  ├─ ytensor_infos.hpp                             | 全局设置信息
 │  ├─ ytensor_io.hpp                                | 文件存储系统
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
-│  ├─ ytensor_core.hpp                              | YTensor核心类
-│  ├─ ytensor_extern_templates.hpp                  | 预实例化模板声明
 │  └─ ytensor_types.hpp                             | 类型相关
 ├─ lib/                                             | `YT_USE_LIB` 预编译后端
 │  ├─ bin/                                          | 库产物目录（如 libytensor.so）
@@ -407,8 +421,29 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_single.hpp                            | 单头文件版本的YTensor，包含所有功能
 │  └─ packer.py                                     | 单头文件打包脚本
 ├─ src/                                             | 源文件实现目录
-│  ├─ ytensor_base_math.inl                         | YTensor基类数学操作
+│  ├─ function/                                     | 函数式实现
+│  │   ├─ activation.inl                            | 激活相关函数实现
+│  │   ├─ loss.inl                                  | 损失函数实现
+│  │   ├─ normalization.inl                         | 归一化相关函数实现
+│  │   └─ ops.inl                                   | 通用算子与融合算子实现
+│  ├─ kernel/                                       | 底层内核实现
+│  │   ├─ avx2/
+│  │   │   ├─ flash_attention.inl                   | AVX2 Flash Attention 内核
+│  │   │   ├─ gemm_utils.inl                        | AVX2 GEMM 辅助实现
+│  │   │   ├─ hdot.inl                              | 半精度点积内核
+│  │   │   ├─ hgemm.inl                             | 半精度 GEMM 内核
+│  │   │   ├─ hgemv.inl                             | 半精度 GEMV 内核
+│  │   │   ├─ hger.inl                              | 半精度 GER 内核
+│  │   │   ├─ sdot.inl                              | 单精度点积内核
+│  │   │   ├─ sgemm.inl                             | AVX2 GEMM 内核
+│  │   │   ├─ sgemv.inl                             | AVX2 GEMV 内核
+│  │   │   └─ sger.inl                              | 单精度 GER 内核
+│  │   ├─ broadcast.inl                             | 广播内核实现
+│  │   ├─ memory_utils.inl                          | 内存工具实现
+│  │   ├─ parallel_for.inl                          | 并行循环实现
+│  │   └─ type_dispatch.inl                         | 类型分发实现
 │  ├─ ytensor_base.inl                              | YTensor基类
+│  ├─ ytensor_base_math.inl                         | YTensor基类数学操作
 │  ├─ ytensor_base_templates.inl                    | YTensor基类模板实例化
 │  ├─ ytensor_core.inl                              | YTensor实现
 │  ├─ ytensor_function.inl                          | YTensor函数式编程
@@ -417,14 +452,17 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  └─ ytensor_math.inl                              | YTensor数学操作
 └─ ytensor.hpp                                      | 主头文件，包含所有必要的头文件
 ```
-> YTensor 版本：0.12  
+> YTensor 版本：0.13  
 **注意： 当前版本仍在快速迭代中，部分不常用或底层API 可能会有较大变动，请密切关注更新日志。**
 
 ---
 
 ## 最新更新
 
-- 为ytensor添加了预编译库的构建支持，避免大量非用户自定义数据类型的重复编译。但是此项更改牺牲了YTensorBase类对用户自定义类型的分发支持。用户自定义类型请统一使用`YTensor<T>`进行定义。
+- 整理代码结构。
+- 新增多个常用函数。
+- 修复order接口，现在只有逐元素的操作会保留order的导数/积分接口。
+- 新增SDPA后端FLASH_AVX2，采用flash attention算法加速注意力计算。
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！

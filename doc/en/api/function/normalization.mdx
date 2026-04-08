@@ -1,101 +1,21 @@
 # Normalization
 
-This page documents normalization-related functions in the `yt::function` namespace (Softmax / LogSoftmax / LayerNorm).
+This page documents normalization-related functions in the `yt::function` namespace.
 
 ## Overview
 
-- Negative axes are normalized by: `axis = (axis % dim + dim) % dim`.
-- `order = 1` returns a per-element (diagonal) derivative form, not a full Jacobian.
+- Negative axes are normalized internally.
+- These normalization operators no longer expose simplified `order` derivative APIs.
+- Most functions support both single-axis overloads and multi-axis overloads through `std::vector<int>`.
 
-| Function | In-place | `order` | Type constraints |
+| Function | In-place | Affine params | Multi-axis |
 | --- | --- | --- | --- |
-| `softmax()` | `softmax_()` | - | exp-compatible `T` |
-| `logSoftmax()` | `logSoftmax_()` | `0/1` | floating `T` |
-| `layerNorm()` | `layerNorm_()` | `0/1` | floating `T` |
-
----
-
-## `softmax()` / `softmax_()`
-
-### Core behavior
-
-Computes Softmax along `axis` using a numerically stable implementation (max subtraction).
-
-### Signature
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
-
-template<typename T, int dim>
-YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
-```
-
-### Parameters
-
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
-| `axis` | `int` | `-1` | normalization axis |
-
-### Returns
-
-- out-of-place: `YTensor<T, dim>`
-- in-place: `YTensor<T, dim>&`
-
-### Example
-
-```cpp
-#include "ytensor_function.hpp"
-
-auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
-auto y = yt::function::softmax(x, -1);
-yt::function::softmax_(x, -1);
-```
-
----
-
-## `logSoftmax()` / `logSoftmax_()`
-
-### Core behavior
-
-Computes LogSoftmax along `axis`:
-
-$$\mathrm{logSoftmax}(x) = x - \log\sum\exp(x)$$
-
-- `order = 0`: logSoftmax values.
-- `order = 1`: diagonal derivative form: $1 - \mathrm{softmax}(x)$.
-
-### Signature
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> logSoftmax(const YTensor<T, dim>& x, int axis = -1, int order = 0);
-
-template<typename T, int dim>
-YTensor<T, dim>& logSoftmax_(YTensor<T, dim>& x, int axis = -1, int order = 0);
-```
-
-### Parameters
-
-| Name | Type | Default | Description |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
-| `axis` | `int` | `-1` | axis |
-| `order` | `int` | `0` | supports `0/1` |
-
-### Returns
-
-- out-of-place: `YTensor<T, dim>`
-- in-place: `YTensor<T, dim>&`
-
-### Example
-
-```cpp
-auto x = yt::YTensor<float, 2>::randn({2, 4});
-auto y = yt::function::logSoftmax(x, -1, 0);
-auto diag = yt::function::logSoftmax(x, -1, 1);
-```
+| `layerNorm()` | `layerNorm_()` | optional `gamma` / `bias` | yes |
+| `rmsNorm()` | `rmsNorm_()` | `weight` | yes |
+| `normalize()` | `normalize_()` | optional `gamma` / `bias` | yes |
+| `instanceNorm()` | `instanceNorm_()` | optional `gamma` / `bias` | derived from channel axis |
+| `batchNorm()` | `batchNorm_()` | optional `gamma` / `bias` | derived from channel axis |
+| `groupNorm()` | `groupNorm_()` | optional `gamma` / `bias` | derived from channel axis + groups |
 
 ---
 
@@ -103,21 +23,24 @@ auto diag = yt::function::logSoftmax(x, -1, 1);
 
 ### Core behavior
 
-Applies LayerNorm along `axis` (no affine parameters):
+Applies zero-mean / unit-variance normalization over one or multiple axes:
 
 $$y = \frac{x - \mu}{\sqrt{\sigma^2 + \varepsilon}}$$
-
-- `order = 0`: normalized output.
-- `order = 1`: a diagonal derivative form used by the implementation.
 
 ### Signature
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
 
 template<typename T, int dim>
-YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim>
+YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim>
+YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5));
 ```
 
 ### Parameters
@@ -125,24 +48,117 @@ YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_ca
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
-| `axis` | `int` | `-1` | axis |
-| `eps` | `T` | `1e-5` | epsilon for numerical stability |
-| `order` | `int` | `0` | supports `0/1` |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | normalization axes |
+| `eps` | `T` | `1e-5` | numerical stability term |
 
 ### Returns
 
-- out-of-place: `YTensor<T, dim>`
-+- in-place: `YTensor<T, dim>&`
+- Supports optional affine overloads with `gamma` and `bias`.
+- The result shape is identical to the input shape.
 
 ### Example
 
 ```cpp
-auto x = yt::YTensor<float, 2>::randn({2, 4});
-auto y = yt::function::layerNorm(x, -1);
+#include "ytensor_function.hpp"
+
+auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+auto y = yt::function::layerNorm(x, std::vector<int>{1, 2});
 yt::function::layerNorm_(x, -1);
 ```
 
 ---
+
+## `rmsNorm()` / `rmsNorm_()`
+
+### Core behavior
+
+Applies RMS normalization over one or multiple axes:
+
+$$y = \frac{x}{\sqrt{\mathrm{mean}(x^2) + \varepsilon}} \odot weight$$
+
+### Signature
+
+```cpp
+template<typename T, int dim, int weightDim>
+YTensor<T, dim> rmsNorm(const YTensor<T, dim>& x, const YTensor<T, weightDim>& weight, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim, int weightDim>
+YTensor<T, dim> rmsNorm(const YTensor<T, dim>& x, const YTensor<T, weightDim>& weight, int axis = -1, T eps = static_cast<T>(1e-5));
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `weight` | `const YTensor<T, weightDim>&` | - | affine weight matching normalized axes |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | normalized axes |
+| `eps` | `T` | `1e-5` | numerical stability term |
+
+### Returns
+
+- The result shape is identical to the input shape.
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 2>::randn({2, 8});
+auto w = yt::YTensor<float, 1>::ones({8});
+auto y = yt::function::rmsNorm(x, w, -1);
+```
+
+---
+
+## `normalize()` / `normalize_()`
+
+### Core behavior
+
+Applies Lp normalization over one or multiple axes:
+
+$$y = \frac{x}{\max(\lVert x \rVert_p, \varepsilon)}$$
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> normalize(const YTensor<T, dim>& x, const std::vector<int>& axes, T p = static_cast<T>(2), T eps = static_cast<T>(1e-12));
+
+template<typename T, int dim>
+YTensor<T, dim> normalize(const YTensor<T, dim>& x, int axis = -1, T p = static_cast<T>(2), T eps = static_cast<T>(1e-12));
+```
+
+### Parameters
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | input tensor |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | normalized axes |
+| `p` | `T` | `2` | Lp norm degree |
+| `eps` | `T` | `1e-12` | lower bound for the denominator |
+
+### Returns
+
+- Supports optional affine overloads with `gamma` and `bias`.
+- The result shape is identical to the input shape.
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+auto y = yt::function::normalize(x, std::vector<int>{1, 2}, 2.0f);
+```
+
+---
+
+## `instanceNorm()` / `batchNorm()` / `groupNorm()`
+
+These functions are built on top of the same multi-axis normalization backend:
+
+- `instanceNorm()`: normalizes spatial axes for each sample / channel.
+- `batchNorm()`: naive batch normalization over batch + spatial axes for each channel. This implementation does not include EMA updates or inference-time fusion.
+- `groupNorm()`: reshapes channels into groups and normalizes each group together with spatial axes.
+
+All three provide optional affine overloads with `gamma` / `bias`, keep the input shape unchanged, and use `channelAxis` to derive normalized axes.
 
 ## See also
 

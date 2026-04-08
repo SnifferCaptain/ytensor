@@ -6,7 +6,7 @@
 
 - 🧩 **Header-only**: just include `ytensor.hpp` or `ytensor_single.hpp`, with zero third-party runtime dependencies
 - 📐 **Arbitrary dimensions**: supports common tensor operations such as shape, slicing, transpose, reshape, and permute
-- ⚡ **Multi-purpose**: supports parallelism, broadcasting, basic math, and a small set of common deep learning ops (matmul/softmax/attention)
+- ⚡ **Multi-purpose**: supports parallelism, broadcasting, basic math, common deep learning ops, multi-axis normalization, and SDPA/Flash Attention
 - 🛠️ **Easy to extend**: clear source layout, convenient for secondary development
 - 🗂️ **I/O support**: save/load files supported by YTensor
 - 🔢 **Broad type support**: supports common data types such as float16 and bfloat16
@@ -392,27 +392,41 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │      ├─ ymodel2.cpp                               | Model implementation ✨
 │      └─ ymodel2.hpp                               | Model header ✨
 ├─ include/                                         | Header directory
-|  ├─ 3rd/                                          | Third-party deps
+│  ├─ 3rd/                                          | Third-party deps
 │  │   └─ backward.hpp                              | Google stack tracing helper, optional, useful for debugging
+│  ├─ function/                                     | Functional submodules
+│  │   ├─ activation.hpp                            | Declarations for activation-related functions
+│  │   ├─ loss.hpp                                  | Declarations for loss functions
+│  │   ├─ normalization.hpp                         | Declarations for normalization-related functions
+│  │   └─ ops.hpp                                   | Declarations for generic operators and fused ops
 │  ├─ kernel/                                       | Kernel implementations
+│  │   ├─ avx2/                                     | AVX2 kernels
+│  │   │   ├─ flash_attention.hpp                   | Flash Attention kernel interface
+│  │   │   ├─ gemm_utils.hpp                        | AVX2 GEMM helper utilities
+│  │   │   ├─ hdot.hpp                              | Half-precision dot product kernel
+│  │   │   ├─ hgemm.hpp                             | Half-precision GEMM
+│  │   │   ├─ hgemv.hpp                             | Half-precision GEMV
+│  │   │   ├─ hger.hpp                              | Half-precision GER
+│  │   │   ├─ sdot.hpp                              | Single-precision dot product kernel
+│  │   │   ├─ sgemm.hpp                             | Single-precision GEMM
+│  │   │   ├─ sgemv.hpp                             | Single-precision GEMV
+│  │   │   ├─ sger.hpp                              | Single-precision GER
 │  │   ├─ broadcast.hpp                             | Broadcast ops
-│  │   ├─ gemm                                      | Matrix multiplication
-│  │   │   └─ sgemm.hpp                             | Single-precision GEMM
-│  │   ├─ math_utils.hpp                            | Math utilities [WIP]
 │  │   ├─ memory_utils.hpp                          | Memory allocation
-│  │   └─ parallel_for.hpp                          | Parallel loops
+│  │   ├─ parallel_for.hpp                          | Parallel loops
+│  │   └─ type_dispatch.hpp                         | Type dispatch helpers
 │  ├─ types/                                        | Type-related
 │  │   ├─ bfloat16.hpp                              | bfloat16 support
 │  │   └─ float_spec.hpp                            | Multiple float type support
-│  ├─ ytensor_base_math.hpp                         | YTensor base math ops
 │  ├─ ytensor_base.hpp                              | YTensor base class
+│  ├─ ytensor_base_math.hpp                         | YTensor base math ops
 │  ├─ ytensor_concepts.hpp                          | Concepts/type checking
+│  ├─ ytensor_core.hpp                              | YTensor core class
 │  ├─ ytensor_function.hpp                          | Functional programming
+│  ├─ ytensor_extern_templates.hpp                  | Pre-instantiated template declarations
 │  ├─ ytensor_infos.hpp                             | Global settings info
 │  ├─ ytensor_io.hpp                                | File storage system
 │  ├─ ytensor_math.hpp                              | YTensor math ops
-│  ├─ ytensor_core.hpp                              | YTensor core class
-│  ├─ ytensor_extern_templates.hpp                  | Pre-instantiated template declarations
 │  └─ ytensor_types.hpp                             | Type-related
 ├─ lib/                                             | `YT_USE_LIB` precompiled backend
 │  ├─ bin/                                          | Library artifact dir (e.g., libytensor.so)
@@ -423,8 +437,29 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_single.hpp                            | Single-header YTensor with all features
 │  └─ packer.py                                     | Single-header packing script
 ├─ src/                                             | Source implementation directory
-│  ├─ ytensor_base_math.inl                         | YTensor base math ops
+│  ├─ function/                                     | Functional implementations
+│  │   ├─ activation.inl                            | Implementations for activation-related functions
+│  │   ├─ loss.inl                                  | Implementations for loss functions
+│  │   ├─ normalization.inl                         | Implementations for normalization-related functions
+│  │   └─ ops.inl                                   | Implementations for generic operators and fused ops
+│  ├─ kernel/                                       | Low-level kernel implementations
+│  │   ├─ avx2/
+│  │   │   ├─ flash_attention.inl                   | AVX2 Flash Attention kernel
+│  │   │   ├─ gemm_utils.inl                        | AVX2 GEMM helper implementations
+│  │   │   ├─ hdot.inl                              | Half-precision dot product kernel
+│  │   │   ├─ hgemm.inl                             | Half-precision GEMM kernel
+│  │   │   ├─ hgemv.inl                             | Half-precision GEMV kernel
+│  │   │   ├─ hger.inl                              | Half-precision GER kernel
+│  │   │   ├─ sdot.inl                              | Single-precision dot product kernel
+│  │   │   ├─ sgemm.inl                             | AVX2 GEMM kernel
+│  │   │   ├─ sgemv.inl                             | AVX2 GEMV kernel
+│  │   │   └─ sger.inl                              | Single-precision GER kernel
+│  │   ├─ broadcast.inl                             | Broadcast kernel implementation
+│  │   ├─ memory_utils.inl                          | Memory utility implementation
+│  │   ├─ parallel_for.inl                          | Parallel loop implementation
+│  │   └─ type_dispatch.inl                         | Type dispatch implementation
 │  ├─ ytensor_base.inl                              | YTensor base class
+│  ├─ ytensor_base_math.inl                         | YTensor base math ops
 │  ├─ ytensor_base_templates.inl                    | YTensor base template instantiations
 │  ├─ ytensor_core.inl                              | YTensor implementation
 │  ├─ ytensor_function.inl                          | YTensor functional programming
@@ -434,7 +469,7 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 └─ ytensor.hpp                                      | Main header including all required headers
 ```
 
-> YTensor version: 0.12
+> YTensor version: 0.13
 >
 > **Note:** The current version is still evolving rapidly. Some uncommon or low-level APIs may change significantly. Please keep an eye on release notes.
 
@@ -442,7 +477,10 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 
 ## Latest Update
 
-- Added support for building a precompiled library backend for ytensor, reducing repeated compilation for non-user-defined data types. This change sacrifices `YTensorBase` dispatch support for user-defined types. For user-defined types, use `YTensor<T>` consistently.
+- Refactored the code structure.
+- Added multiple commonly used functions.
+- Fixed the `order` interface so that only truly element-wise operations keep derivative / integral interfaces.
+- Added the `FLASH_AVX2` SDPA backend, using the Flash Attention algorithm to accelerate attention computation.
 
 ---
 For more examples, API details, or contribution suggestions, check the `example/` directory or open an issue.

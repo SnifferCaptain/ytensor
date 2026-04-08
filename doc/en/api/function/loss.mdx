@@ -11,7 +11,7 @@ This page documents loss functions in the `yt::function` namespace.
 | --- | --- | --- |
 | `mseLoss()` / `mseLoss_()` | yes | mean squared error (element-wise) |
 | `crossEntropyLoss()` | - | uses `logSoftmax` internally |
-| `binaryCrossEntropyLoss()` | - | binary CE (element-wise) |
+| `binaryCrossEntropyLoss()` / `binaryCrossEntropyLoss_()` | yes | binary CE (element-wise) |
 | `huberLoss()` / `huberLoss_()` | yes | smooth L1 / Huber |
 
 ---
@@ -60,7 +60,7 @@ In-place version of `mseLoss()`: writes the element-wise result back into `x`.
 
 ```cpp
 template<typename T, int dim>
-void mseLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y);
+YTensor<T, dim>& mseLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y);
 ```
 
 ### Parameters
@@ -72,7 +72,7 @@ void mseLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y);
 
 ### Returns
 
-- `void`
+- `YTensor<T, dim>&`
 
 ### Example
 
@@ -155,6 +155,17 @@ auto loss = yt::function::binaryCrossEntropyLoss(p, t);
 
 ---
 
+## `binaryCrossEntropyLoss_()`
+
+In-place version of `binaryCrossEntropyLoss()`: writes the element-wise result back into `input`.
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim>& binaryCrossEntropyLoss_(YTensor<T, dim>& input, const YTensor<T, dim>& target);
+```
+
+---
+
 ## `huberLoss()`
 
 ### Core behavior
@@ -172,7 +183,7 @@ $$
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> huberLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y, float delta = 1.0f);
+YTensor<T, dim> huberLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y, T delta = static_cast<T>(1.0));
 ```
 
 ### Parameters
@@ -181,7 +192,7 @@ YTensor<T, dim> huberLoss(const YTensor<T, dim>& x, const YTensor<T, dim>& y, fl
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` | - | predictions |
 | `y` | `const YTensor<T, dim>&` | - | targets |
-| `delta` | `float` | `1.0f` | transition point |
+| `delta` | `T` | `1.0` | transition point |
 
 ### Returns
 
@@ -207,7 +218,7 @@ In-place version of `huberLoss()`: writes the element-wise result back into `x`.
 
 ```cpp
 template<typename T, int dim>
-void huberLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y, float delta = 1.0f);
+YTensor<T, dim>& huberLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y, T delta = static_cast<T>(1.0));
 ```
 
 ### Parameters
@@ -216,11 +227,11 @@ void huberLoss_(YTensor<T, dim>& x, const YTensor<T, dim>& y, float delta = 1.0f
 | --- | --- | --- | --- |
 | `x` | `YTensor<T, dim>&` | - | predictions (overwritten with loss) |
 | `y` | `const YTensor<T, dim>&` | - | targets |
-| `delta` | `float` | `1.0f` | transition point |
+| `delta` | `T` | `1.0` | transition point |
 
 ### Returns
 
-- `void`
+- `YTensor<T, dim>&`
 
 ### Example
 

@@ -168,30 +168,21 @@ void RoPECache::precompute(int dim, int max_len, float theta) {
 }
 
 yt::YTensor<float, 3> RMSNorm::forward(const yt::YTensor<float, 3>& x) const {
-    auto out = x.clone();
-    RMSNorm::forward_(out);
-    return out;
+    return yt::function::rmsNorm(x, weight, -1, eps);
 }
 
 void RMSNorm::forward_(yt::YTensor<float, 3>& x) const {
-    // rms norm其实相当于l2 norm + scale + weight的融合
-    auto x_sq = x * x;                  // 计算平方
-    auto sum_sq = x_sq.mean(-1);        // 沿平方的最后一个维度求平均值[b, l, 1]
-
-    x.broadcastInplace([this](float& a, const float& b, const float& c) {
-        // 逐元素执行 输出 = 输入 / (根号(平方的均值)) * 权重，eps为防止除零的小数
-        a = a / (sqrtf(b + eps)) * c;
-    }, sum_sq, weight.view(1, 1, x.shape(-1)));
+    yt::function::rmsNorm_(x, weight, -1, eps);
 }
 
 yt::YTensor<float, 3> FFN::forward(const yt::YTensor<float, 3>& x) const {
     // 为了加速计算，将up与gate两个线性变换合并为一个
-    auto h = ops::linear(x, up);
+    auto h = yt::function::linear(x, up);
     auto gate = h.slice(-1, intermediate_size, 2 * intermediate_size);
     auto up_proj = h.slice(-1, 0, intermediate_size);
-    ops::gelu_(gate);
+    yt::function::gelu_(gate);
     up_proj *= gate;
-    return ops::linear(up_proj, down);
+    return yt::function::linear(up_proj, down);
 }
 
 yt::YTensor<float, 3> PEGA2::forward(
@@ -203,7 +194,7 @@ yt::YTensor<float, 3> PEGA2::forward(
     int h = num_heads, hd = head_dim, hh = h / 2;
     
     // pega架构中，qkv是有一个z的lora低秩分解的，且多个线性变换合并为一个，加速计算。
-    auto qkv = ops::linear(ops::linear(x, qkv_0), qkv_1);
+    auto qkv = yt::function::linear(yt::function::linear(x, qkv_0), qkv_1);
 
     // 将qkv计算结果拆分为qpe, q, kpe, kv四部分，分别表示 带位置嵌入q，不带位置嵌入q，带位置嵌入k，不带位置嵌入的共享kv
     int qpe_size = hh * hd, q_size = hh * hd, kpe_size = hd, kv_size = hd;
@@ -257,7 +248,9 @@ yt::YTensor<float, 3> PEGA2::forward(
     auto attn_5d = yt::function::scaledDotProductAttention(
         q_5d, k_5d, v_5d, 
         rsqrt_dim,  // scale
-        &causal_mask
+        &causal_mask,
+        nullptr,
+        yt::function::sdpaBackend::FLASH_AVX2
     );
 
     // 直接在 5D 上进行 gate 操作，避免拷贝
@@ -267,12 +260,12 @@ yt::YTensor<float, 3> PEGA2::forward(
     // onope = attn_5d[:, 1:2, :, :, :] -> [b, 1, hh, l, hd]
     auto ope_5d = yt::YTensor<float, 5>(attn_5d.slice(1, 0, 1));    // [b, 1, hh, l, hd]
     auto onope_5d = yt::YTensor<float, 5>(attn_5d.slice(1, 1, 2));  // [b, 1, hh, l, hd]
-    ops::gelu_(onope_5d);                                           // ymodel2是对无位置嵌入部分门控
+    yt::function::gelu_(onope_5d);                                  // ymodel2是对无位置嵌入部分门控
     ope_5d *= onope_5d;
 
     // 恢复形状
     auto gated = ope_5d.squeeze(1).permute(0, 2, 1, 3).reshape(b, l, hh * hd);
-    auto op = ops::linear(gated, o);
+    auto op = yt::function::linear(gated, o);
     return op;
 }
 
@@ -496,27 +489,6 @@ std::vector<int> YForCausalLM2::generate(const std::vector<int>& new_ids, int ma
 }
 
 namespace ops {
-
-template<int dim>
-yt::YTensor<float, dim> linear(const yt::YTensor<float, dim>& x, const yt::YTensor<float, 2>& weight) {
-    // 权重遵循pytorch的权重形状，即[输出, 输入]，因此需要转置
-    return x.matmul(weight.transpose());
-}
-
-template yt::YTensor<float, 3> linear(const yt::YTensor<float, 3>&, const yt::YTensor<float, 2>&);
-
-// 原地版本的gelu（tanh近似），也可以使用std::erf去计算
-template<int dim>
-yt::YTensor<float, dim>& gelu_(yt::YTensor<float, dim>& x) {
-    constexpr float sqrt_2_pi = 0.7978845608028654f;
-    return x.broadcastInplace([sqrt_2_pi](float& v) {
-        v = 0.5f * v * (1.0f + std::tanh(sqrt_2_pi * (v + 0.044715f * v * v * v)));
-    });
-}
-
-template yt::YTensor<float, 3>& gelu_(yt::YTensor<float, 3>&);
-template yt::YTensor<float, 4>& gelu_(yt::YTensor<float, 4>&);
-template yt::YTensor<float, 5>& gelu_(yt::YTensor<float, 5>&);
 
 void rope(yt::YTensor<float, 4>& q, yt::YTensor<float, 4>& k, const yt::YTensor<float, 2>& cos_cache, const yt::YTensor<float, 2>& sin_cache) {
     // 使用at()来支持非contiguous

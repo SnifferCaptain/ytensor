@@ -10,7 +10,7 @@ YTensor is a pure header-only C++ tensor library, designed for scenarios requiri
 
 - 🧩 **Header-only**: Only `ytensor_single.hpp` is needed, zero third-party dependencies, just `#include` and use.
 - 📐 **Arbitrary Dimensions**: Supports `shape`, `slice`, `transpose`, `reshape`, `permute`, and other common operations.
-- ⚡ **Multi-functional**: Supports parallelism, broadcasting, basic math, and some common deep learning functions (matmul/softmax/attention).
+- ⚡ **Multi-functional**: Supports parallelism, broadcasting, basic math, common deep learning functions, multi-axis normalization, and SDPA / Flash Attention.
 - 🛠️ **Easy to Extend**: Clean source code, easy for secondary development.
 - 🗂️ **I/O Support**: Can save/load YTensor supported file formats.
 - 🔢 **Wide Type Support**: Supports common data types, such as `float16`, `bfloat16`, etc.
@@ -112,10 +112,17 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 
 ## Project Information
 
-- **Version**: 0.3
+- **Version**: 0.13
 - **Author**: SnifferCaptain
 - **Email**: 3586554865@qq.com
 - **Language**: C++20
+
+## v0.13 Highlights
+
+- `yt::function` is reorganized into `activation`, `normalization`, `ops`, and `loss`.
+- Added `linear`, `rmsNorm`, `normalize`, `instanceNorm`, naive `batchNorm`, and `groupNorm`.
+- Softmax is documented as an activation; non-element-wise ops no longer expose simplified `order` derivative APIs.
+- SDPA now provides `MATH` and `FLASH_AVX2` backends with generic bool-mask, predicate-mask, and bias support.
 
 ## Getting Help
 

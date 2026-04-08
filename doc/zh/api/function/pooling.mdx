@@ -8,12 +8,11 @@
 
 - `axis` 支持负数索引；实现会标准化为：`axis = (axis % dim + dim) % dim`。
 - `stride < 0` 时，默认取 `stride = kernelSize`。
-- `order = 0` 返回池化结果；`order = 1` 返回与输入同 shape 的“梯度掩码/权重”张量（不包含上游梯度的乘法）。
 
-| 函数 | 说明 | 原地版本 | `order` 支持 | 类型约束 |
-| --- | --- | --- | --- | --- |
-| `maxPool1d()` | 最大池化 | - | `0/1` | `T` 为算术类型 |
-| `avgPool1d()` | 平均池化 | - | `0/1` | `T` 为算术类型 |
+| 函数 | 说明 | 原地版本 | 类型约束 |
+| --- | --- | --- | --- |
+| `maxPool1d()` | 最大池化 | - | `T` 为算术类型 |
+| `avgPool1d()` | 平均池化 | - | `T` 为算术类型 |
 
 ---
 
@@ -25,13 +24,12 @@
 
 - 输出长度：`output_size = (input_size - kernelSize) / stride + 1`。
 - 若 `output_size <= 0`，会抛出 `std::invalid_argument`（通常是 `kernelSize` 过大）。
-- `order = 1`：返回与输入同 shape 的掩码张量：每个窗口内最大值位置累加 `1`，其他为 `0`。
 
 ### 函数签名
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1, int order = 0);
+YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1);
 ```
 
 ### 参数说明
@@ -42,13 +40,11 @@ YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 | `kernelSize` | `int` | - | 窗口大小 |
 | `stride` | `int` | `-1` | 步幅；`<0` 时默认等于 `kernelSize` |
 | `axis` | `int` | `-1` | 池化轴（支持负数索引） |
-| `order` | `int` | `0` | `0` 输出池化结果；`1` 输出梯度掩码 |
 
 ### 返回值
 
 - `YTensor<T, dim>`
-- `order = 0`：shape 与输入相同，但 `axis` 维度被替换为 `output_size`
-- `order = 1`：shape 与输入相同
+- shape 与输入相同，但 `axis` 维度会被替换为 `output_size`
 
 ### 使用示例
 
@@ -58,8 +54,7 @@ YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 void example_maxpool1d() {
     auto x = yt::YTensor<float, 1>({8}, {1, 3, 2, 0, 5, 1, 2, 4});
 
-    auto y = yt::function::maxPool1d(x, /*kernelSize=*/2, /*stride=*/2, /*axis=*/-1, /*order=*/0);
-    auto mask = yt::function::maxPool1d(x, 2, 2, -1, 1);
+    auto y = yt::function::maxPool1d(x, /*kernelSize=*/2, /*stride=*/2, /*axis=*/-1);
 }
 ```
 
@@ -72,13 +67,12 @@ void example_maxpool1d() {
 沿 `axis` 执行 1D 平均池化。
 
 - 输出长度：`output_size = (input_size - kernelSize) / stride + 1`。
-- `order = 1`：返回与输入同 shape 的权重张量：每个窗口内元素对输出的贡献累加 `1/kernelSize`。
 
 ### 函数签名
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1, int order = 0);
+YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1);
 ```
 
 ### 参数说明
@@ -89,21 +83,18 @@ YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 | `kernelSize` | `int` | - | 窗口大小 |
 | `stride` | `int` | `-1` | 步幅；`<0` 时默认等于 `kernelSize` |
 | `axis` | `int` | `-1` | 池化轴（支持负数索引） |
-| `order` | `int` | `0` | `0` 输出池化结果；`1` 输出梯度权重 |
 
 ### 返回值
 
 - `YTensor<T, dim>`
-- `order = 0`：shape 与输入相同，但 `axis` 维度被替换为 `output_size`
-- `order = 1`：shape 与输入相同
+- shape 与输入相同，但 `axis` 维度会被替换为 `output_size`
 
 ### 使用示例
 
 ```cpp
 auto x = yt::YTensor<float, 1>({8}, {1, 3, 2, 0, 5, 1, 2, 4});
 
-auto y = yt::function::avgPool1d(x, 2, 2, -1, 0);
-auto w = yt::function::avgPool1d(x, 2, 2, -1, 1);
+auto y = yt::function::avgPool1d(x, 2, 2, -1);
 ```
 
 ---

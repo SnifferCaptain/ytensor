@@ -1,6 +1,6 @@
 # 激活函数
 
-本文档介绍 `yt::function` 命名空间中的激活函数（仅包含激活类；Softmax / LogSoftmax / LayerNorm 等归一化相关函数请见 [normalization.mdx](./normalization.mdx)）。
+本文档介绍 `yt::function` 命名空间中的激活函数。`softmax()` 现在也归到激活类；非逐元素的归一化算子请见 [normalization.mdx](./normalization.mdx)。
 
 ## 概述
 
@@ -14,6 +14,7 @@
 | `relu()` | ReLU | `relu_()` | `..., -1, 0, 1, 2...`（见正文） | `T` 为算术类型 |
 | `exp()` | 指数函数 $e^x$ | `exp_()` | 任意（忽略，恒为 exp） | 与 `std::exp` 兼容 |
 | `sigmoid()` | Sigmoid | `sigmoid_()` | `-1, 0, 1` | 与 exp 兼容 |
+| `softmax()` | Softmax | `softmax_()` | 不支持 | 支持单轴与多轴联合归一化 |
 | `leakyRelu()` | Leaky ReLU | `leakyRelu_()` | `0, 1` | `T` 为算术类型 |
 | `elu()` | ELU | `elu_()` | `0, 1` | `T` 为浮点类型 |
 | `selu()` | SELU | `selu_()` | `0, 1` | `T` 为浮点类型 |
@@ -24,6 +25,46 @@
 | `mish()` | Mish | `mish_()` | `0, 1` | 与 exp/tanh 兼容 |
 | `hardSigmoid()` | Hard Sigmoid | `hardSigmoid_()` | `0, 1` | `T` 为算术类型 |
 | `hardSwish()` | Hard Swish | `hardSwish_()` | `0, 1` | `T` 为算术类型 |
+
+---
+
+## `softmax()` / `softmax_()`
+
+### 核心功能描述
+
+沿单个轴或多个轴联合执行 Softmax，内部采用减去最大值的数值稳定实现。
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, const std::vector<int>& axes);
+
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, const std::vector<int>& axes);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+```
+
+### 说明
+
+- `axes` 支持多轴联合归一化。
+- 负轴会在内部标准化。
+- 返回形状与输入一致。
+- `softmax` 不提供 `order` 接口。
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+
+auto y0 = yt::function::softmax(x, -1);
+auto y1 = yt::function::softmax(x, std::vector<int>{1, 2});
+```
 
 ---
 

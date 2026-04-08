@@ -2,16 +2,14 @@
 
 namespace yt::kernel::avx2 {
 
-namespace detail {
-
 template<int NCOLS, int... Is>
-inline void gemv_acc_zero(__m256 acc[][2], std::integer_sequence<int, Is...>) {
+inline void _gemvAccZero(__m256 acc[][2], std::integer_sequence<int, Is...>) {
     (((acc[Is][0] = _mm256_setzero_ps()), (acc[Is][1] = _mm256_setzero_ps())), ...);
 }
 
 template<int NCOLS, int... Is>
-inline void gemv_fma_step(const float* __restrict A, const float* const* __restrict Bcols,
-                          __m256 acc[][2], int p, std::integer_sequence<int, Is...>) {
+inline void _gemvFmaStep(const float* __restrict A, const float* const* __restrict Bcols,
+                         __m256 acc[][2], int p, std::integer_sequence<int, Is...>) {
     __m256 a0 = _mm256_loadu_ps(A + p);
     __m256 a1 = _mm256_loadu_ps(A + p + 8);
     ((acc[Is][0] = _mm256_fmadd_ps(a0, _mm256_loadu_ps(Bcols[Is] + p),     acc[Is][0]),
@@ -19,19 +17,17 @@ inline void gemv_fma_step(const float* __restrict A, const float* const* __restr
 }
 
 template<int NCOLS, int... Is>
-inline void gemv_fma_step8(const float* __restrict A, const float* const* __restrict Bcols,
-                           __m256 acc[][2], int p, std::integer_sequence<int, Is...>) {
+inline void _gemvFmaStep8(const float* __restrict A, const float* const* __restrict Bcols,
+                          __m256 acc[][2], int p, std::integer_sequence<int, Is...>) {
     __m256 a0 = _mm256_loadu_ps(A + p);
     ((acc[Is][0] = _mm256_fmadd_ps(a0, _mm256_loadu_ps(Bcols[Is] + p), acc[Is][0])), ...);
 }
 
 template<int NCOLS, int... Is>
-inline void gemv_hsum_write(const __m256 acc[][2], float* sums,
-                            std::integer_sequence<int, Is...>) {
+inline void _gemvHsumWrite(const __m256 acc[][2], float* sums,
+                           std::integer_sequence<int, Is...>) {
     ((sums[Is] = hsum_ps(_mm256_add_ps(acc[Is][0], acc[Is][1]))), ...);
 }
-
-} // namespace detail
 
 template<int NCOLS>
 inline void gemv_dot_ncols(const float* __restrict A, const float* const* __restrict Bcols,
@@ -39,15 +35,15 @@ inline void gemv_dot_ncols(const float* __restrict A, const float* const* __rest
     static_assert(NCOLS >= 1, "NCOLS must be >= 1");
     __m256 acc[NCOLS][2];
     auto seq = std::make_integer_sequence<int, NCOLS>{};
-    detail::gemv_acc_zero<NCOLS>(acc, seq);
+    _gemvAccZero<NCOLS>(acc, seq);
 
     int p = 0;
     for (; p + 16 <= k; p += 16)
-        detail::gemv_fma_step<NCOLS>(A, Bcols, acc, p, seq);
+        _gemvFmaStep<NCOLS>(A, Bcols, acc, p, seq);
     for (; p + 8 <= k; p += 8)
-        detail::gemv_fma_step8<NCOLS>(A, Bcols, acc, p, seq);
+        _gemvFmaStep8<NCOLS>(A, Bcols, acc, p, seq);
 
-    detail::gemv_hsum_write<NCOLS>(acc, sums, seq);
+    _gemvHsumWrite<NCOLS>(acc, sums, seq);
 
     for (; p < k; ++p) {
         float av = A[p];

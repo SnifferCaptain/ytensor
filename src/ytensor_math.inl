@@ -419,7 +419,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) 
     yt::YTensor<T, dim> op(newShape);
     size_t max = op.size();
     if (max * _shape[axis] > yt::infos::minParOps){
-        #pragma omp parallel for simd  proc_bind(close)
+        #pragma omp parallel for proc_bind(close)
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             T sum = T(0);
@@ -432,7 +432,6 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(int axis) const requires (dim > 1) 
             op.atData_(i) = sum;
         }
     }else{
-        #pragma omp simd
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             T sum = T(0);
@@ -485,7 +484,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requir
     yt::YTensor<T, dim> op(newShape);
     size_t max = op.size();
     if (max > yt::infos::minParOps){
-        #pragma omp parallel for simd  proc_bind(close)
+        #pragma omp parallel for proc_bind(close)
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             auto base = this->offset(coord);
@@ -497,7 +496,6 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::sum(std::vector<int> axis) const requir
             op.atData_(i) = sum;
         }
     }else{
-        #pragma omp simd
         for (size_t i = 0; i < max; i++) {
             auto coord = op.toCoord(i);
             auto base = this->offset(coord);

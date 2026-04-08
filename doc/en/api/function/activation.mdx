@@ -2,7 +2,7 @@
 
 This page documents activation functions in the `yt::function` namespace.
 
-Normalization-related ops such as Softmax / LogSoftmax / LayerNorm are documented in [normalization.mdx](./normalization.mdx).
+`softmax()` is documented here because it is now grouped with activation functions. Non-element-wise normalization operators are documented in [normalization.mdx](./normalization.mdx).
 
 ## Overview
 
@@ -16,6 +16,7 @@ Conventions:
 | `relu()` | `relu_()` | supports negative/0/1 (see below) | arithmetic `T` |
 | `exp()` | `exp_()` | ignored | exp-compatible `T` |
 | `sigmoid()` | `sigmoid_()` | `-1/0/1` | `order=-1` forwards to Softplus |
+| `softmax()` | `softmax_()` | no `order` | supports single-axis and multi-axis normalization |
 | `leakyRelu()` | `leakyRelu_()` | `0/1` | arithmetic `T` |
 | `elu()` | `elu_()` | `0/1` | floating `T` |
 | `selu()` | `selu_()` | `0/1` | floating `T` |
@@ -26,6 +27,45 @@ Conventions:
 | `mish()` | `mish_()` | `0/1` | uses softplus + tanh |
 | `hardSigmoid()` | `hardSigmoid_()` | `0/1` | arithmetic `T` |
 | `hardSwish()` | `hardSwish_()` | `0/1` | arithmetic `T` |
+
+---
+
+## `softmax()` / `softmax_()`
+
+### Core behavior
+
+Computes Softmax over one or multiple axes using a numerically stable max-subtraction implementation.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, const std::vector<int>& axes);
+
+template<typename T, int dim>
+YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, const std::vector<int>& axes);
+
+template<typename T, int dim>
+YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
+```
+
+### Notes
+
+- Negative axes are normalized internally.
+- The result shape is identical to the input shape.
+- `softmax()` does not expose an `order` interface.
+
+### Example
+
+```cpp
+auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+
+auto y0 = yt::function::softmax(x, -1);
+auto y1 = yt::function::softmax(x, std::vector<int>{1, 2});
+```
 
 ---
 

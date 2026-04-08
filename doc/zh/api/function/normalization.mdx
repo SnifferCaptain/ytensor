@@ -1,118 +1,23 @@
 # 归一化
 
-本文档介绍 `yt::function` 命名空间中的归一化相关函数（Softmax / LogSoftmax / LayerNorm）。
+本文档介绍 `yt::function` 命名空间中的归一化相关函数。
 
 ## 概述
 
 说明约定：
 
-- `axis` 支持负数索引；实现会标准化为：`axis = (axis % dim + dim) % dim`。
-- 下文的 `order = 1` 均为“逐元素/对角线形式”的导数结果（不是完整 Jacobian，也不包含与上游梯度的链式组合）。
+- 负轴会在内部标准化。
+- 这些归一化算子不再提供简化版 `order` 导数接口。
+- 大多数函数同时支持单轴重载与 `std::vector<int>` 多轴重载。
 
-| 函数 | 说明 | 原地版本 | `order` 支持 | 类型约束 |
+| 函数 | 说明 | 原地版本 | 仿射参数 | 多轴支持 |
 | --- | --- | --- | --- | --- |
-| `softmax()` | Softmax 归一化 | `softmax_()` | - | 需要 `std::exp` |
-| `logSoftmax()` | LogSoftmax：`x - logsumexp(x)` | `logSoftmax_()` | `0/1` | `T` 为浮点 |
-| `layerNorm()` | LayerNorm：沿 `axis` 归一化 | `layerNorm_()` | `0/1` | `T` 为浮点 |
-
----
-
-## `softmax()` / `softmax_()`
-
-### 核心功能描述
-
-沿指定轴执行 Softmax：
-
-$$\mathrm{softmax}(x_i) = \frac{e^{x_i}}{\sum_j e^{x_j}}$$
-
-实现采用数值稳定版本：对每个 slice 先减去最大值 `max`，再计算 `exp(x - max)` 并归一化。
-
-- 返回张量形状与输入一致。
-- 对连续张量路径做了优化（类似“融合 max/exp/sum”的循环结构）；非连续张量走通用 `at()` 访问路径。
-
-### 函数签名
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> softmax(const YTensor<T, dim>& x, int axis = -1);
-
-template<typename T, int dim>
-YTensor<T, dim>& softmax_(YTensor<T, dim>& x, int axis = -1);
-```
-
-### 参数说明
-
-| 参数名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
-| `axis` | `int` | `-1` | 归一化轴（支持负数索引） |
-
-### 返回值
-
-- 非原地：`YTensor<T, dim>`
-- 原地：`YTensor<T, dim>&`
-
-### 使用示例
-
-```cpp
-#include "ytensor_function.hpp"
-
-void example_softmax() {
-    auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
-
-    auto y = yt::function::softmax(x, -1);
-    yt::function::softmax_(x, -1);
-}
-```
-
----
-
-## `logSoftmax()` / `logSoftmax_()`
-
-### 核心功能描述
-
-沿指定轴计算 LogSoftmax：
-
-$$\mathrm{logSoftmax}(x) = x - \log\sum\exp(x)$$
-
-- `order = 0`：返回 `logSoftmax` 本身（内部使用 `max` + `log(sum(exp(x-max)))` 的稳定方式）。
-- `order = 1`：实现返回对角线形式：$1 - \mathrm{softmax}(x)$。
-
-注意：严格意义上，LogSoftmax 的雅可比矩阵并非对角矩阵；这里的 `order = 1` 是一种简化输出，适合作为某些推导/验证用途。
-
-### 函数签名
-
-```cpp
-template<typename T, int dim>
-YTensor<T, dim> logSoftmax(const YTensor<T, dim>& x, int axis = -1, int order = 0);
-
-template<typename T, int dim>
-YTensor<T, dim>& logSoftmax_(YTensor<T, dim>& x, int axis = -1, int order = 0);
-```
-
-### 参数说明
-
-| 参数名 | 类型 | 默认值 | 说明 |
-| --- | --- | --- | --- |
-| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
-| `axis` | `int` | `-1` | 计算轴（支持负数索引） |
-| `order` | `int` | `0` | 支持 `0/1`；其他值会抛异常 |
-
-### 返回值
-
-- 非原地：`YTensor<T, dim>`
-- 原地：`YTensor<T, dim>&`
-
-### 使用示例
-
-```cpp
-auto x = yt::YTensor<float, 2>({2, 3}, {1, 2, 3, 1, 2, 3});
-
-auto y = yt::function::logSoftmax(x, -1, 0);
-auto diag = yt::function::logSoftmax(x, -1, 1);
-
-yt::function::logSoftmax_(x, -1, 0);
-```
+| `layerNorm()` | 零均值、单位方差归一化 | `layerNorm_()` | 可选 `gamma` / `bias` | 支持 |
+| `rmsNorm()` | RMS 归一化 | `rmsNorm_()` | `weight` | 支持 |
+| `normalize()` | Lp 范数归一化 | `normalize_()` | 可选 `gamma` / `bias` | 支持 |
+| `instanceNorm()` | 每样本每通道的空间归一化 | `instanceNorm_()` | 可选 `gamma` / `bias` | 由 `channelAxis` 推导 |
+| `batchNorm()` | 朴素 BatchNorm | `batchNorm_()` | 可选 `gamma` / `bias` | 由 `channelAxis` 推导 |
+| `groupNorm()` | GroupNorm | `groupNorm_()` | 可选 `gamma` / `bias` | 由 `channelAxis` 与 `groups` 推导 |
 
 ---
 
@@ -120,27 +25,24 @@ yt::function::logSoftmax_(x, -1, 0);
 
 ### 核心功能描述
 
-沿指定轴进行 Layer Normalization（无可学习的 affine 参数）：
+沿单个轴或多个轴执行零均值、单位方差归一化：
 
 $$y = \frac{x - \mu}{\sqrt{\sigma^2 + \varepsilon}}$$
-
-其中 $\mu$ 和 $\sigma^2$ 在 `axis` 维度上计算。
-
-- `order = 0`：返回归一化结果。
-- `order = 1`：实现返回对角线近似（或称简化版）导数：
-
-$$\frac{\partial y_i}{\partial x_i} = \frac{1}{\sqrt{\sigma^2+\varepsilon}}\left(1 - \frac{1}{N} - \frac{\hat{x}_i^2}{N}\right)$$
-
-其中 $N$ 是 `axis` 维度长度、$\hat{x}$ 为归一化后的值。
 
 ### 函数签名
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
 
 template<typename T, int dim>
-YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5), int order = 0);
+YTensor<T, dim> layerNorm(const YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim>
+YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim>
+YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_cast<T>(1e-5));
 ```
 
 ### 参数说明
@@ -148,27 +50,119 @@ YTensor<T, dim>& layerNorm_(YTensor<T, dim>& x, int axis = -1, T eps = static_ca
 | 参数名 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
-| `axis` | `int` | `-1` | 归一化轴（支持负数索引） |
-| `eps` | `T` | `1e-5` | 数值稳定项，避免除 0 |
-| `order` | `int` | `0` | 支持 `0/1` |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | 归一化轴 |
+| `eps` | `T` | `1e-5` | 数值稳定项 |
 
 ### 返回值
 
-- 非原地：`YTensor<T, dim>`
-- 原地：`YTensor<T, dim>&`
+- 支持带 `gamma` / `bias` 的仿射重载。
+- 输出形状与输入一致。
 
 ### 使用示例
 
 ```cpp
-auto x = yt::YTensor<float, 2>::randn({2, 4});
+#include "ytensor_function.hpp"
 
-auto y = yt::function::layerNorm(x, -1, 1e-5f, 0);
-auto diag = yt::function::layerNorm(x, -1, 1e-5f, 1);
-
-yt::function::layerNorm_(x, -1);
+void example_softmax() {
+    auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+    auto y = yt::function::layerNorm(x, std::vector<int>{1, 2});
+    yt::function::layerNorm_(x, -1);
+}
 ```
 
 ---
+
+## `rmsNorm()` / `rmsNorm_()`
+
+### 核心功能描述
+
+沿单个轴或多个轴执行 RMS 归一化：
+
+$$y = \frac{x}{\sqrt{\mathrm{mean}(x^2) + \varepsilon}} \odot weight$$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim, int weightDim>
+YTensor<T, dim> rmsNorm(const YTensor<T, dim>& x, const YTensor<T, weightDim>& weight, const std::vector<int>& axes, T eps = static_cast<T>(1e-5));
+
+template<typename T, int dim, int weightDim>
+YTensor<T, dim> rmsNorm(const YTensor<T, dim>& x, const YTensor<T, weightDim>& weight, int axis = -1, T eps = static_cast<T>(1e-5));
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `weight` | `const YTensor<T, weightDim>&` | - | 与归一化轴匹配的缩放参数 |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | 归一化轴 |
+| `eps` | `T` | `1e-5` | 数值稳定项 |
+
+### 返回值
+
+- 输出形状与输入一致。
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 2>::randn({2, 8});
+auto w = yt::YTensor<float, 1>::ones({8});
+auto y = yt::function::rmsNorm(x, w, -1);
+```
+
+---
+
+## `normalize()` / `normalize_()`
+
+### 核心功能描述
+
+沿单个轴或多个轴执行 Lp 范数归一化：
+
+$$y = \frac{x}{\max(\lVert x \rVert_p, \varepsilon)}$$
+
+### 函数签名
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> normalize(const YTensor<T, dim>& x, const std::vector<int>& axes, T p = static_cast<T>(2), T eps = static_cast<T>(1e-12));
+
+template<typename T, int dim>
+YTensor<T, dim> normalize(const YTensor<T, dim>& x, int axis = -1, T p = static_cast<T>(2), T eps = static_cast<T>(1e-12));
+```
+
+### 参数说明
+
+| 参数名 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `x` | `const YTensor<T, dim>&` / `YTensor<T, dim>&` | - | 输入张量 |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | 归一化轴 |
+| `p` | `T` | `2` | Lp 范数阶数 |
+| `eps` | `T` | `1e-12` | 分母下界 |
+
+### 返回值
+
+- 支持带 `gamma` / `bias` 的仿射重载。
+- 输出形状与输入一致。
+
+### 使用示例
+
+```cpp
+auto x = yt::YTensor<float, 3>::randn({2, 3, 4});
+auto y = yt::function::normalize(x, std::vector<int>{1, 2}, 2.0f);
+```
+
+---
+
+## `instanceNorm()` / `batchNorm()` / `groupNorm()`
+
+这三类函数都建立在统一的多轴归一化后端之上：
+
+- `instanceNorm()`：对每个样本、每个通道的空间维做归一化。
+- `batchNorm()`：按通道统计 batch 维与空间维，是朴素实现，不包含 EMA 与推理融合。
+- `groupNorm()`：先按组划分通道，再对组内通道和空间维联合归一化。
+
+它们都提供可选的 `gamma` / `bias` 仿射重载，输出形状与输入一致，并通过 `channelAxis` 推导实际归一化轴。
 
 ## 相关内容
 

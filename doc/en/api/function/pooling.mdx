@@ -6,13 +6,11 @@ This page documents 1D pooling functions in the `yt::function` namespace.
 
 - Negative axes are normalized by: `axis = (axis % dim + dim) % dim`.
 - If `stride < 0`, the implementation uses `stride = kernelSize`.
-- `order = 0` returns pooled output.
-- `order = 1` returns an input-shaped mask/weight tensor (does not include upstream gradient multiplication).
 
-| Function | In-place | `order` | Notes |
-| --- | --- | --- | --- |
-| `maxPool1d()` | - | `0/1` | `order=1` marks max positions |
-| `avgPool1d()` | - | `0/1` | `order=1` accumulates `1/kernelSize` weights |
+| Function | In-place | Notes |
+| --- | --- | --- |
+| `maxPool1d()` | - | output size follows `kernelSize` / `stride` |
+| `avgPool1d()` | - | output size follows `kernelSize` / `stride` |
 
 ---
 
@@ -29,7 +27,7 @@ Performs 1D max pooling along `axis`.
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1, int order = 0);
+YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1);
 ```
 
 ### Parameters
@@ -40,11 +38,10 @@ YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 | `kernelSize` | `int` | - | window size |
 | `stride` | `int` | `-1` | step; `<0` means `kernelSize` |
 | `axis` | `int` | `-1` | pooling axis |
-| `order` | `int` | `0` | `0` output, `1` mask |
 
 ### Returns
 
-- `YTensor<T, dim>`
+- `YTensor<T, dim>` with the pooled axis resized to `output_size`
 
 ### Example
 
@@ -52,8 +49,7 @@ YTensor<T, dim> maxPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 #include "ytensor_function.hpp"
 
 auto x = yt::YTensor<float, 1>({8}, {1, 3, 2, 0, 5, 1, 2, 4});
-auto y = yt::function::maxPool1d(x, 2, 2, -1, 0);
-auto mask = yt::function::maxPool1d(x, 2, 2, -1, 1);
+auto y = yt::function::maxPool1d(x, 2, 2, -1);
 ```
 
 ---
@@ -68,7 +64,7 @@ Performs 1D average pooling along `axis`.
 
 ```cpp
 template<typename T, int dim>
-YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1, int order = 0);
+YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride = -1, int axis = -1);
 ```
 
 ### Parameters
@@ -79,18 +75,16 @@ YTensor<T, dim> avgPool1d(const YTensor<T, dim>& x, int kernelSize, int stride =
 | `kernelSize` | `int` | - | window size |
 | `stride` | `int` | `-1` | step; `<0` means `kernelSize` |
 | `axis` | `int` | `-1` | pooling axis |
-| `order` | `int` | `0` | `0` output, `1` weights |
 
 ### Returns
 
-- `YTensor<T, dim>`
+- `YTensor<T, dim>` with the pooled axis resized to `output_size`
 
 ### Example
 
 ```cpp
 auto x = yt::YTensor<float, 1>({8}, {1, 3, 2, 0, 5, 1, 2, 4});
-auto y = yt::function::avgPool1d(x, 2, 2, -1, 0);
-auto w = yt::function::avgPool1d(x, 2, 2, -1, 1);
+auto y = yt::function::avgPool1d(x, 2, 2, -1);
 ```
 
 ---

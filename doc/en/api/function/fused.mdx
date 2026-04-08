@@ -1,16 +1,42 @@
 # Fused Operators
 
-This page documents fused / composite operators in the `yt::function` namespace.
+This page documents generic operators and fused / composite operators in the `yt::function` namespace.
 
 ## Overview
 
 | Function | Purpose |
 | --- | --- |
-| `matmul()` | matrix multiplication with optional mask and order |
+| `matmul()` | matrix multiplication wrapper |
+| `linear()` | affine projection using PyTorch-style weights |
 | `logsumexp()` | numerically stable `log(sum(exp(x)))` over `axis` |
+| `logSoftmax()` | `x - logsumexp(x)` over one or multiple axes |
 | `scaledDotProductAttention()` | SDPA with optional `mask` and `bias` |
-| `sdpaBackend()` | returns backend name string |
+| `sdpaBackend` | backend enum for SDPA |
 | `throwNotSupport()` | throws a runtime error for unsupported ops |
+
+---
+
+## `linear()`
+
+### Core behavior
+
+Applies a linear layer with weights stored in PyTorch layout `[out_features, in_features]`.
+
+### Signature
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> linear(const YTensor<T, dim>& x, const YTensor<T, 2>& weight);
+
+template<typename T, int dim>
+YTensor<T, dim> linear(const YTensor<T, dim>& x, const YTensor<T, 2>& weight, const YTensor<T, 1>& bias);
+```
+
+### Notes
+
+- The last dimension of `x` must match `weight.shape(1)`.
+- If `bias` is provided, its shape must be `[out_features]`.
+- The output keeps the same rank as `x`, with the last dimension replaced by `out_features`.
 
 ---
 
@@ -18,27 +44,26 @@ This page documents fused / composite operators in the `yt::function` namespace.
 
 ### Core behavior
 
-Performs matrix multiplication. Supports optional masking and different execution modes via `order`.
+Performs matrix multiplication / batched matrix multiplication through the `yt::function` entry.
 
 ### Signature
 
 ```cpp
-template<typename T, typename To = float>
-YTensor<To, 2> matmul(const YTensor<T, 2>& x, const YTensor<T, 2>& y, const YTensor<bool, 2>* mask = nullptr, int order = 0);
+template<typename T, int dim0, int dim1>
+yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})>
+matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
 ```
 
 ### Parameters
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `x` | `const YTensor<T,2>&` | - | left matrix `[m, k]` |
-| `y` | `const YTensor<T,2>&` | - | right matrix `[k, n]` |
-| `mask` | `const YTensor<bool,2>*` | `nullptr` | optional mask (implementation-defined semantics) |
-| `order` | `int` | `0` | selects algorithm / return mode |
+| `a` | `const YTensor<T, dim0>&` | - | left operand |
+| `b` | `const YTensor<T, dim1>&` | - | right operand |
 
 ### Returns
 
-- `YTensor<To, 2>` with shape `[m, n]`
+- `YTensor<T, max(dim0, dim1, 2)>`
 
 ### Example
 
@@ -54,13 +79,16 @@ auto c = yt::function::matmul(a, b);
 
 ### Core behavior
 
-Computes `log(sum(exp(x)))` along `axis` in a numerically stable way.
+Computes `log(sum(exp(x)))` along one or multiple axes in a numerically stable way.
 
 Implementation detail: keeps the reduced dimension as size `1`.
 
 ### Signature
 
 ```cpp
+template<typename T, int dim>
+YTensor<T, dim> logsumexp(const YTensor<T, dim>& x, const std::vector<int>& axes);
+
 template<typename T, int dim>
 YTensor<T, dim> logsumexp(const YTensor<T, dim>& x, int axis = -1);
 ```
@@ -70,7 +98,7 @@ YTensor<T, dim> logsumexp(const YTensor<T, dim>& x, int axis = -1);
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `x` | `const YTensor<T, dim>&` | - | input |
-| `axis` | `int` | `-1` | reduction axis (negative allowed) |
+| `axes` / `axis` | `std::vector<int>` / `int` | - / `-1` | reduction axes |
 
 ### Returns
 
@@ -85,6 +113,22 @@ auto lse = yt::function::logsumexp(x, -1); // shape [2,1]
 
 ---
 
+## `logSoftmax()` / `logSoftmax_()`
+
+Computes `x - logsumexp(x)` over one or multiple axes.
+
+```cpp
+template<typename T, int dim>
+YTensor<T, dim> logSoftmax(const YTensor<T, dim>& x, const std::vector<int>& axes);
+
+template<typename T, int dim>
+YTensor<T, dim> logSoftmax(const YTensor<T, dim>& x, int axis = -1);
+```
+
+This operator is no longer documented with an `order` derivative interface.
+
+---
+
 ## `scaledDotProductAttention()`
 
 ### Core behavior
@@ -95,37 +139,52 @@ $$\text{attn}(Q, K, V) = \text{softmax}(QK^T / \sqrt{d} + \text{bias} + \text{ma
 
 Masking behavior:
 
-- `mask` is a `YTensor<bool,2>*`.
-- Mask shape must be `[n0, n1]` where `n0 = Q.shape[0]` and `n1 = K.shape[0]`.
-- Masked positions are filled with a large negative value (e.g. `-1e9`) before softmax.
+- Supports a `YTensor<bool, 2>*` mask with shape `[n0, n1]`.
+- Also supports a predicate-mask overload `mask(row, col) -> bool`.
+- Additive `bias` remains independent from mask semantics and uses shape `[n0, n1]`.
+- If an entire query row is masked out, the output row is zeroed.
 
 ### Signature
 
 ```cpp
-template<typename T, typename To = float>
-YTensor<To, 2> scaledDotProductAttention(
-    const YTensor<T, 2>& q,
-    const YTensor<T, 2>& k,
-    const YTensor<T, 2>& v,
-    const YTensor<bool, 2>* mask = nullptr,
-    const YTensor<T, 2>* bias = nullptr,
-    int order = 0);
+template<typename T, int dim>
+YTensor<T, dim> scaledDotProductAttention(
+    YTensor<T, dim>& query,
+    YTensor<T, dim>& key,
+    YTensor<T, dim>& value,
+    T scale = static_cast<T>(0.0),
+    YTensor<bool, 2>* mask = nullptr,
+    YTensor<T, 2>* bias = nullptr,
+    sdpaBackend backend = sdpaBackend::MATH
+);
+
+template<typename T, int dim, typename MaskFunc>
+YTensor<T, dim> scaledDotProductAttention(
+    YTensor<T, dim>& query,
+    YTensor<T, dim>& key,
+    YTensor<T, dim>& value,
+    T scale,
+    MaskFunc&& mask,
+    YTensor<T, 2>* bias = nullptr,
+    sdpaBackend backend = sdpaBackend::MATH
+);
 ```
 
 ### Parameters
 
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
-| `q` | `const YTensor<T,2>&` | - | query `[n0, d]` |
-| `k` | `const YTensor<T,2>&` | - | key `[n1, d]` |
-| `v` | `const YTensor<T,2>&` | - | value `[n1, dv]` |
-| `mask` | `const YTensor<bool,2>*` | `nullptr` | optional boolean mask `[n0, n1]` |
-| `bias` | `const YTensor<T,2>*` | `nullptr` | optional bias added to logits `[n0, n1]` |
-| `order` | `int` | `0` | selects backend / mode |
+| `query` | `YTensor<T, dim>&` | - | query `[..., n0, d]` |
+| `key` | `YTensor<T, dim>&` | - | key `[..., n1, d]` |
+| `value` | `YTensor<T, dim>&` | - | value `[..., n1, dv]` |
+| `scale` | `T` | `0` | if zero, uses `1 / sqrt(d)` |
+| `mask` | `YTensor<bool,2>*` or predicate | `nullptr` | optional mask on `[n0, n1]` |
+| `bias` | `YTensor<T,2>*` | `nullptr` | optional additive bias `[n0, n1]` |
+| `backend` | `sdpaBackend` | `MATH` | execution backend |
 
 ### Returns
 
-- `YTensor<To,2>` output `[n0, dv]`
+- `YTensor<T, dim>` output `[..., n0, dv]`
 
 ### Example
 
@@ -137,21 +196,25 @@ auto v = yt::YTensor<float, 2>({3, 5}, {1,0,0,0,0,  0,1,0,0,0,  0,0,1,0,0});
 // allow only first 2 keys for first query token
 auto mask = yt::YTensor<bool, 2>({2, 3}, {true,true,false,  true,true,true});
 
-auto out = yt::function::scaledDotProductAttention(q, k, v, &mask, nullptr, 0);
+auto out0 = yt::function::scaledDotProductAttention(q, k, v, 0.0f, &mask, nullptr, yt::function::sdpaBackend::MATH);
+auto out1 = yt::function::scaledDotProductAttention(q, k, v, 0.0f, [](int i, int j){ return j <= i; }, nullptr, yt::function::sdpaBackend::FLASH_AVX2);
 ```
 
 ---
 
-## `sdpaBackend()`
+## `sdpaBackend`
 
 ### Core behavior
 
-Returns the name of the SDPA backend used by the library.
+Backend enum used by `scaledDotProductAttention()`.
 
 ### Signature
 
 ```cpp
-std::string sdpaBackend();
+enum struct sdpaBackend {
+    MATH,
+    FLASH_AVX2
+};
 ```
 
 ### Parameters
@@ -160,13 +223,8 @@ std::string sdpaBackend();
 
 ### Returns
 
-- `std::string`
-
-### Example
-
-```cpp
-auto name = yt::function::sdpaBackend();
-```
+- `MATH`: generic math path.
+- `FLASH_AVX2`: AVX2 Flash Attention backend.
 
 ---
 

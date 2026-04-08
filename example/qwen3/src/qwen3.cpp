@@ -175,40 +175,28 @@ void RoPECache::precompute(int dim, int max_len, float theta) {
 }
 
 yt::YTensor<float, 3> RMSNorm::forward(const yt::YTensor<float, 3>& x) const {
-	auto out = x.clone();
-	RMSNorm::forward_(out);
-	return out;
+	return yt::function::rmsNorm(x, weight, -1, eps);
 }
 
 void RMSNorm::forward_(yt::YTensor<float, 3>& x) const {
-	auto x_sq = x * x;
-	auto sum_sq = x_sq.mean(-1);
-	x.broadcastInplace([this](float& a, const float& b, const float& c) {
-		a = a / (sqrtf(b + eps)) * c;
-	}, sum_sq, weight.view(1, 1, x.shape(-1)));
+	yt::function::rmsNorm_(x, weight, -1, eps);
 }
 
 yt::YTensor<float, 4> HeadRMSNorm::forward(const yt::YTensor<float, 4>& x) const {
-	auto out = x.clone();
-	HeadRMSNorm::forward_(out);
-	return out;
+	return yt::function::rmsNorm(x, weight, -1, eps);
 }
 
 void HeadRMSNorm::forward_(yt::YTensor<float, 4>& x) const {
-	auto x_sq = x * x;
-	auto sum_sq = x_sq.mean(-1);
-	x.broadcastInplace([this](float& a, const float& b, const float& c) {
-		a = a / (sqrtf(b + eps)) * c;
-	}, sum_sq, weight.view(1, 1, 1, x.shape(-1)));
+	yt::function::rmsNorm_(x, weight, -1, eps);
 }
 
 yt::YTensor<float, 3> Qwen3MLP::forward(const yt::YTensor<float, 3>& x) const {
-	auto h = ops::linear(x, gate_up);
+	auto h = yt::function::linear(x, gate_up);
 	auto gate_proj = h.slice(-1, 0, intermediate_size);
 	auto up_proj = h.slice(-1, intermediate_size, 2 * intermediate_size);
-	ops::silu_(gate_proj);
+	yt::function::swish_(gate_proj);
 	gate_proj *= up_proj;
-	return ops::linear(gate_proj, down);
+	return yt::function::linear(gate_proj, down);
 }
 
 void Qwen3Attention::prefill_kv_only(
@@ -222,7 +210,7 @@ void Qwen3Attention::prefill_kv_only(
 	int b = x.shape(0), l = x.shape(1);
 	int kv_h = num_kv_heads, hd = head_dim;
 
-	auto qkv = ops::linear(x, qkv_proj);
+	auto qkv = yt::function::linear(x, qkv_proj);
 	int q_size = num_heads * hd;
 	int kv_size = kv_h * hd;
 	auto k4 = qkv.slice(-1, q_size, q_size + kv_size).reshape(b, l, kv_h, hd).permute(0, 2, 1, 3);
@@ -243,7 +231,7 @@ yt::YTensor<float, 3> Qwen3Attention::forward(
 	int h = num_heads, kv_h = num_kv_heads, hd = head_dim;
 	int groups = num_groups;
 
-	auto qkv = ops::linear(x, qkv_proj);
+	auto qkv = yt::function::linear(x, qkv_proj);
 	int q_size = h * hd;
 	int kv_size = kv_h * hd;
 	auto q4 = qkv.slice(-1, 0, q_size).reshape(b, l, h, hd).permute(0, 2, 1, 3);
@@ -264,13 +252,20 @@ yt::YTensor<float, 3> Qwen3Attention::forward(
 	auto k_5d = ops::repeat_kv(k_full, groups);
 	auto v_5d = ops::repeat_kv(v_full, groups);
 	auto q_5d = q4.reshape(b, kv_h, groups, l, hd);
-
-	yt::YTensor<bool, 2> mask = kv_cache ? kv_cache->get_mask(l) : make_causal_mask(l, k_full.shape(2));
-	auto attn_5d = yt::function::scaledDotProductAttention(q_5d, k_5d, v_5d, rsqrt_dim, &mask);
+	yt::YTensor<bool, 2> causal_mask = kv_cache ? kv_cache->get_mask(l) : make_causal_mask(l, k_full.shape(2));
+	auto attn_5d = yt::function::scaledDotProductAttention(
+		q_5d,
+		k_5d,
+		v_5d,
+		rsqrt_dim,
+		&causal_mask,
+		nullptr,
+		yt::function::sdpaBackend::FLASH_AVX2
+	);
 
 	auto attn4 = attn_5d.reshape(b, h, l, hd);
 	auto attn3 = attn4.permute(0, 2, 1, 3).reshape(b, l, h * hd);
-	return ops::linear(attn3, o_proj);
+	return yt::function::linear(attn3, o_proj);
 }
 
 yt::YTensor<float, 3> Qwen3DecoderLayer::forward(
@@ -523,25 +518,6 @@ std::vector<int> Qwen3ForCausalLM::generate(const std::vector<int>& new_ids, int
 }
 
 namespace ops {
-
-template<int dim>
-yt::YTensor<float, dim> linear(const yt::YTensor<float, dim>& x, const yt::YTensor<float, 2>& weight) {
-	return x.matmul(weight.transpose());
-}
-
-template yt::YTensor<float, 3> linear(const yt::YTensor<float, 3>&, const yt::YTensor<float, 2>&);
-
-template<int dim>
-yt::YTensor<float, dim>& silu_(yt::YTensor<float, dim>& x) {
-	x.broadcastInplace([](float& v) {
-		v = v / (1.0f + std::exp(-v));
-	});
-	return x;
-}
-
-template yt::YTensor<float, 3>& silu_(yt::YTensor<float, 3>&);
-template yt::YTensor<float, 4>& silu_(yt::YTensor<float, 4>&);
-template yt::YTensor<float, 5>& silu_(yt::YTensor<float, 5>&);
 
 void rope(yt::YTensor<float, 4>& q, yt::YTensor<float, 4>& k,
 		  const yt::YTensor<float, 2>& cos_cache, const yt::YTensor<float, 2>& sin_cache) {

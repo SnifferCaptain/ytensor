@@ -172,12 +172,6 @@ public:
 };
 
 namespace ops {
-	template<int dim>
-	yt::YTensor<float, dim> linear(const yt::YTensor<float, dim>& x, const yt::YTensor<float, 2>& weight);
-
-	template<int dim>
-	yt::YTensor<float, dim>& silu_(yt::YTensor<float, dim>& x);
-
 	void rope(yt::YTensor<float, 4>& q, yt::YTensor<float, 4>& k,
 			  const yt::YTensor<float, 2>& cos, const yt::YTensor<float, 2>& sin);
 

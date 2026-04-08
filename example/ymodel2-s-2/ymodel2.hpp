@@ -144,10 +144,6 @@ public:
 };
 
 namespace ops {
-    template<int dim> yt::YTensor<float, dim> linear(const yt::YTensor<float, dim>& x, const yt::YTensor<float, 2>& weight);
-    
-    template<int dim> yt::YTensor<float, dim>& gelu_(yt::YTensor<float, dim>& x);
-
     void rope(yt::YTensor<float, 4>& q, yt::YTensor<float, 4>& k, const yt::YTensor<float, 2>& cos, const yt::YTensor<float, 2>& sin);
 
     yt::YTensor<float, 5> repeat_kv(const yt::YTensor<float, 4>& x, int n);  // 零拷贝版本，返回5D张量
