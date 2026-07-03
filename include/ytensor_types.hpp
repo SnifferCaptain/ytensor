@@ -3,9 +3,6 @@
 * @file: ytensor_types.hpp
 * @brief: YTensor 数据类型定义
 * @author: SnifferCaptain
-* @date: 2025-10-24
-* @version 1.0
-* @email: 3586554865@qq.com
 ***************/
 
 #include <cstdint>

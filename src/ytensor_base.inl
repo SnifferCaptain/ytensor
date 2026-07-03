@@ -48,17 +48,17 @@ YT_IMPL_INLINE YTensorBase::YTensorBase(const std::vector<int>& shape, const std
         }
         
         // 使用自定义删除器
-        _data = std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
+        _memory = YMemory(std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
             if (destructor) {
                 for (size_t i = 0; i < numElems; ++i) {
                     destructor(ptr + i * elemSize);
                 }
             }
             delete[] ptr;
-        });
+        }), total * _element_size);
     } else {
         // POD类型：简单分配即可
-        _data = std::shared_ptr<char[]>(new char[total * _element_size]);
+        _memory = YMemory(std::shared_ptr<char[]>(new char[total * _element_size]), total * _element_size);
     }
     _offset = 0;
 }
@@ -67,7 +67,7 @@ YT_IMPL_INLINE YTensorBase::YTensorBase(const YTensorBase& other) {
     _shape = other._shape;
     _stride = other._stride;
     _offset = other._offset;
-    _data = other._data;
+    _memory = other._memory;
     _element_size = other._element_size;
     _dtype = other._dtype;
 }
@@ -77,7 +77,7 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::operator=(const YTensorBase& other) {
         _shape = other._shape;
         _stride = other._stride;
         _offset = other._offset;
-        _data = other._data;
+        _memory = other._memory;
         _element_size = other._element_size;
         _dtype = other._dtype;
     }
@@ -162,7 +162,7 @@ YT_IMPL_INLINE void YTensorBase::shallowCopyTo(YTensorBase &other) const {
     other._shape = _shape;
     other._stride = this->stride();
     other._offset = _offset;
-    other._data = _data;
+    other._memory = _memory;
     other._element_size = _element_size;
     other._dtype = _dtype;
 }
@@ -204,7 +204,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::clone() const {
         char* rawPtr = new char[total * elemSize];
         
         // 调用拷贝构造函数（处理非连续情况）
-        if (copyConstruct && _data) {
+        if (copyConstruct && _memory) {
             for (size_t dst = 0; dst < numElems; ++dst) {
                 // 计算源张量中对应元素的物理位置
                 size_t srcIndex = _offset;
@@ -213,31 +213,31 @@ YT_IMPL_INLINE YTensorBase YTensorBase::clone() const {
                     srcIndex += (index % _shape[i]) * _stride[i];
                     index /= _shape[i];
                 }
-                copyConstruct(rawPtr + dst * elemSize, _data.get() + srcIndex * elemSize);
+                copyConstruct(rawPtr + dst * elemSize, _memory.get() + srcIndex * elemSize);
             }
         }
         
         // 使用自定义删除器
-        op._data = std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
+        op._memory = YMemory(std::shared_ptr<char[]>(rawPtr, [destructor, elemSize, numElems](char* ptr) {
             if (destructor) {
                 for (size_t i = 0; i < numElems; ++i) {
                     destructor(ptr + i * elemSize);
                 }
             }
             delete[] ptr;
-        });
+        }), total * elemSize);
     } else {
         // POD类型
-        op._data = std::shared_ptr<char[]>(new char[total * elemSize]);
-        if (_data) {
+        op._memory = YMemory(std::shared_ptr<char[]>(new char[total * elemSize]), total * elemSize);
+        if (_memory) {
             // 检查是否连续
             if (isContiguous()) {
                 // 连续：直接memcpy
-                std::memcpy(op._data.get(), _data.get() + _offset * elemSize, total * elemSize);
+                std::memcpy(op._memory.get(), _memory.get() + _offset * elemSize, total * elemSize);
             } else {
                 // 非连续：逐元素复制
-                char* dstPtr = op._data.get();
-                const char* srcBase = _data.get();
+                char* dstPtr = op._memory.get();
+                const char* srcBase = _memory.get();
                 for (size_t dst = 0; dst < total; ++dst) {
                     // 计算源张量中对应元素的物理位置
                     size_t srcIndex = _offset;
@@ -266,7 +266,7 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     int total = static_cast<int>(size());
     
     // 检查是否存在内存重叠
-    bool mayOverlap = (_data.get() == src._data.get());
+    bool mayOverlap = (_memory.get() == src._memory.get());
     
     // 检查类型是否相同
     bool sameType = (_dtype == src._dtype);
@@ -277,15 +277,15 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     
     // 如果类型相同且两者都是完全连续且无重叠且是POD类型，直接memcpy
     if (sameType && this->isContiguous() && src.isContiguous() && !mayOverlap && isPOD) {
-        std::memcpy(_data.get() + _offset * dstElemSize, 
-                    src._data.get() + src._offset * srcElemSize, 
+        std::memcpy(_memory.get() + _offset * dstElemSize, 
+                    src._memory.get() + src._offset * srcElemSize, 
                     static_cast<size_t>(total) * dstElemSize);
         return *this;
     }
     
     // 处理重叠情况：先复制源数据到临时缓冲区
     std::unique_ptr<char[]> tempBuffer;
-    const char* srcBasePtr = src._data.get();
+    const char* srcBasePtr = src._memory.get();
     bool needTemp = mayOverlap;
     
     if (needTemp) {
@@ -345,7 +345,7 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
         srcBasePtr = tempBuffer.get();
     }
     
-    char* dstBasePtr = _data.get();
+    char* dstBasePtr = _memory.get();
     auto thisLogicStride = this->stride();
     auto srcLogicStride = src.stride();
     
@@ -431,9 +431,11 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
 
 YT_IMPL_INLINE std::string YTensorBase::dtype() const { return _dtype; }
 YT_IMPL_INLINE size_t YTensorBase::elementSize() const { return _element_size; }
+YT_IMPL_INLINE std::string YTensorBase::device() const { return _memory.device(); }
+YT_IMPL_INLINE size_t YTensorBase::nbytes() const { return _memory.nbytes(); }
 
 YT_IMPL_INLINE bool YTensorBase::isContiguous(int fromDim, int toDim) const {
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         return false;
     }
     int d = ndim();
@@ -469,7 +471,7 @@ YT_IMPL_INLINE bool YTensorBase::isContiguous(int fromDim, int toDim) const {
 }
 
 YT_IMPL_INLINE int YTensorBase::isContiguousFrom(int fromDim, int toDim) const {
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         return ndim();
     }
     int d = ndim();
@@ -540,7 +542,7 @@ YT_IMPL_INLINE std::vector<int> YTensorBase::toCoord(size_t index) const {
 // note: calculate_logical_stride removed; stride() returns logical strides
 
 YT_IMPL_INLINE bool YTensorBase::isDisjoint() const {
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         return false;
     }
     if (ndim() <= 1) {
@@ -635,7 +637,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::slice(int atDim, int start, int end, int
     YTensorBase op = *this;
     op._shape = newShape;
     op._stride = newStride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = newOffset;
     return op;
 }
@@ -884,11 +886,11 @@ YT_IMPL_INLINE YTensorBase& YTensorBase::unfold_(int atDim, int kernel, int stri
 
 YT_IMPL_INLINE YTensorBase YTensorBase::mostContinuousView() const {
     // 按照stride的大小顺序进行排序
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         YTensorBase op;
         op._shape = this->shape();
         op._stride = op.stride();
-        op._data = nullptr;
+        op._memory = nullptr;
         op._offset = 0;
         return op;
     }
@@ -945,7 +947,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::_RandnGenerator::operator()(const std::v
             yt::bfloat16* p = op.data<yt::bfloat16>(); for (size_t i=0;i<max;i++) p[i] = static_cast<yt::bfloat16>(tmp[i]);
         } else {
             // last resort: write bytes by memcpy of float
-            std::memcpy(op._data.get(), tmp, std::min<size_t>(max * sizeof(float), max * op.elementSize()));
+            std::memcpy(op._memory.get(), tmp, std::min<size_t>(max * sizeof(float), max * op.elementSize()));
         }
         delete[] tmp;
     }
@@ -974,7 +976,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::_RanduGenerator::operator()(const std::v
         } else if (op.dtype() == "bfloat16") {
             yt::bfloat16* p = op.data<yt::bfloat16>(); for (size_t i=0;i<max;i++) p[i] = static_cast<yt::bfloat16>(tmp[i]);
         } else {
-            std::memcpy(op._data.get(), tmp, std::min<size_t>(max * sizeof(float), max * op.elementSize()));
+            std::memcpy(op._memory.get(), tmp, std::min<size_t>(max * sizeof(float), max * op.elementSize()));
         }
         delete[] tmp;
     }
@@ -995,7 +997,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::zeros(const std::vector<int>& shape, std
     // POD类型：直接memset清零
     size_t total = op.size();
     size_t bytes = total * op.elementSize();
-    if (op._data) std::memset(op._data.get(), 0, bytes);
+    if (op._memory) std::memset(op._memory.get(), 0, bytes);
     return op;
 }
 
@@ -1023,7 +1025,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::ones(const std::vector<int>& shape, std:
         uint8_t* p = op.data<uint8_t>(); for (size_t i=0;i<total;i++) p[i] = 1;
     } else {
         // fallback: set first byte of each element to 1
-        char* bytes_ptr = op._data.get();
+        char* bytes_ptr = op._memory.get();
         size_t es = op.elementSize();
         for (size_t i=0;i<total;i++) bytes_ptr[i*es] = 1;
     }
@@ -1031,7 +1033,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::ones(const std::vector<int>& shape, std:
 }
 
 YT_IMPL_INLINE YTensorBase YTensorBase::contiguous() const {
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         return YTensorBase(_shape, _dtype);
     }
     if (isContiguous()) {
@@ -1042,13 +1044,13 @@ YT_IMPL_INLINE YTensorBase YTensorBase::contiguous() const {
 }
 
 YT_IMPL_INLINE YTensorBase& YTensorBase::contiguous_() {
-    if (_data == nullptr) return *this;
+    if (_memory == nullptr) return *this;
     if (isContiguous()) {
         return *this;  // 已经连续，无需操作
     }
     // 非连续，用clone替换自己
     YTensorBase cloned = clone();
-    _data = cloned._data;
+    _memory = cloned._memory;
     _shape = cloned._shape;
     _stride = cloned._stride;
     _offset = cloned._offset;
@@ -1115,8 +1117,8 @@ YT_IMPL_INLINE YTensorBase YTensorBase::concat(const std::vector<YTensorBase>& t
         }
         
         // 逐块复制
-        char* resultData = result._data.get();
-        const char* srcData = src._data.get() + src._offset * elemSize;
+        char* resultData = result._memory.get();
+        const char* srcData = src._memory.get() + src._offset * elemSize;
         
         if (isPOD) {
             // POD类型：使用memcpy
@@ -1227,12 +1229,12 @@ YT_IMPL_INLINE std::ostream& YTensorBase::_cout(std::ostream& out) const {
     std::vector<int> dims = this->shape();
     if (dims.size() == 0) {
         // scalar case
-        if (!this->_data) {
+        if (!this->_memory) {
             out << "[data]: null" << std::endl;
         } else {
             size_t phys = 0; // scalar
             size_t addressIndex = static_cast<size_t>(this->_offset) + phys;
-            const void* valPtr = static_cast<const void*>(this->_data.get() + addressIndex * this->elementSize());
+            const void* valPtr = static_cast<const void*>(this->_memory.get() + addressIndex * this->elementSize());
             out << yt::types::formatValue(valPtr, this->dtype());
         }
     } else {
@@ -1246,7 +1248,7 @@ YT_IMPL_INLINE std::ostream& YTensorBase::_cout(std::ostream& out) const {
                     try {
                         size_t phys = this->toIndex_(indices);
                         size_t addressIndex = static_cast<size_t>(this->_offset) + phys;
-                        const void* valPtr = static_cast<const void*>(this->_data.get() + addressIndex * this->elementSize());
+                        const void* valPtr = static_cast<const void*>(this->_memory.get() + addressIndex * this->elementSize());
                         out << yt::types::formatValue(valPtr, this->dtype());
                     } catch (...) {
                         out << "...";

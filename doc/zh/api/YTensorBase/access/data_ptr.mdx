@@ -43,15 +43,15 @@ const float* data() const;
 ### 返回值
 
 - **类型**: `T*` 或 `const T*`
-- **说明**: 指向第一个元素的指针（已应用 `_offset`）；如果 `_data` 为空则返回 `nullptr`
+- **说明**: 指向第一个元素的指针（已应用 `_offset`）；如果底层 storage 为空则返回 `nullptr`
 
 ### 实现细节
 
 ```cpp
 template <typename T>
 inline T* YTensorBase::data() {
-    if (!_data) return nullptr;
-    return reinterpret_cast<T*>(_data.get()) + _offset;
+    if (!_memory) return nullptr;
+    return reinterpret_cast<T*>(_memory.get()) + _offset;
 }
 ```
 

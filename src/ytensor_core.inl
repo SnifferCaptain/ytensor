@@ -129,7 +129,7 @@ yt::YTensor<T, dim>::YTensor(const yt::YTensor<T, dim>& other): YTensorBase() {
     _offset = other._offset;
     _element_size = other._element_size;
     _dtype = other._dtype;
-    _data = other._data;
+    _memory = other._memory;
 }
 
 template <typename T, int dim>
@@ -145,7 +145,7 @@ yt::YTensor<T, dim> &yt::YTensor<T, dim>::operator=(const yt::YTensor<T, dim> &o
     _offset = other._offset;
     _element_size = other._element_size;
     _dtype = other._dtype;
-    _data = other._data;
+    _memory = other._memory;
     return *this;
 }
 
@@ -222,12 +222,12 @@ const T* yt::YTensor<T, dim>::data() const {
 
 template <typename T, int dim>
 T* yt::YTensor<T, dim>::data_() {
-    return reinterpret_cast<T*>(_data.get());
+    return reinterpret_cast<T*>(_memory.get());
 }
 
 template <typename T, int dim>
 const T* yt::YTensor<T, dim>::data_() const {
-    return reinterpret_cast<const T*>(_data.get());
+    return reinterpret_cast<const T*>(_memory.get());
 }
 
 template<typename T, int dim>
@@ -269,7 +269,7 @@ int yt::YTensor<T, dim>::offset_(const std::vector<int>& index) const {
 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::YTensor<T, dim>::contiguous() const {
-    if (_data == nullptr) {
+    if (_memory == nullptr) {
         return yt::YTensor<T, dim>(this->shape());
     }
     if(this->isContiguous()){
@@ -288,7 +288,7 @@ yt::YTensor<T, dim>& yt::YTensor<T, dim>::contiguous_() {
     }
     else{
         auto t = this->contiguous();
-        _data = t._data;
+        _memory = t._memory;
         _shape = t._shape;
         _stride = t._stride;
         _offset = t._offset;
@@ -426,7 +426,7 @@ yt::YTensor<T, dim - 1> yt::YTensor<T, dim>::operator[](int index) requires (dim
     yt::YTensor<T, dim - 1> op;
     op._shape = newShape;
     op._stride = newStride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset + index * _stride[0];
     return op;
 }
@@ -443,7 +443,7 @@ const yt::YTensor<T, dim - 1> yt::YTensor<T, dim>::operator[](int index) const r
     yt::YTensor<T, dim - 1> op;
     op._shape = newShape;
     op._stride = newStride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset + index * _stride[0];
     return op;
 }
@@ -487,7 +487,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::permute(const Args... args) const{
     yt::YTensor<T, dim> op;
     op._shape = newShape;
     op._stride = newStride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     return op;
 }
@@ -534,7 +534,7 @@ auto yt::YTensor<T, dim>::view(const Args... newShape) const -> yt::YTensor<T, s
     yt::YTensor<T, newdim> op;
     op._shape = shape;
     op._stride = op.stride();
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     return op;
 }
@@ -551,7 +551,7 @@ yt::YTensor<T, newdim> yt::YTensor<T, dim>::view(const std::vector<int> &newShap
     yt::YTensor<T, newdim> op;
     op._shape = shape;
     op._stride = op.stride();
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     return op;
 }
@@ -569,7 +569,7 @@ yt::YTensor<T, newdim> yt::YTensor<T, dim>::view(const int newShape[]) const {
     yt::YTensor<T, newdim> op;
     op._shape = shape;
     op._stride = op.stride();
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     return op;
 }
@@ -594,7 +594,7 @@ yt::YTensor<T, dim + 1> yt::YTensor<T, dim>::unsqueeze(int d) const {
     // 新维度的 stride 可以设为任意值（因为 size=1），设为下一维度的 stride * size
     int newStride = (d < dim) ? _stride[d] * _shape[d] : 1;
     op._stride.insert(op._stride.begin() + d, newStride);
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     op._element_size = _element_size;
     op._dtype = _dtype;
@@ -612,7 +612,7 @@ yt::YTensor<T, dim - 1> yt::YTensor<T, dim>::squeeze(int d) const requires (dim 
     op._stride = _stride;
     op._shape.erase(op._shape.begin() + actualDim);
     op._stride.erase(op._stride.begin() + actualDim);
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     op._element_size = _element_size;
     op._dtype = _dtype;
@@ -626,7 +626,7 @@ yt::YTensor<T, dim> yt::YTensor<T, dim>::repeat(const Args... times) const {
     yt::YTensor<T, dim> op;
     op._shape = _shape;
     op._stride = _stride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
     for (int i = 0; i < dim; ++i) {
         if(reps[i] <= 1) continue;
@@ -675,7 +675,7 @@ yt::YTensor<T, dim + 1> yt::YTensor<T, dim>::unfold(int mdim, int mkernel, int m
     yt::YTensor<T, dim + 1> op;
     op._shape = newShape;
     op._stride = newStride;
-    op._data = _data;
+    op._memory = _memory;
     op._offset = _offset;
 
     return op;

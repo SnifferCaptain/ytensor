@@ -26,14 +26,14 @@ inline int YTensorBase::offset_(const std::vector<int>& index) const {
 
 template <typename T>
 inline T* YTensorBase::data() {
-    if (!_data) return nullptr;
-    return reinterpret_cast<T*>(_data.get()) + _offset;
+    if (!_memory) return nullptr;
+    return reinterpret_cast<T*>(_memory.get()) + _offset;
 }
 
 template <typename T>
 inline const T* YTensorBase::data() const {
-    if (!_data) return nullptr;
-    return reinterpret_cast<const T*>(_data.get()) + _offset;
+    if (!_memory) return nullptr;
+    return reinterpret_cast<const T*>(_memory.get()) + _offset;
 }
 
 inline float* YTensorBase::data() {

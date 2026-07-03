@@ -4,8 +4,6 @@
 * @brief: 存储一些全局静态信息的命名空间
 * @author: SnifferCaptain
 * @date: 2025-10-24
-* @version 1.0
-* @email: 3586554865@qq.com
 ***************/
 
 #include <random>

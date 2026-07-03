@@ -41,15 +41,15 @@ Retrieves the starting pointer of the tensor's data. The returned pointer alread
 ### Return Value
 
 - **Type**: `T*` or `const T*`
-- **Description**: A pointer to the first element (offset applied); returns `nullptr` if the internal data buffer is empty.
+- **Description**: A pointer to the first element (offset applied); returns `nullptr` if the internal storage is empty.
 
 ### Implementation Details
 
 ```cpp
 template <typename T>
 inline T* YTensorBase::data() {
-    if (!_data) return nullptr;
-    return reinterpret_cast<T*>(_data.get()) + _offset;
+    if (!_memory) return nullptr;
+    return reinterpret_cast<T*>(_memory.get()) + _offset;
 }
 ```
 

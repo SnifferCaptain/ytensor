@@ -2,9 +2,6 @@
 * @file: ytensor_base_math.inl
 * @brief: YTensorBase 数学运算的实现
 * @author: SnifferCaptain
-* @date: 2025-12-1
-* @version 1.0
-* @email: 3586554865@qq.com
 ***************/
 
 #include <algorithm>
@@ -339,7 +336,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::sum(int axis) const {
                     for (int k = 0; k < dim; ++k) {
                         physIdx += subCoord[k] * _stride[k];
                     }
-                    sum += *(reinterpret_cast<const DType*>(_data.get() + (_offset + physIdx) * _element_size));
+                    sum += *(reinterpret_cast<const DType*>(_memory.get() + (_offset + physIdx) * _element_size));
                 }
                 opData[i] = sum;
             }, static_cast<double>(axisSize));
@@ -395,7 +392,7 @@ YT_IMPL_INLINE std::pair<YTensorBase, YTensorBase> YTensorBase::max(int axis) co
                     for (int k = 0; k < dim; ++k) {
                         physIdx += subCoord[k] * _stride[k];
                     }
-                    DType val = *(reinterpret_cast<const DType*>(_data.get() + (_offset + physIdx) * _element_size));
+                    DType val = *(reinterpret_cast<const DType*>(_memory.get() + (_offset + physIdx) * _element_size));
                     if (val > maxVal) {
                         maxVal = val;
                         maxIdx = j;
@@ -454,7 +451,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
         mat2d._shape = {1, _shape[0]};
         mat2d._stride = {0, _stride[0]};  // 第0维stride=0因为只有1行
         mat2d._offset = _offset;
-        mat2d._data = _data;
+        mat2d._memory = _memory;
         mat2d._element_size = _element_size;
         mat2d._dtype = _dtype;
         
@@ -468,15 +465,15 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
         result._dtype = innerDtype;  // "YTensorBase<float32>"
         
         // 分配存储并放置构造YTensorBase元素
-        result._data = std::shared_ptr<char[]>(
+        result._memory = YMemory(std::shared_ptr<char[]>(
             new char[sizeof(YTensorBase)],
             [](char* p) {
                 // 析构YTensorBase对象
                 reinterpret_cast<YTensorBase*>(p)->~YTensorBase();
                 delete[] p;
             }
-        );
-        new (result._data.get()) YTensorBase(mat2d);
+        ), sizeof(YTensorBase));
+        new (result._memory.get()) YTensorBase(mat2d);
         return result;
     }
     
@@ -489,15 +486,15 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
         result._element_size = sizeof(YTensorBase);
         result._dtype = innerDtype;  // "YTensorBase<float32>"
         
-        result._data = std::shared_ptr<char[]>(
+        result._memory = YMemory(std::shared_ptr<char[]>(
             new char[sizeof(YTensorBase)],
             [](char* p) {
                 reinterpret_cast<YTensorBase*>(p)->~YTensorBase();
                 delete[] p;
             }
-        );
+        ), sizeof(YTensorBase));
         // 直接复制当前张量作为2D视图
-        new (result._data.get()) YTensorBase(*this);
+        new (result._memory.get()) YTensorBase(*this);
         return result;
     }
     
@@ -529,10 +526,10 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
     result._offset = 0;
     
     // 使用封装函数分配存储
-    result._data = yt::kernel::makeSharedPlacementArray<YTensorBase>(batchSize);
+    result._memory = yt::kernel::makeSharedPlacementArray<YTensorBase>(batchSize);
     
     // 为每个batch创建2D视图
-    YTensorBase* dataPtr = reinterpret_cast<YTensorBase*>(result._data.get());
+    YTensorBase* dataPtr = reinterpret_cast<YTensorBase*>(result._memory.get());
     
     // 计算原始tensor的batch stride（前dim-2维）
     std::vector<int> batchStride(_stride.begin(), _stride.end() - 2);
@@ -557,7 +554,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matView() const {
         mat2d._shape = {matRows, matCols};
         mat2d._stride = {matRowStride, matColStride};
         mat2d._offset = _offset + batchOffset;
-        mat2d._data = _data;  // 共享数据
+        mat2d._memory = _memory;  // 共享数据
         mat2d._element_size = _element_size;
         mat2d._dtype = _dtype;
         
@@ -903,7 +900,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matmul_eigen_backend(const YTensorBase& 
                         YTensorBase right2D;
                         right2D._shape = {aw, bw}; 
                         right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
-                        right2D._offset = other._offset; right2D._data = other._data;
+                        right2D._offset = other._offset; right2D._memory = other._memory;
                         right2D._element_size = sizeof(DType); right2D._dtype = _dtype;
                         
                         int innerStride = (contiguousStart == 0) ? aw : stride_(contiguousStart);
@@ -1085,7 +1082,7 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& o
                     right2D._shape = {aw, bw};
                     right2D._stride = {other.stride_(otherDim - 2), other.stride_(otherDim - 1)};
                     right2D._offset = other._offset;
-                    right2D._data = other._data;
+                    right2D._memory = other._memory;
                     right2D._element_size = sizeof(T);
                     right2D._dtype = dtypeName;
 
@@ -1107,14 +1104,14 @@ YT_IMPL_INLINE YTensorBase YTensorBase::matmul_avx2_backend(const YTensorBase& o
                         leftFlat._shape = {innerRows, aw};
                         leftFlat._stride = {innerStride, stride_(selfDim - 1)};
                         leftFlat._offset = _offset + leftOffset;
-                        leftFlat._data = _data;
+                        leftFlat._memory = _memory;
                         leftFlat._element_size = sizeof(T);
                         leftFlat._dtype = dtypeName;
 
                         opFlat._shape = {innerRows, bw};
                         opFlat._stride = {opInnerStride, 1};
                         opFlat._offset = opOffset;
-                        opFlat._data = op._data;
+                        opFlat._memory = op._memory;
                         opFlat._element_size = sizeof(T);
                         opFlat._dtype = dtypeName;
 

@@ -36,7 +36,7 @@ bool isContiguous(int fromDim = 0, int toDim = -1) const;
 ### 返回值
 
 - `true`: 从 `fromDim` 开始的所有维度都是连续的
-- `false`: 存在不连续的维度，或 `_data` 为空
+- `false`: 存在不连续的维度，或 `_memory` storage 为空
 
 ### 使用示例
 
@@ -70,7 +70,7 @@ int isContiguousFrom() const;
 - **类型**: `int`
 - **说明**: 返回从哪个维度开始是连续的
   - 返回 `0`：完全连续
-  - 返回 `ndim()`：完全不连续（或 `_data` 为空）
+  - 返回 `ndim()`：完全不连续（或 `_memory` storage 为空）
   - 返回 `k`：从维度 k 开始连续（维度 0 到 k-1 可能不连续）
 
 ### 使用示例

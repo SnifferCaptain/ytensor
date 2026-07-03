@@ -112,10 +112,16 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 
 ## Project Information
 
-- **Version**: 0.13
+- **Version**: 0.14
 - **Author**: SnifferCaptain
 - **Email**: 3586554865@qq.com
 - **Language**: C++20
+
+## v0.14 Highlights
+
+- Added `YMemory`, `YStorageBase`, and `YCpuStorage` as the tensor storage wrapper layer.
+- `YTensorBase` now owns storage through `YMemory`, while shape, stride, offset, dtype, and element semantics remain in the tensor layer.
+- Added `device()` and `nbytes()` storage queries on `YTensorBase`.
 
 ## v0.13 Highlights
 

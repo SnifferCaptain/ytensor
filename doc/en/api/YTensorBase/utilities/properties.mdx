@@ -35,7 +35,7 @@ Checks whether the tensor is memory-contiguous starting from the specified dimen
 ### Return Value
 
 - `true`: All dimensions starting from `fromDim` are contiguous.
-- `false`: At least one dimension is non-contiguous, or the underlying `_data` is null.
+- `false`: At least one dimension is non-contiguous, or the underlying `_memory` storage is null.
 
 ### Usage Example
 
@@ -69,7 +69,7 @@ Returns the index of the first dimension from which the layout is contiguous.
 - **Type**: `int`
 - **Description**: Returns the index of the first dimension from which the layout is contiguous.
   - Returns `0`: Fully contiguous.
-  - Returns `ndim()`: Not contiguous at all (or `_data` is null).
+  - Returns `ndim()`: Not contiguous at all (or `_memory` storage is null).
   - Returns `k`: The tensor is contiguous from dimension `k` onwards (dimensions $0 \dots k-1$ may be non-contiguous).
 
 ### Usage Example

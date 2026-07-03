@@ -114,7 +114,7 @@ Retrieves the start pointer of the underlying memory block, **excluding** the of
 
 ```cpp
 T* data_() {
-    return reinterpret_cast<T*>(_data.get());
+    return reinterpret_cast<T*>(_memory.get());
 }
 ```
 

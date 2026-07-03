@@ -3,9 +3,6 @@
 * @file: ytensor.hpp
 * @brief: 易于使用的张量类，主要用作容器。
 * @author: SnifferCaptain
-* @date: 2025-10-24
-* @version 0.3
-* @email: 3586554865@qq.com
 ***************/
 
 #include <vector>

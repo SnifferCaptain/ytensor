@@ -14,6 +14,7 @@
 
 #include "ytensor_concepts.hpp"
 #include "ytensor_infos.hpp"
+#include "ytensor_memory.hpp"
 
 namespace yt{
 
@@ -380,12 +381,18 @@ public:
     /// @brief 获取元素字节大小
     size_t elementSize() const;
 
+    /// @brief 获取底层内存设备
+    std::string device() const;
+
+    /// @brief 获取底层内存占用的字节数
+    size_t nbytes() const;
+
     /// @brief 标准cout输出流
     friend std::ostream& operator<<(std::ostream& os, const YTensorBase& tensor);
 /////////////////// externs ////////////////
     #include "ytensor_base_math.hpp"
 protected:
-    std::shared_ptr<char[]> _data;  // 存储数据
+    YMemory _memory;                // 底层线性存储，不包含 shape/stride/offset 语义
     int _offset = 0;                // 数据偏移 (以元素为单位)
     std::vector<int> _shape;        // 形状
     std::vector<int> _stride;       // 步长 (以元素为单位)
@@ -404,4 +411,3 @@ YT_IMPL_INLINE YTensorBase YTensorBase::cast(const std::string& newDtype) const 
 }
 
 } // namespace yt
-

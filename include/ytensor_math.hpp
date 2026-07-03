@@ -2,9 +2,6 @@
 * @file: ytensor_math.hpp [inline]
 * @brief: YTensor 类内置的数学运算功能
 * @author: SnifferCaptain
-* @date: 2025-10-24
-* @version 1.0
-* @email: 3586554865@qq.com
 ***************/
 
 public:

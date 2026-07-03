@@ -325,6 +325,19 @@ You can also use conversion scripts under `example/convert/` for partial format 
 
 ---
 
+## 🧠 Memory Storage Layer
+
+Starting from version `0.14`, tensor storage is wrapped by `YMemory` instead of being stored directly as a raw `shared_ptr<char[]>` member.
+
+- `YMemory` owns a linear byte storage handle and exposes `rawData()`, `get()`, `nbytes()`, and `device()`.
+- `YTensorBase` still keeps the classic tensor metadata model: `_offset`, `_shape`, `_stride`, `_element_size`, and `_dtype`.
+- Shape, stride, offset, dtype, and object construction semantics remain in the tensor layer, not in `YMemory`.
+- `device()` currently returns the storage device string such as `"cpu"`; no implicit cross-device synchronization is performed.
+
+This keeps the user-facing tensor API unchanged while preparing the storage layer for future device-specific backends.
+
+---
+
 ## 📦 Optional Precompiled Library
 
 Define `YT_USE_LIB=1` and link the library to reduce repeated compilation cost in large projects. API remains consistent with header-only mode.
@@ -427,6 +440,7 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_infos.hpp                             | Global settings info
 │  ├─ ytensor_io.hpp                                | File storage system
 │  ├─ ytensor_math.hpp                              | YTensor math ops
+│  ├─ ytensor_memory.hpp                            | Linear storage and device handle
 │  └─ ytensor_types.hpp                             | Type-related
 ├─ lib/                                             | `YT_USE_LIB` precompiled backend
 │  ├─ bin/                                          | Library artifact dir (e.g., libytensor.so)
@@ -465,11 +479,12 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_function.inl                          | YTensor functional programming
 │  ├─ ytensor_io.inl                                | YTensor file storage system
 │  ├─ ytensor_io_templates.inl                      | YTensor file storage template instantiations
-│  └─ ytensor_math.inl                              | YTensor math ops
+│  ├─ ytensor_math.inl                              | YTensor math ops
+│  └─ ytensor_memory.inl                            | Linear storage implementation
 └─ ytensor.hpp                                      | Main header including all required headers
 ```
 
-> YTensor version: 0.13
+> YTensor version: 0.14
 >
 > **Note:** The current version is still evolving rapidly. Some uncommon or low-level APIs may change significantly. Please keep an eye on release notes.
 
@@ -477,6 +492,9 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 
 ## Latest Update
 
+- Added `YMemory`, `YStorageBase`, and `YCpuStorage` as the tensor storage wrapper layer.
+- `YTensorBase` now owns storage through `YMemory` while keeping shape/stride/offset logic in the tensor layer.
+- Added `device()` and `nbytes()` storage queries on `YTensorBase`.
 - Refactored the code structure.
 - Added multiple commonly used functions.
 - Fixed the `order` interface so that only truly element-wise operations keep derivative / integral interfaces.

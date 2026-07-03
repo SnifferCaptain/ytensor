@@ -311,6 +311,18 @@ io.close();
 > 适合模型权重、数据集等便捷存储。
 
 ---
+## 🧠 内存存储层
+
+从 `0.14` 版本开始，张量底层存储由 `YMemory` 封装，不再直接在张量中裸持有 `shared_ptr<char[]>` 成员。
+
+- `YMemory` 只封装线性字节存储句柄，并提供 `rawData()`、`get()`、`nbytes()`、`device()`。
+- `YTensorBase` 仍然保持经典张量元数据模型：`_offset`、`_shape`、`_stride`、`_element_size`、`_dtype`。
+- shape、stride、offset、dtype、对象构造等语义仍属于 tensor 层，不属于 `YMemory`。
+- `device()` 当前返回底层存储设备字符串，例如 `"cpu"`；不会进行隐式跨设备同步。
+
+这个改动保持用户侧张量 API 不变，同时为未来设备后端扩展预留 storage 层接口。
+
+---
 ## 📦 可选预编译库
 
 定义 `YT_USE_LIB=1` 并链接库，可减少大型项目的重复编译开销，API 与 header-only 保持一致。
@@ -411,6 +423,7 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_infos.hpp                             | 全局设置信息
 │  ├─ ytensor_io.hpp                                | 文件存储系统
 │  ├─ ytensor_math.hpp                              | YTensor数学操作
+│  ├─ ytensor_memory.hpp                            | 线性存储与设备句柄
 │  └─ ytensor_types.hpp                             | 类型相关
 ├─ lib/                                             | `YT_USE_LIB` 预编译后端
 │  ├─ bin/                                          | 库产物目录（如 libytensor.so）
@@ -449,16 +462,20 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 │  ├─ ytensor_function.inl                          | YTensor函数式编程
 │  ├─ ytensor_io.inl                                | YTensor文件存储系统
 │  ├─ ytensor_io_templates.inl                      | YTensor文件存储模板实例化
-│  └─ ytensor_math.inl                              | YTensor数学操作
+│  ├─ ytensor_math.inl                              | YTensor数学操作
+│  └─ ytensor_memory.inl                            | 线性存储实现
 └─ ytensor.hpp                                      | 主头文件，包含所有必要的头文件
 ```
-> YTensor 版本：0.13  
+> YTensor 版本：0.14  
 **注意： 当前版本仍在快速迭代中，部分不常用或底层API 可能会有较大变动，请密切关注更新日志。**
 
 ---
 
 ## 最新更新
 
+- 新增 `YMemory`、`YStorageBase`、`YCpuStorage` 作为张量底层 storage 封装层。
+- `YTensorBase` 现在通过 `YMemory` 持有底层存储，同时 shape/stride/offset 逻辑仍保留在 tensor 层。
+- 新增 `YTensorBase::device()` 与 `YTensorBase::nbytes()` 用于查询底层存储信息。
 - 整理代码结构。
 - 新增多个常用函数。
 - 修复order接口，现在只有逐元素的操作会保留order的导数/积分接口。

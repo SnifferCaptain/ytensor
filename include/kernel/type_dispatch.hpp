@@ -3,8 +3,6 @@
  * @file type_dispatch.hpp
  * @brief 基于模板的运行时类型分发机制声明
  * @author SnifferCaptain
- * @date 2025-01-15
- * @version 2.0
  ***************/
 
 #include <string>

@@ -226,7 +226,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         mat._offset = this->_offset;
         mat._element_size = sizeof(T);
         mat._dtype = scalarDtype;
-        mat._data = this->_data;
+        mat._memory = this->_memory;
         
         yt::YTensor<MatType, 1> op;
         op._shape = std::vector<int>({1});
@@ -236,7 +236,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         op._dtype = yt::types::makeYTensorDtype(matDtype, 1);  // "YTensor<YTensor<float32, 2>, 1>"
         
         // 使用封装函数分配内存
-        op._data = yt::kernel::makeSharedPlacement<MatType>(mat);
+        op._memory = yt::kernel::makeSharedPlacement<MatType>(mat);
         return op;
     }else if constexpr (dim == 2){
         yt::YTensor<MatType, 1> op;
@@ -248,7 +248,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         
         // 使用封装函数分配内存
         MatType thisCopy = *this;  // 创建当前张量的副本
-        op._data = yt::kernel::makeSharedPlacement<MatType>(thisCopy);
+        op._memory = yt::kernel::makeSharedPlacement<MatType>(thisCopy);
         return op;
     }else{
         auto newShape = std::vector<int>(this->_shape.begin(), this->_shape.end() - 2);
@@ -261,8 +261,8 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
         int batchSize = op.size();
         
         // 使用封装函数分配数组内存
-        op._data = yt::kernel::makeSharedPlacementArray<MatType>(batchSize);
-        MatType* dataptr = reinterpret_cast<MatType*>(op._data.get());
+        op._memory = yt::kernel::makeSharedPlacementArray<MatType>(batchSize);
+        MatType* dataptr = reinterpret_cast<MatType*>(op._memory.get());
 
         // 使用 placement new 构造每个 MatType
         for(int batchIdx = 0; batchIdx < batchSize; batchIdx++){
@@ -273,7 +273,7 @@ yt::YTensor<yt::YTensor<T, 2>, std::max(1, dim - 2)> yt::YTensor<T, dim>::matVie
             mat._offset = this->offset_(coord);
             mat._element_size = sizeof(T);
             mat._dtype = scalarDtype;
-            mat._data = this->_data;
+            mat._memory = this->_memory;
             new (&dataptr[batchIdx]) MatType(mat);
         }
 
@@ -825,8 +825,8 @@ yt::YTensor<typename yt::YTensor<T, dim>::EigenMatrixMap, std::max(1, dim - 2)> 
     int batchSize = op.size();
     
     // 使用封装函数分配数组内存
-    op._data = yt::kernel::makeSharedPlacementArray<EigenMatrixMap>(batchSize);
-    EigenMatrixMap* opData = reinterpret_cast<EigenMatrixMap*>(op._data.get());
+    op._memory = yt::kernel::makeSharedPlacementArray<EigenMatrixMap>(batchSize);
+    EigenMatrixMap* opData = reinterpret_cast<EigenMatrixMap*>(op._memory.get());
 
     // 使用 placement new 构造每个 EigenMatrixMap
     const T* thisData = this->data_();
@@ -888,7 +888,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                 // 右矩阵2D view
                 yt::YTensor<T, 2> right2D;
                 right2D._shape = {aw, bw}; right2D._stride = {other.stride_(-2), other.stride_(-1)};
-                right2D._offset = other._offset; right2D._data = other._data;
+                right2D._offset = other._offset; right2D._memory = other._memory;
                 right2D._element_size = sizeof(T); right2D._dtype = yt::types::getTypeName<T>();
                 
                 int innerStride = (contiguousStart == 0) ? aw : this->stride_(contiguousStart);
@@ -906,10 +906,10 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                     }
                     yt::YTensor<T, 2> leftFlat, opFlat;
                     leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, this->stride_(-1)};
-                    leftFlat._offset = this->_offset + leftOffset; leftFlat._data = this->_data;
+                    leftFlat._offset = this->_offset + leftOffset; leftFlat._memory = this->_memory;
                     leftFlat._element_size = sizeof(T); leftFlat._dtype = yt::types::getTypeName<T>();
                     opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
-                    opFlat._offset = opOffset; opFlat._data = op._data;
+                    opFlat._offset = opOffset; opFlat._memory = op._memory;
                     opFlat._element_size = sizeof(T); opFlat._dtype = yt::types::getTypeName<T>();
                     
                     auto mapA = leftFlat.matViewEigen();
@@ -982,7 +982,7 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                 // 右矩阵2D view
                 yt::YTensor<T, 2> right2D;
                 right2D._shape = {aw, bw}; right2D._stride = {other.stride_(-2), other.stride_(-1)};
-                right2D._offset = other._offset; right2D._data = other._data;
+                right2D._offset = other._offset; right2D._memory = other._memory;
                 right2D._element_size = sizeof(T); right2D._dtype = yt::types::getTypeName<T>();
                 
                 int innerStride = (contiguousStart == 0) ? aw : this->stride_(contiguousStart);
@@ -1000,10 +1000,10 @@ yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim, dim1, 2})> yt::YTensor<T, dim>:
                     }
                     yt::YTensor<T, 2> leftFlat, opFlat;
                     leftFlat._shape = {innerRows, aw}; leftFlat._stride = {innerStride, this->stride_(-1)};
-                    leftFlat._offset = this->_offset + leftOffset; leftFlat._data = this->_data;
+                    leftFlat._offset = this->_offset + leftOffset; leftFlat._memory = this->_memory;
                     leftFlat._element_size = sizeof(T); leftFlat._dtype = yt::types::getTypeName<T>();
                     opFlat._shape = {innerRows, bw}; opFlat._stride = {opInnerStride, 1};
-                    opFlat._offset = opOffset; opFlat._data = op._data;
+                    opFlat._offset = opOffset; opFlat._memory = op._memory;
                     opFlat._element_size = sizeof(T); opFlat._dtype = yt::types::getTypeName<T>();
                     
                     yt::kernel::avx2::matmul(

@@ -112,10 +112,16 @@ int main() {
 
 ## 项目信息
 
-- **版本**: 0.13
+- **版本**: 0.14
 - **作者**: SnifferCaptain
 - **邮箱**: 3586554865@qq.com
 - **语言**: C++20
+
+## v0.14 更新摘要
+
+- 新增 `YMemory`、`YStorageBase`、`YCpuStorage` 作为张量底层 storage 封装层。
+- `YTensorBase` 现在通过 `YMemory` 持有底层存储，同时 shape、stride、offset、dtype、元素语义仍保留在 tensor 层。
+- 新增 `YTensorBase::device()` 与 `YTensorBase::nbytes()` 用于查询底层存储信息。
 
 ## v0.13 更新摘要
 

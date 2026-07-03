@@ -98,7 +98,9 @@ auto v = t.reshape(new_shape);
 ```
 YTensorBase Internal Structure:
 +------------------+
-|  _data           | → shared_ptr points to actual data block
+|  _memory         | → YMemory storage handle
++------------------+
+|  YStorageBase    | → device + nbytes + raw byte pointer
 +------------------+
 |  _offset         |   Start offset of the view in the data block
 +------------------+
@@ -111,6 +113,17 @@ YTensorBase Internal Structure:
 |  _dtype          |   Type name string
 +------------------+
 ```
+
+Since `0.14`, the raw byte storage is wrapped by `YMemory`. `YMemory` only owns linear storage and device identity. Tensor interpretation still comes from `_offset`, `_shape`, `_stride`, `_element_size`, and `_dtype`.
+
+Useful low-level queries:
+
+```cpp
+std::string dev = tensor.device(); // e.g. "cpu"
+size_t bytes = tensor.nbytes();    // bytes owned by the underlying storage
+```
+
+`data()` returns a typed pointer with `_offset` already applied. `data_()` returns the typed pointer at the beginning of the underlying storage.
 
 ---
 

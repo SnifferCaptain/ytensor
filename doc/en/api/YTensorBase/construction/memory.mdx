@@ -30,7 +30,7 @@ void shallowCopyTo(YTensorBase& other) const;
 #### Return Value
 
 * **Type**: `void`
-* **Memory Behavior**: The target tensor will share the `_data` pointer of the source tensor. Modifying data in either tensor will affect the other.
+* **Memory Behavior**: The target tensor will share the source tensor's `YMemory` storage handle. Modifying data in either tensor will affect the other.
 
 #### Usage Example
 
@@ -54,7 +54,7 @@ void example() {
 
 :::warning
 **Shared Memory Risk**
-`shallowCopyTo` causes two tensors to share the same underlying memory (the `_data` pointer). Any changes to the data of one tensor will be reflected in the other. If you need a completely independent copy, use `clone()` instead.
+`shallowCopyTo` causes two tensors to share the same underlying storage through `YMemory`. Any changes to the data of one tensor will be reflected in the other. If you need a completely independent copy, use `clone()` instead.
 :::
 
 ---
@@ -206,8 +206,8 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     
     // If both are fully contiguous, use a direct memcpy
     if (this->isContiguous() && src.isContiguous()) {
-        std::memcpy(_data.get() + _offset * elemSize, 
-                    src._data.get() + src._offset * elemSize, 
+        std::memcpy(_memory.get() + _offset * elemSize, 
+                    src._memory.get() + src._offset * elemSize, 
                     total * elemSize);
         return *this;
     }

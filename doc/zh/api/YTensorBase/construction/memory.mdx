@@ -26,7 +26,7 @@ void shallowCopyTo(YTensorBase& other) const;
 ### 核心功能描述
 
 浅拷贝（共享底层数据）到另一个张量。
-*   目标张量将共享源张量的 `_data` 指针。
+*   目标张量将共享源张量的 `YMemory` 存储句柄。
 *   修改任一张量的数据会影响另一个。
 
 ### 返回值
@@ -56,7 +56,7 @@ void example() {
 
 :::warning
 **共享内存风险**
-`shallowCopyTo` 使两个张量共享同一块内存（`_data` 指针）。修改任一张量的数据都会影响另一个。如需独立副本，请使用 `clone()`。
+`shallowCopyTo` 使两个张量通过 `YMemory` 共享同一块底层存储。修改任一张量的数据都会影响另一个。如需独立副本，请使用 `clone()`。
 :::
 
 ---
@@ -209,8 +209,8 @@ inline YTensorBase& YTensorBase::copy_(const YTensorBase& src) {
     
     // 如果两者都是完全连续的，直接memcpy
     if (this->isContiguous() && src.isContiguous()) {
-        std::memcpy(_data.get() + _offset * elemSize, 
-                    src._data.get() + src._offset * elemSize, 
+        std::memcpy(_memory.get() + _offset * elemSize, 
+                    src._memory.get() + src._offset * elemSize, 
                     total * elemSize);
         return *this;
     }

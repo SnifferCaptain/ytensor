@@ -98,7 +98,9 @@ auto v = t.reshape(new_shape);
 ```
 YTensorBase 内部结构：
 +------------------+
-|  _data           | → shared_ptr 指向实际数据块
+|  _memory         | → YMemory 存储句柄
++------------------+
+|  YStorageBase    | → device + nbytes + 原始字节指针
 +------------------+
 |  _offset         |   视图在数据块中的起始偏移
 +------------------+
@@ -111,6 +113,17 @@ YTensorBase 内部结构：
 |  _dtype          |   类型名称字符串
 +------------------+
 ```
+
+从 `0.14` 开始，原始字节存储由 `YMemory` 封装。`YMemory` 只负责线性存储和设备标识；张量解释仍由 `_offset`、`_shape`、`_stride`、`_element_size`、`_dtype` 决定。
+
+常用底层查询：
+
+```cpp
+std::string dev = tensor.device(); // 例如 "cpu"
+size_t bytes = tensor.nbytes();    // 底层 storage 持有的字节数
+```
+
+`data()` 返回已应用 `_offset` 的类型化指针。`data_()` 返回底层 storage 起点的类型化指针。
 
 ---
 
