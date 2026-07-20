@@ -1,6 +1,6 @@
 # 全局常量
 
-本文档介绍 `yt::infos` 命名空间中的全局常量和配置。
+本文档介绍 `yt::info` 和 `yt::io` 命名空间中的全局常量和配置。
 
 ## 文件格式常量
 
@@ -18,8 +18,8 @@ inline std::mutex rngMutex;
 
 使用时需要加锁：
 ```cpp
-std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
-// 使用 yt::infos::gen
+std::lock_guard<std::mutex> lock(yt::info::rngMutex);
+// 使用 yt::info::gen
 ```
 
 ## 舍入模式

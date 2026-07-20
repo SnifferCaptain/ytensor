@@ -1,6 +1,6 @@
 # Reduction Operations
 
-This document describes the reduction methods for the `YTensorBase` class, including `sum()` and `max()`.
+This document describes `sum()`, `mean()`, and `max()` for `YTensorBase`.
 
 ## Overview
 
@@ -8,6 +8,8 @@ This document describes the reduction methods for the `YTensorBase` class, inclu
 | --- | --- | --- |
 | `sum(axis)` | `YTensorBase` | Sum elements along a specified axis. |
 | `sum(axes)` | `YTensorBase` | Sum elements along multiple specified axes. |
+| `mean(axis)` | `YTensorBase` | Compute the same-dtype mean along one axis. |
+| `mean(axes)` | `YTensorBase` | Compute sequential same-dtype means along normalized axes. |
 | `max(axis)` | `std::pair<YTensorBase, YTensorBase>` | Compute maximum values and their indices along a specified axis. |
 | `max(axes)` | `std::pair<YTensorBase, YTensorBase>` | Compute maximum values and their indices along multiple specified axes. |
 
@@ -81,6 +83,17 @@ YTensorBase sum(const std::vector<int>& axes) const {
 
 ---
 
+## `mean()`
+
+```cpp
+YTensorBase mean(int axis) const;
+YTensorBase mean(const std::vector<int>& axes) const;
+```
+
+`mean()` preserves rank and dtype. Negative axes are normalized; multi-axis inputs are sorted and deduplicated. Integer tensors use same-dtype integer division. Reducing an empty axis yields the zero-initialized result.
+
+---
+
 ## `max()`
 
 ### Function Signatures
@@ -151,13 +164,14 @@ YTensorBase squeezed = s.squeeze(1);
 
 | Case | Exception Type |
 | --- | --- |
-| `ndim < 1` for `sum`/`max` | `std::runtime_error` |
+| `ndim < 1` for `sum`/`mean`/`max` | `std::runtime_error` |
+| Empty reduced axis for `max` | `std::domain_error` |
 
 ---
 
 ## Performance Notes
 
-- These operations are automatically parallelized using `yt::kernel::parallelFor`.
+- These operations are automatically parallelized using `yt::utils::parallelFor`.
 - Parallelization granularity is based on the `outerSize` and `axisSize` of the reduction.
 
 ---

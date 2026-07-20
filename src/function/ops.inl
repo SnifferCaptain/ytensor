@@ -1,5 +1,10 @@
+/***************
+ * file: function/ops.inl
+ * purpose: 高层线性层、attention、稳定归约和pooling实现。
+ ***************/
+
 template <typename T, int dim0, int dim1>
-yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> yt::function::matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b) {
+yt::YTensor<T, yt::utils::CONSTEXPR_MAX({dim0, dim1, 2})> yt::function::matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b) {
     return a.matmul(b);
 }
 
@@ -15,6 +20,8 @@ yt::YTensor<T, dim> _scaledDotProductAttentionFlash(
     yt::YTensor<T, 2>* bias
 );
 
+// 将完全不可见的attention query行强制归零。
+// masked score使用有限sentinel时softmax仍可能产生非零分布，因此matmul后必须修正全mask行。
 template<typename T, int dim>
 void _zeroFullyMaskedSdpaRows(
     yt::YTensor<T, dim>& output,
@@ -39,8 +46,10 @@ void _zeroFullyMaskedSdpaRows(
     });
 }
 
+// callable mask版本的全mask行修正；mask返回true表示key对当前query可见。
+// 注意：callback会被重复调用，必须在调用期间有效且不依赖一次性消费状态。
 template<typename T, int dim, typename MaskFunc>
-requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
 void _zeroFullyMaskedSdpaRows(
     yt::YTensor<T, dim>& output,
     MaskFunc&& mask,
@@ -67,7 +76,7 @@ void _zeroFullyMaskedSdpaRows(
 }
 
 template<typename T, int dim, typename MaskFunc>
-requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
 yt::YTensor<T, dim> _scaledDotProductAttentionFlash(
     yt::YTensor<T, dim>& query,
     yt::YTensor<T, dim>& key,
@@ -106,6 +115,8 @@ yt::YTensor<T, dim> yt::function::linear(const yt::YTensor<T, dim>& x, const yt:
 
 // ========== scaledDotProductAttention ==========
 
+// AVX2 Flash Attention编排；仅float可用，二维mask/bias在所有广播batch间共享。
+// 注意：output batch shape由Q/K/V matrix wrapper共同广播，kernel调用在函数返回前同步完成。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     yt::YTensor<T, dim>& query,
@@ -135,7 +146,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
         if constexpr (dim == 2) {
             outputShape = {query.shape(-2), value.shape(-1)};
         } else {
-            outputShape = yt::kernel::computeBroadcastShape({queryMatView.shape(), keyMatView.shape(), valueMatView.shape()});
+            outputShape = yt::strided::computeBroadcastShape({queryMatView.shape(), keyMatView.shape(), valueMatView.shape()});
             outputShape.push_back(query.shape(-2));
             outputShape.push_back(value.shape(-1));
         }
@@ -143,6 +154,8 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
         yt::YTensor<T, dim> output(outputShape);
         auto outputMatView = output.matView();
 
+        // Flash mask接口按线性row-major读取，因此仅mask需要物化；bias backend显式接收二维stride。
+        // 两类pointer都只在下方同步broadcast/kernel调用期间借用。
         yt::YTensor<bool, 2> maskContiguous;
         const bool* maskPtr = nullptr;
         int64_t maskStride = 0;
@@ -170,9 +183,8 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 yt::YTensor<T, 2> kContiguous;
                 yt::YTensor<T, 2> vContiguous;
 
-                // Decode(q_len==1) already has a dedicated fast path. For longer sequences,
-                // materialize pathological strided views (e.g. transposed cache + zero-stride repeat)
-                // so Flash Attention can hit its contiguous K/V accumulation path.
+                // 单行decode已有专用strided fast path；多行query则物化病态view
+                // （如转置cache叠加zero-stride repeat），使Flash kernel进入连续K/V累加路径。
                 if (q.shape(0) > 1) {
                     if (q.stride_(1) != 1) {
                         qContiguous = q.contiguous();
@@ -192,7 +204,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 auto kStride = kKernel->stride_();
                 auto vStride = vKernel->stride_();
                 auto oStride = o.stride_();
-                yt::kernel::avx2::flash_attention(
+                yt::function::flash_attention(
                     qKernel->data(),
                     kKernel->data(),
                     vKernel->data(),
@@ -233,8 +245,10 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
 #endif
 }
 
+// callable mask的AVX2 Flash Attention编排；callback在同步kernel期间按坐标调用。
+// 注意：callback可能被backend并发调用，状态型实现必须自行保证线程安全。
 template<typename T, int dim, typename MaskFunc>
-requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
 yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     yt::YTensor<T, dim>& query,
     yt::YTensor<T, dim>& key,
@@ -256,7 +270,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
         if constexpr (dim == 2) {
             outputShape = {query.shape(-2), value.shape(-1)};
         } else {
-            outputShape = yt::kernel::computeBroadcastShape({queryMatView.shape(), keyMatView.shape(), valueMatView.shape()});
+            outputShape = yt::strided::computeBroadcastShape({queryMatView.shape(), keyMatView.shape(), valueMatView.shape()});
             outputShape.push_back(query.shape(-2));
             outputShape.push_back(value.shape(-1));
         }
@@ -285,6 +299,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 yt::YTensor<T, 2> kContiguous;
                 yt::YTensor<T, 2> vContiguous;
 
+                // 多行query的Flash kernel要求连续inner axis；单行decode保留合法的strided零拷贝路径。
                 if (q.shape(0) > 1) {
                     if (q.stride_(1) != 1) {
                         qContiguous = q.contiguous();
@@ -304,7 +319,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 auto kStride = kKernel->stride_();
                 auto vStride = vKernel->stride_();
                 auto oStride = o.stride_();
-                yt::kernel::avx2::flash_attention(
+                yt::function::flash_attention(
                     qKernel->data(),
                     kKernel->data(),
                     vKernel->data(),
@@ -344,6 +359,8 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
 #endif
 }
 
+// scaled dot-product attention主入口。
+// scale==0表示自动使用1/sqrt(headDim)；mask中true表示可见，二维mask/bias复用于所有batch。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
     yt::YTensor<T, dim>& query,
@@ -391,6 +408,7 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
             if (mask->shape(0) != query.shape(-2) || mask->shape(1) != key.shape(-2)) {
                 throw std::invalid_argument("Mask shape must match the last two dimensions of the score tensor.");
             }
+            // 有限-1e9避免直接写入无穷导致部分低精度路径异常；全mask行在最终输出上单独归零。
             score = query.masked_matmul(
                 key.transpose(),
                 *mask,
@@ -424,8 +442,9 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
     return yt::YTensor<T, dim>();
 }
 
+// callable mask的SDPA入口；mask需可重复调用，因为score计算和全mask行修正都会使用它。
 template<typename T, int dim, typename MaskFunc>
-requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
 yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
     yt::YTensor<T, dim>& query,
     yt::YTensor<T, dim>& key,
@@ -447,7 +466,7 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
 }
 
 template<typename T, int dim, typename MaskFunc>
-requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
 yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
     yt::YTensor<T, dim>& query,
     yt::YTensor<T, dim>& key,
@@ -504,6 +523,7 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
 
 // ========== logsumexp ==========
 
+// 使用max-shift实现数值稳定的logsumexp，并保留reduced轴用于后续广播。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::logsumexp(const yt::YTensor<T, dim>& x, const std::vector<int>& axes) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logsumexp()");
@@ -519,6 +539,7 @@ yt::YTensor<T, dim> yt::function::logsumexp(const yt::YTensor<T, dim>& x, const 
         output.at(0) = std::log(sum_exp) + max_val;
         return output;
     } else {
+        // x-max避免exp上溢；keep-dim max/sum可直接广播回原shape。
         auto max_vals = x.max(normalized_axes).first;
         auto exp_shifted = x.clone();
         exp_shifted.broadcastInplace([](T& a, const T& b) {
@@ -539,6 +560,7 @@ yt::YTensor<T, dim> yt::function::logsumexp(const yt::YTensor<T, dim>& x, int ax
 
 // ========== logSoftmax ==========
 
+// 通过`x - logsumexp(x)`计算log-softmax，不改变输入layout。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::logSoftmax(const yt::YTensor<T, dim>& x, const std::vector<int>& axes) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logSoftmax()");
@@ -555,6 +577,7 @@ yt::YTensor<T, dim> yt::function::logSoftmax(const yt::YTensor<T, dim>& x, int a
     return yt::function::logSoftmax(x, std::vector<int>{axis});
 }
 
+// 原地log-softmax；仅修改values，不改变shape/stride metadata。
 template<typename T, int dim>
 yt::YTensor<T, dim>& yt::function::logSoftmax_(yt::YTensor<T, dim>& x, const std::vector<int>& axes) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::logSoftmax_()");
@@ -572,15 +595,24 @@ yt::YTensor<T, dim>& yt::function::logSoftmax_(yt::YTensor<T, dim>& x, int axis)
 
 // ========== maxPool1d ==========
 
+// 无padding的一维最大池化；只保留完整窗口，stride<0表示使用kernelSize。
+// 注意：axis支持负索引，输出长度为floor((input-kernel)/stride)+1。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::maxPool1d(const yt::YTensor<T, dim>& x, int kernelSize, int stride, int axis) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::maxPool1d()");
     axis = yt::function::_normalizeAxis<dim>(axis);
+    if (kernelSize <= 0) throw std::invalid_argument("yt::function::maxPool1d: kernelSize must be positive");
     if (stride < 0) stride = kernelSize;
+    if (stride == 0) throw std::invalid_argument("yt::function::maxPool1d: stride must be positive");
 
     auto shape = x.shape();
     int input_size = shape[axis];
-    int output_size = (input_size - kernelSize) / stride + 1;
+    int64_t output_size_wide =
+        (static_cast<int64_t>(input_size) - kernelSize) / stride + 1;
+    if (output_size_wide > std::numeric_limits<int>::max()) {
+        throw std::overflow_error("yt::function::maxPool1d: output size overflow");
+    }
+    int output_size = static_cast<int>(output_size_wide);
     if (output_size <= 0) {
         throw std::invalid_argument("yt::function::maxPool1d: kernelSize too large for input dimension");
     }
@@ -601,6 +633,7 @@ yt::YTensor<T, dim> yt::function::maxPool1d(const yt::YTensor<T, dim>& x, int ke
     int64_t total_iterations = 1;
     for (int s : iter_shape) total_iterations *= s;
 
+    // 将非pool轴坐标展平；每个iteration写入独立输出slice，超过阈值后并行无数据竞争。
     #pragma omp parallel for if(total_iterations > 1024)
     for (int64_t idx = 0; idx < total_iterations; ++idx) {
         std::vector<int> iter_indices(iter_shape.size());
@@ -641,15 +674,24 @@ yt::YTensor<T, dim> yt::function::maxPool1d(const yt::YTensor<T, dim>& x, int ke
 
 // ========== avgPool1d ==========
 
+// 无padding的一维平均池化；窗口、stride和输出长度规则与maxPool1d一致。
+// 注意：T为整数时inv_k按整数除法计算，这是当前typed算术合同。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::avgPool1d(const yt::YTensor<T, dim>& x, int kernelSize, int stride, int axis) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::avgPool1d()");
     axis = yt::function::_normalizeAxis<dim>(axis);
+    if (kernelSize <= 0) throw std::invalid_argument("yt::function::avgPool1d: kernelSize must be positive");
     if (stride < 0) stride = kernelSize;
+    if (stride == 0) throw std::invalid_argument("yt::function::avgPool1d: stride must be positive");
 
     auto shape = x.shape();
     int input_size = shape[axis];
-    int output_size = (input_size - kernelSize) / stride + 1;
+    int64_t output_size_wide =
+        (static_cast<int64_t>(input_size) - kernelSize) / stride + 1;
+    if (output_size_wide > std::numeric_limits<int>::max()) {
+        throw std::overflow_error("yt::function::avgPool1d: output size overflow");
+    }
+    int output_size = static_cast<int>(output_size_wide);
     if (output_size <= 0) {
         throw std::invalid_argument("yt::function::avgPool1d: kernelSize too large for input dimension");
     }
@@ -670,6 +712,7 @@ yt::YTensor<T, dim> yt::function::avgPool1d(const yt::YTensor<T, dim>& x, int ke
 
     T inv_k = static_cast<T>(1) / static_cast<T>(kernelSize);
 
+    // 非pool轴展平后各iteration写入独立slice；1024仅是并行粒度阈值。
     #pragma omp parallel for if(total_iterations > 1024)
     for (int64_t idx = 0; idx < total_iterations; ++idx) {
         std::vector<int> iter_indices(iter_shape.size());

@@ -11,19 +11,21 @@
 #include "include/ytensor_concepts.hpp"
 #include "include/ytensor_infos.hpp"
 #include "include/ytensor_memory.hpp"
+#include "include/ytensor_layout.hpp"
 #include "include/ytensor_types.hpp"
-#include "include/kernel/parallel_for.hpp"
-#include "include/kernel/type_dispatch.hpp"
+#include "include/utils/parallel_for.hpp"
+#include "include/type/type_dispatch.hpp"
 
 // AVX2 kernel
-#include "include/kernel/avx2/hgemm.hpp"
-#include "include/kernel/avx2/sgemm.hpp"
-#include "include/kernel/avx2/sgemv.hpp"
+#include "include/blas/avx2/hgemm.hpp"
+#include "include/blas/avx2/sgemm.hpp"
+#include "include/blas/avx2/sgemv.hpp"
 
 // Backend switch: define YT_USE_LIB to use precompiled runtime backend.
 
 /////////// ytensor class def ////////////
 #include "include/ytensor_base.hpp"
+#include "include/ytensor_strided.hpp"
 #include "include/ytensor_core.hpp"
 
 //////////// external /////////////
@@ -36,9 +38,14 @@
 
 #if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 #include "src/ytensor_memory.inl"
+#include "src/ytensor_layout.inl"
 #include "src/ytensor_base.inl"
 #include "src/ytensor_io.inl"
 #endif
+
+// Typed Strided templates must remain visible in YT_USE_LIB consumer mode.
+// All definitions in this aggregate are inline in both consumer and library TUs.
+#include "src/ytensor_strided.inl"
 
 #if !YT_USE_LIB || defined(YT_LIBRARY_IMPLEMENTATION)
 #include "src/ytensor_base_math.inl"

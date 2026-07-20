@@ -54,7 +54,7 @@ static YTensorBase concat(const std::vector<YTensorBase>& tensors, int axis = 0)
 - **非 POD 类型** (如 `std::string`): 使用注册的 `copyConstruct` 进行深拷贝。
 
 :::note
-对于非 POD 类型，必须确保该类型已通过 `yt::types::registerType` 正确注册，并提供了拷贝构造函数。
+对于非 POD 类型，必须确保该类型已通过 `yt::type::registerType` 正确注册，并提供了拷贝构造函数。
 :::
 
 ### 使用示例

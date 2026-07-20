@@ -212,7 +212,7 @@ auto siluOutput = x.broadcastInplace([](float& v) {
 });
 
 // 支持元素级别的多元自定义计算。out: [3, 4]
-auto out = yt::kernel::broadcast([](
+auto out = yt::strided::broadcast([](
     const float& t1,    // 来自张量x的元素
     const float& t2,    // 来自张量y的元素
     const float& t3,    // 来自张量reluOutput的元素
@@ -234,7 +234,7 @@ std::cout << "Custom output:\n" << out << std::endl;
 
 ---
 ## 🦾 多类型支持
-支持多种数据类型的张量，包括标准库类型float、std::string等，也支持自定义类型，能否使用取决于是否对类型进行对应运算符符的重载。
+支持标准库类型和自定义类型。Typed `YTensor<T, dim>` 数学能力取决于 `T` 是否提供对应运算符；runtime `YTensorBase` 数学能力需要注册相应 `YDTypeKernels`，tensor-scalar转换还可能需要精确cast kernel。
 ```cpp
 yt::YTensor<std::string, 2> strTensor(3, 4);    // 创建一个3x4的std::string类型张量
 strTensor.fill("hello");                        // 初始化为"hello"
@@ -252,7 +252,7 @@ struct MyType {
 };
 
 // 注册类型，并提供字符串的转换函数。需要提供类型名称与类型转换函数（可选，影响打印输出）
-yt::types::registerType<MyType>("MyType", [](const void* data) {
+yt::type::registerType<MyType>("MyType", [](const void* data) {
     const MyType* p = reinterpret_cast<const MyType*>(data);// 转为MyType指针
     return std::to_string(p->value + 1);// 直接使用value+1为打印内容
 });
@@ -316,8 +316,8 @@ io.close();
 从 `0.14` 版本开始，张量底层存储由 `YMemory` 封装，不再直接在张量中裸持有 `shared_ptr<char[]>` 成员。
 
 - `YMemory` 只封装线性字节存储句柄，并提供 `rawData()`、`get()`、`nbytes()`、`device()`。
-- `YTensorBase` 仍然保持经典张量元数据模型：`_offset`、`_shape`、`_stride`、`_element_size`、`_dtype`。
-- shape、stride、offset、dtype、对象构造等语义仍属于 tensor 层，不属于 `YMemory`。
+- `YTensorBase` 持有 `_memory`、`_layout`、`_element_size`、`_dtype`；活跃 shape、stride、offset 元数据仅由 `YLayout` 持有。
+- layout 语义与对象构造仍属于 tensor/layout owner，不属于 `YMemory`。
 - `device()` 当前返回底层存储设备字符串，例如 `"cpu"`；不会进行隐式跨设备同步。
 
 这个改动保持用户侧张量 API 不变，同时为未来设备后端扩展预留 storage 层接口。
@@ -473,13 +473,11 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 
 ## 最新更新
 
-- 新增 `YMemory`、`YStorageBase`、`YCpuStorage` 作为张量底层 storage 封装层。
-- `YTensorBase` 现在通过 `YMemory` 持有底层存储，同时 shape/stride/offset 逻辑仍保留在 tensor 层。
-- 新增 `YTensorBase::device()` 与 `YTensorBase::nbytes()` 用于查询底层存储信息。
-- 整理代码结构。
-- 新增多个常用函数。
-- 修复order接口，现在只有逐元素的操作会保留order的导数/积分接口。
-- 新增SDPA后端FLASH_AVX2，采用flash attention算法加速注意力计算。
+- 重构张量运行时架构，引入 `YLayoutType`、`YMeta` 与 `YLayout` 管理 layout metadata，并将 Strided 行为拆分为 `broadcast`、`view`、`copy`、`reduce`、`matmul` 五个职责模块。
+- 新增 runtime dtype kernel 与 pairwise cast 注册机制，完善自定义 dtype 的构造、复制、析构、格式化和序列化生命周期支持。
+- 修复广播别名、重叠 view 写入、非 POD 复制、数值转换、归约、矩阵乘法及文件 IO 中的正确性问题，并恢复 typed 访问与 KV-cache 路径性能。
+- 明确普通拷贝共享 values storage、`clone()` 创建独立副本的内存语义，补充中英文 runtime 架构文档与实现注释。
+- 同步生成并验证 `ytensor_single.hpp`；`YT_USE_LIB` 预编译后端保持可选，Qwen3 示例可通过 CMake 开关在 header-only 与 shared-library 模式间切换。
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！

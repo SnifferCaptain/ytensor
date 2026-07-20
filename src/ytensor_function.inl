@@ -1,9 +1,16 @@
+/***************
+ * file: ytensor_function.inl
+ * purpose: 高层function共享数值helper、axis规则和子模块聚合入口。
+ ***************/
+
 #include "../include/ytensor_concepts.hpp"
 #if YT_USE_AVX2
-#include "../include/kernel/avx2/flash_attention.hpp"
+#include "../include/function/flash_attention.hpp"
 #endif
 
 namespace yt::function {
+
+// ==================== stable scalar helpers ====================
 
 template <typename T>
 inline T _zero() {
@@ -41,6 +48,7 @@ inline T _absValue(const T& value) {
 
 template <typename T>
 inline T _stableSigmoid(const T& value) {
+    // 按符号选择指数形式，避免大负数计算exp(-value)上溢。
     const T zero_v = _zero<T>();
     const T one_v = _one<T>();
     if (value >= zero_v) {
@@ -53,16 +61,21 @@ inline T _stableSigmoid(const T& value) {
 
 template <typename T>
 inline T _stableSoftplus(const T& value) {
+    // max(x,0)+log1p(exp(-abs(x)))在正负极值下都保持稳定。
     const T zero_v = _zero<T>();
     const T positive = value > zero_v ? value : zero_v;
     return positive + _log1pValue(_expValue(-_absValue(value)));
 }
 
+// ==================== axis and broadcast-shape helpers ====================
+
+// 按项目循环索引规则把任意正负axis规范化到[0, dim)。
 template <int dim>
 inline int _normalizeAxis(int axis) {
     return (axis % dim + dim) % dim;
 }
 
+// 规范化axis集合并拒绝重复项，保留调用方给定顺序。
 template <int dim>
 inline std::vector<int> _normalizeAxes(const std::vector<int>& axes) {
     if (axes.empty()) {
@@ -82,6 +95,7 @@ inline std::vector<int> _normalizeAxes(const std::vector<int>& axes) {
     return normalized;
 }
 
+// 验证permutation并返回其inverse mapping。
 template <int dim>
 inline std::vector<int> _inversePermutation(const std::vector<int>& order) {
     if (static_cast<int>(order.size()) != dim) {
@@ -134,6 +148,7 @@ inline std::vector<int> _makeBroadcastShape(const std::vector<int>& axes, const 
     return shape;
 }
 
+// 将affine参数reshape为可沿指定axes广播的view，并验证reference对应extent。
 template <typename T, int dim, int affineDim>
 inline yt::YTensor<T, dim> _makeAffineView(
     const yt::YTensor<T, affineDim>& affine,
@@ -159,6 +174,7 @@ inline yt::YTensor<T, dim> _makeAffineView(
 
 }  // namespace yt::function
 
+// 子模块共享以上internal helper；聚合顺序保证定义在模板实例化前可见。
 #include "function/ops.inl"
 #include "function/activation.inl"
 #include "function/normalization.inl"

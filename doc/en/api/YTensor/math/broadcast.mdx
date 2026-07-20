@@ -10,7 +10,7 @@ Broadcasting is a powerful mechanism that allows tensors of different shapes to 
 
 - **Automatic Broadcasting**: Standard operators (`+`, `-`, `*`, etc.) handle broadcasting automatically.
 - **In-place Broadcasting**: The `broadcastInplace()` method modifies the current tensor in place.
-- **Custom Function Broadcasting**: The `yt::kernel::broadcast()` function applies custom operations across tensors.
+- **Custom Function Broadcasting**: The `yt::strided::broadcast()` function applies custom operations across tensors.
 
 ---
 
@@ -117,7 +117,7 @@ a.broadcastInplace([input](float& out, const float& w, const float& b) {
 
 ---
 
-## yt::kernel::broadcast()
+## yt::strided::broadcast()
 
 ### Core Function Description
 
@@ -173,7 +173,7 @@ int main() {
     auto b = YTensor<float, 1>::ones(5);
     
     // Non-inplace addition
-    auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    auto c = yt::strided::broadcast([](const float& x, const float& y) {
         return x + y;
     }, a, b);
     
@@ -190,7 +190,7 @@ auto a = YTensor<float, 2>::ones(3, 3);
 auto b = YTensor<float, 2>::ones(3, 3);
 
 // Returns YTensor<double, 2>
-auto c = yt::kernel::broadcast([](const float& x, const float& y) -> double {
+auto c = yt::strided::broadcast([](const float& x, const float& y) -> double {
     return static_cast<double>(x) * y;
 }, a, b);
 ```
@@ -203,7 +203,7 @@ auto b = YTensor<float, 2>(3, 5);
 auto c = YTensor<float, 1>(5);
 
 // Three-input operation
-auto result = yt::kernel::broadcast(
+auto result = yt::strided::broadcast(
     [](const float& x, const float& y, const float& z) {
         return x * y + z;
     }, a, b, c);
@@ -249,7 +249,7 @@ auto a = YTensor<float, 2>::ones(1000, 1000);  // Contiguous
 auto b = YTensor<float, 2>::ones(1000, 1000);  // Contiguous
 
 // Fast-path: Direct pointer access
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```
@@ -263,14 +263,14 @@ auto a = YTensor<float, 2>::ones(1000, 1000);
 auto b = a.transpose(0, 1);  // Non-contiguous
     
 // Slow-path: Stride-indexed access
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```
 
 ### Parallelization
 
-`broadcast` is automatically parallelized using `yt::kernel::parallelFor`:
+`broadcast` is automatically parallelized using `yt::utils::parallelFor`:
 
 ```cpp
 // Large tensors are handled in parallel
@@ -278,7 +278,7 @@ auto a = YTensor<float, 2>::randn(10000, 10000);
 auto b = YTensor<float, 2>::randn(10000, 10000);
 
 // Multi-threaded execution
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x * y + 0.5f;
 }, a, b);
 ```
@@ -407,7 +407,7 @@ auto a = YTensor<float, 2>::ones(3, 3);
 auto b = YTensor<float, 2>::ones(3, 3);
 
 // Returns YTensor<int, 2>
-auto c = yt::kernel::broadcast([](const float& x, const float& y) -> int {
+auto c = yt::strided::broadcast([](const float& x, const float& y) -> int {
     return static_cast<int>(x + y);
 }, a, b);
 ```
@@ -459,7 +459,7 @@ result.broadcastInplace([](float& x, const float& y) {
 }, b);
 
 // ✅ Correct: 'a' remains unchanged
-auto result = yt::kernel::broadcast([](const float& x, const float& y) {
+auto result = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```

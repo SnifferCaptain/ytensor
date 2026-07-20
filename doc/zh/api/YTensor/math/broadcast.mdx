@@ -10,7 +10,7 @@
 
 - **自动广播**：运算符（`+`, `-`, `*` 等）自动处理广播
 - **原地广播**：`broadcastInplace()` 方法原地修改当前张量
-- **自定义函数广播**：`yt::kernel::broadcast()` 函数应用自定义操作
+- **自定义函数广播**：`yt::strided::broadcast()` 函数应用自定义操作
 
 ---
 
@@ -122,7 +122,7 @@ a.broadcastInplace([input](float& out, const float& w, const float& b) {
 
 ---
 
-## yt::kernel::broadcast()
+## yt::strided::broadcast()
 
 非原地广播操作，创建新张量存储结果。
 
@@ -183,7 +183,7 @@ int main() {
     auto b = YTensor<float, 1>::ones(5);
     
     // 非原地加法
-    auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+    auto c = yt::strided::broadcast([](const float& x, const float& y) {
         return x + y;
     }, a, b);
     
@@ -200,7 +200,7 @@ auto a = YTensor<float, 2>::ones(3, 3);
 auto b = YTensor<float, 2>::ones(3, 3);
 
 // 返回 YTensor<double, 2>
-auto c = yt::kernel::broadcast([](const float& x, const float& y) -> double {
+auto c = yt::strided::broadcast([](const float& x, const float& y) -> double {
     return static_cast<double>(x) * y;
 }, a, b);
 ```
@@ -213,7 +213,7 @@ auto b = YTensor<float, 2>(3, 5);
 auto c = YTensor<float, 1>(5);
 
 // 三输入操作
-auto result = yt::kernel::broadcast(
+auto result = yt::strided::broadcast(
     [](const float& x, const float& y, const float& z) {
         return x * y + z;
     }, a, b, c);
@@ -259,7 +259,7 @@ auto a = YTensor<float, 2>::ones(1000, 1000);  // 连续
 auto b = YTensor<float, 2>::ones(1000, 1000);  // 连续
 
 // 快速路径：直接指针访问
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```
@@ -273,14 +273,14 @@ auto a = YTensor<float, 2>::ones(1000, 1000);
 auto b = a.transpose(0, 1);  // 非连续
 
 // 慢速路径：使用步长索引
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```
 
 ### 并行化
 
-broadcast 使用 `yt::kernel::parallelFor` 自动并行化：
+broadcast 使用 `yt::utils::parallelFor` 自动并行化：
 
 ```cpp
 // 大张量自动并行
@@ -288,7 +288,7 @@ auto a = YTensor<float, 2>::randn(10000, 10000);
 auto b = YTensor<float, 2>::randn(10000, 10000);
 
 // 多线程执行
-auto c = yt::kernel::broadcast([](const float& x, const float& y) {
+auto c = yt::strided::broadcast([](const float& x, const float& y) {
     return x * y + 0.5f;
 }, a, b);
 ```
@@ -417,7 +417,7 @@ auto a = YTensor<float, 2>::ones(3, 3);
 auto b = YTensor<float, 2>::ones(3, 3);
 
 // 返回 YTensor<int, 2>
-auto c = yt::kernel::broadcast([](const float& x, const float& y) -> int {
+auto c = yt::strided::broadcast([](const float& x, const float& y) -> int {
     return static_cast<int>(x + y);
 }, a, b);
 ```
@@ -469,7 +469,7 @@ result.broadcastInplace([](float& x, const float& y) {
 }, b);
 
 // ✅ 正确：a 不变
-auto result = yt::kernel::broadcast([](const float& x, const float& y) {
+auto result = yt::strided::broadcast([](const float& x, const float& y) {
     return x + y;
 }, a, b);
 ```

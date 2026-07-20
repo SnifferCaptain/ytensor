@@ -5,11 +5,11 @@ yt::YTensor<T, dim> yt::function::relu(const yt::YTensor<T, dim>& x, int order) 
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in YTensorFunction::relu()");
     yt::YTensor<T, dim> op;
     if (order == 0) {
-        op = yt::kernel::broadcast([](const T& a) {
+        op = yt::strided::broadcast([](const T& a) {
             return std::max(a, static_cast<T>(0));
         }, x);
     } else if (order == 1) {
-        op = yt::kernel::broadcast([](const T& a) {
+        op = yt::strided::broadcast([](const T& a) {
             return static_cast<T>(a > 0);
         }, x);
     } else if (order > 1) {
@@ -20,7 +20,7 @@ yt::YTensor<T, dim> yt::function::relu(const yt::YTensor<T, dim>& x, int order) 
         for (int i = 2; i < -order + 2; i++) {
             fact *= i;
         }
-        op = yt::kernel::broadcast([&pow, &fact](const T& a) {
+        op = yt::strided::broadcast([&pow, &fact](const T& a) {
             if (a > 0) {
                 return std::pow(a, pow) / static_cast<T>(fact);
             }
@@ -87,12 +87,12 @@ yt::YTensor<T, dim>& yt::function::exp_(yt::YTensor<T, dim>& x, int order) {
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::sigmoid(const yt::YTensor<T, dim>& x, int order) {
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             return yt::function::_stableSigmoid(a);
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T sig = yt::function::_stableSigmoid(a);
             return sig * (yt::function::_one<T>() - sig);
         }, x);
@@ -132,6 +132,9 @@ yt::YTensor<T, dim> _softmaxSingleAxis(const yt::YTensor<T, dim>& x, int axis) {
     axis = yt::function::_normalizeAxis<dim>(axis);
 
     auto shape = x.shape();
+    if (shape[axis] == 0) {
+        throw std::domain_error("yt::function::softmax: cannot reduce an empty axis");
+    }
     yt::YTensor<T, dim> output(shape);
 
     // 单轴softmax保留原来的快路径，避免多轴泛化后拖慢常见推理场景。
@@ -237,6 +240,9 @@ template<typename T, int dim>
 yt::YTensor<T, dim>& _softmaxSingleAxis_(yt::YTensor<T, dim>& x, int axis) {
     axis = yt::function::_normalizeAxis<dim>(axis);
     auto shape = x.shape();
+    if (shape[axis] == 0) {
+        throw std::domain_error("yt::function::softmax_: cannot reduce an empty axis");
+    }
 
     if (x.isContiguous()) {
         int64_t dim_size = shape[axis];
@@ -414,12 +420,12 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::leakyRelu(const yt::YTensor<T, dim>& x, T alpha, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::leakyRelu()");
     if (order == 0) {
-        return yt::kernel::broadcast([alpha](const T& a) {
+        return yt::strided::broadcast([alpha](const T& a) {
             return a > static_cast<T>(0) ? a : alpha * a;
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([alpha](const T& a) {
+        return yt::strided::broadcast([alpha](const T& a) {
             return a > static_cast<T>(0) ? static_cast<T>(1) : alpha;
         }, x);
     }
@@ -450,12 +456,12 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::elu(const yt::YTensor<T, dim>& x, T alpha, int order) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::elu()");
     if (order == 0) {
-        return yt::kernel::broadcast([alpha](const T& a) {
+        return yt::strided::broadcast([alpha](const T& a) {
             return a > static_cast<T>(0) ? a : alpha * (std::exp(a) - static_cast<T>(1));
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([alpha](const T& a) {
+        return yt::strided::broadcast([alpha](const T& a) {
             return a > static_cast<T>(0) ? static_cast<T>(1) : alpha * std::exp(a);
         }, x);
     }
@@ -486,14 +492,14 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::selu(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::selu()");
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
             constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
             return a > static_cast<T>(0) ? l * a : l * al * (std::exp(a) - static_cast<T>(1));
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             constexpr T l = static_cast<T>(1.0507009873554804934193349852946);
             constexpr T al = static_cast<T>(1.6732632423543772848170429916717);
             return a > static_cast<T>(0) ? l : l * al * std::exp(a);
@@ -530,13 +536,13 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::gelu(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::gelu()");
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
             return static_cast<T>(0.5) * a * (static_cast<T>(1) + std::erf(a / sqrt2));
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             constexpr T sqrt2 = static_cast<T>(1.4142135623730950488016887242097);
             constexpr T inv_sqrt2pi = static_cast<T>(0.3989422804014326779399460599343);
             T cdf = static_cast<T>(0.5) * (static_cast<T>(1) + std::erf(a / sqrt2));
@@ -576,12 +582,12 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::tanh(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::tanh()");
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             return std::tanh(a);
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T t = std::tanh(a);
             return static_cast<T>(1) - t * t;
         }, x);
@@ -613,13 +619,13 @@ yt::YTensor<T, dim>& yt::function::tanh_(yt::YTensor<T, dim>& x, int order) {
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::swish(const yt::YTensor<T, dim>& x, int order) {
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T sig = yt::function::_stableSigmoid(a);
             return a * sig;
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T sig = yt::function::_stableSigmoid(a);
             return sig * (yt::function::_one<T>() + a * (yt::function::_one<T>() - sig));
         }, x);
@@ -651,7 +657,7 @@ yt::YTensor<T, dim>& yt::function::swish_(yt::YTensor<T, dim>& x, int order) {
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::softplus(const yt::YTensor<T, dim>& x, int order) {
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             return yt::function::_stableSoftplus(a);
         }, x);
     }
@@ -681,14 +687,14 @@ yt::YTensor<T, dim>& yt::function::softplus_(yt::YTensor<T, dim>& x, int order) 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::mish(const yt::YTensor<T, dim>& x, int order) {
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T sp = yt::function::_stableSoftplus(a);
             return a * yt::function::_tanhValue(sp);
         }, x);
     }
     if (order == 1) {
         // mish'(x) = tanh(sp) + x * (1 - tanh(sp)^2) * sigmoid(x)
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T sp = yt::function::_stableSoftplus(a);
             T tsp = yt::function::_tanhValue(sp);
             T sig = yt::function::_stableSigmoid(a);
@@ -725,13 +731,13 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::hardSigmoid(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSigmoid()");
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             T v = a / static_cast<T>(6) + static_cast<T>(0.5);
             return std::max(static_cast<T>(0), std::min(static_cast<T>(1), v));
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             return (a > static_cast<T>(-3) && a < static_cast<T>(3))
                 ? static_cast<T>(1) / static_cast<T>(6)
                 : static_cast<T>(0);
@@ -767,14 +773,14 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::hardSwish(const yt::YTensor<T, dim>& x, int order) {
     static_assert(std::is_arithmetic_v<T>, "T must be arithmetic type in yt::function::hardSwish()");
     if (order == 0) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             if (a <= static_cast<T>(-3)) return static_cast<T>(0);
             if (a >= static_cast<T>(3)) return a;
             return a * (a + static_cast<T>(3)) / static_cast<T>(6);
         }, x);
     }
     if (order == 1) {
-        return yt::kernel::broadcast([](const T& a) {
+        return yt::strided::broadcast([](const T& a) {
             if (a <= static_cast<T>(-3)) return static_cast<T>(0);
             if (a >= static_cast<T>(3)) return static_cast<T>(1);
             return (static_cast<T>(2) * a + static_cast<T>(3)) / static_cast<T>(6);

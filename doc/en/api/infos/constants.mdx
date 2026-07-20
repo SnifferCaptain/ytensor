@@ -1,13 +1,13 @@
 # Constants and Configuration
 
-This document lists global constants and configuration items in the `yt::infos` namespace.
+This document lists global constants and configuration items in the `yt::info` namespace.
 
 ## Mathematical Constants
 
 Predefined constants corresponding to types (if the type supports it):
 
 ```cpp
-namespace yt::infos {
+namespace yt::info {
     // Epsilon (machine precision)
     constexpr double EPSILON = 1e-6; 
     
@@ -23,7 +23,7 @@ namespace yt::infos {
 This configuration affects the type conversion behavior of `bfloat16`.
 
 ```cpp
-namespace yt::infos {
+namespace yt::info {
     // Control bfloat16 rounding mode
     // true: Round to nearest even number (Round-to-Nearest-Even) - Default behavior
     // false: Truncate (retaining high 16 bits) - Faster but less precise
@@ -38,7 +38,7 @@ namespace yt::infos {
 
 ```cpp
 // Set to truncate mode (global effect)
-yt::infos::bf16_rounding_mode() = false;
+yt::info::bf16_rounding_mode() = false;
 ```
 
 ### Random Seed

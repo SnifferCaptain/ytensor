@@ -53,7 +53,7 @@ YTensor<T, dim> linear(const YTensor<T, dim>& x, const YTensor<T, 2>& weight, co
 
 ```cpp
 template<typename T, int dim0, int dim1>
-yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})>
+yt::YTensor<T, yt::utils::CONSTEXPR_MAX({dim0, dim1, 2})>
 matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
 ```
 

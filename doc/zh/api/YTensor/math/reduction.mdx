@@ -107,7 +107,7 @@ float total = a.sum();  // 55.0（标量）
 
 ## mean()
 
-对指定轴求均值，使用 **Welford 算法**以提高数值稳定性。
+对指定轴先进行同dtype求和，再进行同dtype除法。
 
 ### 函数签名
 
@@ -132,7 +132,8 @@ T mean(int axis = 0) const requires(dim == 1);
 ### 核心功能描述
 
 对指定轴求算术平均值。
-*   内部使用 **Welford 算法** 在线计算，大幅提高数值稳定性，避免大数相加的精度损失。
+*   整数张量使用整数除法；多轴会在轴规范化后依次执行。
+*   归约空轴时返回零初始化结果。
 *   **始终保持维度**。
 
 ### 返回值
@@ -164,20 +165,18 @@ auto b = YTensor<float, 1>({5}, {1, 2, 3, 4, 5});
 float avg = b.mean();  // 3.0
 ```
 
-### Welford 算法
+### 累加合同
 
-`mean()` 使用 Welford 算法在线计算均值，提高数值稳定性：
+`mean()` 使用 `T` 累加，并在最后除以轴长度：
 
 ```cpp
 // 伪代码
-T mean = 0;
+T sum = 0;
 for (int j = 0; j < axisLen; j++) {
-    T x = data[j];
-    mean += (x - mean) / (j + 1);  // Welford 更新
+    sum += data[j];
 }
+T mean = axisLen == 0 ? T(0) : sum / T(axisLen);
 ```
-
-**优点**：避免大数相加导致的精度损失。
 
 ---
 
@@ -307,7 +306,7 @@ auto a = YTensor<float, 3>::randn(100, 100, 100);
 auto sum = a.sum(0);  // 多线程执行
 ```
 
-**阈值**：`yt::infos::minParOps`，当操作数超过此阈值时启用并行。
+**阈值**：`yt::info::minParOps`，当操作数超过此阈值时启用并行。
 
 ### 向量化
 
@@ -474,8 +473,8 @@ auto [_, indices] = a.max({0, 2});
 auto a = YTensor<float, 1>::ones(10000000);
 float sum = a.sum();  // 可能不完全等于 10000000
 
-// mean() 使用 Welford 算法，精度更好
-float mean = a.mean();  // 更接近 1.0
+// mean() 与 sum() 使用相同的float累加方式
+float mean = a.mean();
 ```
 :::
 

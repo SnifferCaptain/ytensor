@@ -161,7 +161,7 @@ struct _RandnGenerator {
 
 - 内部使用 `std::normal_distribution<double>` 生成正态分布随机数
 - 分布参数：均值 μ = 0.0，标准差 σ = 1.0
-- 使用全局随机数生成器 `yt::infos::gen`
+- 使用全局随机数生成器 `yt::info::gen`
 
 ### 使用方式
 
@@ -217,7 +217,7 @@ Tensor shape: [3, 4], dtype: float32
 :::warning
 **线程安全性**
 
-在多线程环境下，`randn` 使用互斥锁（`yt::infos::rngMutex`）保护随机数生成器，可能成为性能瓶颈。
+在多线程环境下，`randn` 使用互斥锁（`yt::info::rngMutex`）保护随机数生成器，可能成为性能瓶颈。
 
 **建议**：
 - 对于并行计算场景，考虑在单线程中生成所有随机张量
@@ -252,7 +252,7 @@ struct _RanduGenerator {
 
 - 内部使用 `std::uniform_real_distribution<double>` 生成均匀分布随机数
 - 分布范围：[0.0, 1.0)
-- 使用全局随机数生成器 `yt::infos::gen`
+- 使用全局随机数生成器 `yt::info::gen`
 
 ### 使用方式
 
@@ -365,7 +365,7 @@ void example() {
 :::important
 **全局共享**
 
-`seed()` 设置的是全局共享的随机数生成器 `yt::infos::gen`，因此：
+`seed()` 设置的是全局共享的随机数生成器 `yt::info::gen`，因此：
 
 1. 任何一个 `YTensor<T, dim>` 类型调用 `seed()` 都会影响所有类型
 2. 适用于 `randn`、`randu` 以及 `YTensorBase::randn`、`YTensorBase::randu`
@@ -393,7 +393,7 @@ void test_reproducibility() {
 
 ### 线程安全性
 
-`seed()` 内部使用互斥锁 `yt::infos::rngMutex` 保护，是线程安全的。
+`seed()` 内部使用互斥锁 `yt::info::rngMutex` 保护，是线程安全的。
 
 ---
 

@@ -139,7 +139,7 @@ if (tensor.dtype() == "float32") {
 | `"bfloat16"`| 2 字节  | `bfloat16_t` |
 
 :::tip
-具体支持的类型取决于类型注册表的配置。可以通过 `yt::types::getTypeRegistry()` 查看所有已注册类型。
+`yt::type::getTypeRegistry()` 返回custom注册快照；builtin生命周期信息使用 `getBuiltinTypeInfo()`，两类统一解析使用 `getTypeInfo()`。
 :::
 
 ---

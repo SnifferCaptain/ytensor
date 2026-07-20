@@ -1,6 +1,6 @@
 # 类型分发 (Type Dispatch)
 
-本文档介绍 `yt::kernel` 命名空间中的运行时类型分发机制。
+本文档介绍 `yt::type` 命名空间中的运行时类型分发机制。
 
 ## 概述
 
@@ -28,7 +28,7 @@ void processData(const YTensorBase& tensor) {
     // 需要为每种类型写一遍！
     
     // ✅ 使用类型分发：简洁高效
-    yt::kernel::dispatch<yt::types::AllNumericTypes>(
+    yt::type::dispatch<yt::type::AllNumericTypes>(
         tensor.dtype(),
         [&]<typename T>() { // C++20 泛型 Lambda
             const T* data = tensor.data<T>();
@@ -86,7 +86,7 @@ YTensorBase tensor({3, 4, 5}, "float32");
 auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
 
 // dispatch 会自动解析 "YTensorBase<float32>" -> "float32"
-yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+yt::type::dispatch<yt::type::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
     std::cout << "Base type size: " << sizeof(T) << std::endl;  // 输出: 4
 });
 ```
@@ -109,7 +109,7 @@ void printValue(const yt::YTensorBase& tensor) {
 
     // 分发！
     // 尝试在 AllNumericTypes 中匹配 tensor.dtype()
-    yt::kernel::dispatch<yt::types::AllNumericTypes>(
+    yt::type::dispatch<yt::type::AllNumericTypes>(
         tensor.dtype(), 
         kernel, 
         "printValue"
@@ -117,71 +117,9 @@ void printValue(const yt::YTensorBase& tensor) {
 }
 ```
 
-## `dispatch2`
+## Pairwise Cast
 
-### 函数签名
-
-```cpp
-template<typename SrcTypeList, typename DstTypeList, typename Func>
-bool dispatch2(const std::string& srcDtype, const std::string& dstDtype, Func&& func);
-
-template<typename SrcTypeList, typename DstTypeList, typename Func>
-void dispatch2OrThrow(const std::string& srcDtype, const std::string& dstDtype, Func&& func, const std::string& opName = "dispatch2");
-```
-
-### 核心功能描述
-
-双类型分发。用于需要同时处理两个不同类型的场景，例如类型转换（Cast）或混合类型运算。
-它会尝试匹配 `srcDtype` 和 `dstDtype`，并调用 `func.operator()<SrcT, DstT>()`。
-
-### 使用示例
-
-实现一个通用的类型转换函数：
-
-```cpp
-void castTensor(const yt::YTensorBase& src, yt::YTensorBase& dst) {
-    auto kernel = [&]<typename SrcT, typename DstT>() {
-        const SrcT* s = src.data<SrcT>();
-        DstT* d = dst.data<DstT>();
-        // 执行转换逻辑
-        for(size_t i=0; i<src.size(); ++i) {
-            d[i] = static_cast<DstT>(s[i]);
-        }
-    };
-
-    yt::kernel::dispatch2OrThrow<yt::types::AllNumericTypes, yt::types::AllNumericTypes>(
-        src.dtype(), 
-        dst.dtype(), 
-        kernel, 
-        "castTensor"
-    );
-}
-```
-
-## 自定义 Trait 检查
-
-有时仅仅匹配类型是不够的，你可能还需要类型满足特定的条件（例如支持加法运算）。
-
-```cpp
-template<template<typename> class Trait, typename TypeListT, typename Func>
-void dispatchWithTraitOrThrow(const std::string& dtype, Func&& func, const std::string& opName);
-```
-
-### 使用示例
-
-只对支持 `operator+` 的类型执行加法：
-
-```cpp
-auto kernel = [&]<typename T>() {
-    /* ... 仅当 T 支持加法时才会实例化此代码 ... */
-};
-
-yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumericTypes>(
-    tensor.dtype(),
-    kernel,
-    "addOperation"
-);
-```
+运行时 pairwise 转换使用 `yt::type::registerCastKernel`，避免实例化所有 source/destination 类型组合。核心 runtime math 使用 `YDTypeKernels`；`dispatch` 仅保留给 owner 内部的 typed fallback 路径。
 
 ---
 
@@ -195,5 +133,5 @@ yt::kernel::dispatchWithTraitOrThrow<yt::concepts::HAVE_ADD, yt::types::AllNumer
 
 ## 相关内容
 
-- [类型系统](../infos/types.mdx) - `yt::types` 命名空间与类型注册
+- [类型系统](../infos/types.mdx) - `yt::type` 命名空间与类型注册
 - [YTensorBase](../YTensorBase/) - 运行时动态类型张量

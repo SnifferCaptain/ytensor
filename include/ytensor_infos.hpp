@@ -49,7 +49,7 @@
     #endif
 #endif
 
-namespace yt::infos{
+namespace yt::info{
     static constexpr double minParOps = 29609.;
     static constexpr double flopAdd = 1.;
     static constexpr double flopSub = 1.;
@@ -88,37 +88,6 @@ namespace yt::infos{
         truncate = 2    // 直接截断，速度最快，偏低。
     } roundMode = RoundMode::nearestEven;
 
-    struct TypeRegItem{
-        std::string name;
-        int32_t size;
-        std::function<std::string(const void*)> toString;
-        // 非POD类型支持：析构和拷贝构造
-        bool isPOD = true;  // POD类型不需要特殊处理
-        std::function<void(void*)> destructor = nullptr;           // 调用析构函数
-        std::function<void(void*, const void*)> copyConstruct = nullptr;  // placement new + 拷贝构造
-        std::function<void(void*)> defaultConstruct = nullptr;     // placement new + 默认构造
-        // IO序列化支持（用于非POD类型的文件存储）
-        std::function<std::vector<char>(const void*)> serialize = nullptr;      // 对象 -> 字节序列
-        std::function<void(void*, const char*, size_t)> deserialize = nullptr;  // 字节序列 -> 对象
-    };
-
-    /// @brief 类型注册表
-    /// @return 返回类型注册表的引用
-    #if YT_USE_LIB
-    std::unordered_map<std::string, yt::infos::TypeRegItem>& getTypeRegistry();
-    #else
-    inline auto& getTypeRegistry() {
-        static std::unordered_map<std::string, yt::infos::TypeRegItem> registry;
-        return registry;
-    }
-    #endif
-
-    /// @brief 文件头标识
-    static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
-
-    /// @brief 文件版本
-    static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
-
     /// @brief 矩阵乘法后端枚举
     enum class MatmulBackend {
         Naive = 0,  // naive实现，无依赖
@@ -128,7 +97,7 @@ namespace yt::infos{
 
     /// @brief 默认矩阵乘法后端，根据编译环境自动选择
     /// 优先级：AVX2 > Eigen > Naive
-    static constexpr MatmulBackend defaultMatmulBackend = 
+    static constexpr MatmulBackend defaultMatmulBackend =
     #if YT_USE_AVX2
         MatmulBackend::AVX2
     #elif YT_USE_EIGEN
@@ -138,7 +107,65 @@ namespace yt::infos{
     #endif
     ;
 
-}// namespace yt::infos
+}// namespace yt::info
+
+namespace yt::type{
+    /// @brief 自定义 dtype 的对象生命周期、格式化和序列化回调集合。
+    /// @details copyConstruct/defaultConstruct 的目标是未初始化 storage；copyAssign、swap 和 deserialize
+    ///          接收已构造对象。destructor 只用于已成功构造的对象，swap 必须 noexcept，供事务性 copy_ 提交。
+    struct TypeRegItem{
+        std::string name;
+        int32_t size;
+        std::function<std::string(const void*)> toString;
+        // 非POD类型支持：析构和拷贝构造
+        bool isPOD = true;  // POD类型不需要特殊处理
+        std::function<void(void*)> destructor = nullptr;           // 调用析构函数
+        std::function<void(void*, const void*)> copyConstruct = nullptr;  // placement new + 拷贝构造
+        std::function<void(void*, const void*)> copyAssign = nullptr;  // 对已构造对象执行拷贝赋值；保留为注册能力，不用于事务性copy_提交
+        std::function<void(void*, void*)> swap = nullptr;  // noexcept交换两个已构造对象，用于事务性提交
+        std::function<void(void*)> defaultConstruct = nullptr;     // placement new + 默认构造
+        // IO序列化支持（用于非POD类型的文件存储）
+        std::function<std::vector<char>(const void*)> serialize = nullptr;      // 对象 -> 字节序列
+        std::function<void(void*, const char*, size_t)> deserialize = nullptr;  // 字节序列 -> 对象
+    };
+
+    namespace internal {
+    #if YT_USE_LIB
+    std::unordered_map<std::string, yt::type::TypeRegItem>& getMutableTypeRegistry();
+    #else
+    inline auto& getMutableTypeRegistry() {
+        static std::unordered_map<std::string, yt::type::TypeRegItem> registry;
+        return registry;
+    }
+    #endif
+    }
+
+    #if YT_USE_LIB
+    /// @brief 返回加锁复制的自定义类型注册表快照。
+    std::unordered_map<std::string, yt::type::TypeRegItem> getTypeRegistry();
+    /// @brief 返回保护进程内自定义类型注册表的mutex，供注册和查找路径短期持有。
+    std::mutex& getTypeRegistryMutex();
+    #else
+    /// @brief 返回保护进程内自定义类型注册表的mutex，供注册和查找路径短期持有。
+    inline std::mutex& getTypeRegistryMutex() {
+        static std::mutex mutex;
+        return mutex;
+    }
+    /// @brief 返回加锁复制的自定义类型注册表快照。
+    inline auto getTypeRegistry() {
+        std::lock_guard<std::mutex> lock(getTypeRegistryMutex());
+        return internal::getMutableTypeRegistry();
+    }
+    #endif
+}  // namespace yt::type
+
+namespace yt::io{
+    /// @brief 文件头标识
+    static constexpr std::string_view YTENSOR_FILE_MAGIC = "YTENSORF";
+
+    /// @brief 文件版本
+    static constexpr uint8_t YTENSOR_FILE_VERSION = 0;
+}  // namespace yt::io
 
 /////////////// extern includes ///////////////
 

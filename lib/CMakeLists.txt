@@ -9,13 +9,14 @@ find_package(OpenMP REQUIRED)
 find_package(ZLIB REQUIRED)
 
 set(YT_LIB_ROOT ${CMAKE_CURRENT_LIST_DIR})
+get_filename_component(YT_PROJECT_ROOT ${YT_LIB_ROOT}/.. ABSOLUTE)
 
 add_library(ytensor SHARED
     ${YT_LIB_ROOT}/src/ytensor_library.cpp
 )
 
 target_include_directories(ytensor PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${YT_PROJECT_ROOT}>
     $<INSTALL_INTERFACE:include>
 )
 

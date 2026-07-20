@@ -16,16 +16,16 @@ YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
 	const YTensor<T, dim1>& other,
 	const YTensor<bool, 2>& mask,
 	const T& maskedValue = static_cast<T>(0),
-	yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+	yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
 ) const;
 
 template <int dim1, typename Func>
-requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<Func>>)
 YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
 	const YTensor<T, dim1>& other,
 	Func&& func,
 	const T& maskedValue = static_cast<T>(0),
-	yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+	yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
 ) const;
 ```
 

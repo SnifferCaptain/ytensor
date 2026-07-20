@@ -23,12 +23,13 @@ public:
     virtual const std::string& device() const = 0;
 
     /// @brief 获取原始字节指针。
-    /// @note 返回的是 storage 起点，不包含 YTensorBase 的 _offset。
+    /// @note 返回的是 storage 起点，不包含张量当前 layout 视图偏移。
     virtual char* rawData() = 0;
     virtual const char* rawData() const = 0;
 
     /// @brief 深拷贝当前存储。
     /// @return 返回一个拥有独立内存的新 storage。
+    /// @throws std::runtime_error object-backed storage 禁止原始字节 clone 时抛出。
     virtual std::shared_ptr<YStorageBase> clone() const = 0;
 
     /// @brief 将当前存储复制到指定设备。
@@ -44,11 +45,13 @@ public:
     explicit YCpuStorage(size_t nbytes);
 
     /// @brief 使用已有 shared_ptr 管理的内存构造 CPU 存储。
-    YCpuStorage(const std::shared_ptr<char>& data, size_t nbytes);
-    YCpuStorage(const std::shared_ptr<char[]>& data, size_t nbytes);
+    /// @param byteCopyable 是否允许按原始字节 clone；对象生命周期由 tensor owner 管理时必须为 false。
+    YCpuStorage(const std::shared_ptr<char>& data, size_t nbytes, bool byteCopyable = true);
+    YCpuStorage(const std::shared_ptr<char[]>& data, size_t nbytes, bool byteCopyable = true);
 
     /// @brief 使用裸指针和自定义释放器构造 CPU 存储。
-    YCpuStorage(char* ptr, size_t nbytes, std::function<void(char*)> deleter);
+    /// @param byteCopyable 是否允许按原始字节 clone；对象生命周期由 tensor owner 管理时必须为 false。
+    YCpuStorage(char* ptr, size_t nbytes, std::function<void(char*)> deleter, bool byteCopyable = true);
 
     size_t nbytes() const override;
     const std::string& device() const override;
@@ -63,6 +66,7 @@ private:
     std::shared_ptr<char> _data;     // CPU 字节内存的共享所有权。
     size_t _nbytes = 0;              // 存储区总字节数。
     std::string _device = "cpu";     // 当前 storage 所在设备。
+    bool _byteCopyable = true;        // false表示storage中包含需要生命周期管理的C++对象。
 };
 
 /// @brief YTensor 使用的内存句柄。
@@ -78,11 +82,22 @@ public:
     explicit YMemory(const std::shared_ptr<YStorageBase>& storage);
 
     /// @brief 从已有 shared_ptr 字节内存构造内存句柄。
-    YMemory(const std::shared_ptr<char>& data, size_t nbytes, const std::string& device = "cpu");
-    YMemory(const std::shared_ptr<char[]>& data, size_t nbytes = 0, const std::string& device = "cpu");
+    /// @param byteCopyable 是否允许按原始字节 clone；placement-constructed 对象 storage 必须为 false。
+    YMemory(
+        const std::shared_ptr<char>& data, size_t nbytes, const std::string& device = "cpu",
+        bool byteCopyable = true
+    );
+    YMemory(
+        const std::shared_ptr<char[]>& data, size_t nbytes = 0, const std::string& device = "cpu",
+        bool byteCopyable = true
+    );
 
     /// @brief 从裸指针构造内存句柄，并使用自定义释放器管理生命周期。
-    YMemory(char* ptr, size_t nbytes, const std::string& device, std::function<void(char*)> deleter);
+    /// @param byteCopyable 是否允许按原始字节 clone；placement-constructed 对象 storage 必须为 false。
+    YMemory(
+        char* ptr, size_t nbytes, const std::string& device, std::function<void(char*)> deleter,
+        bool byteCopyable = true
+    );
 
     /// @brief 置空当前内存句柄。
     YMemory& operator=(std::nullptr_t);
@@ -105,7 +120,7 @@ public:
     const std::string& device() const;
 
     /// @brief 获取底层 storage 起点的原始字节指针。
-    /// @note 不包含张量视图的 _offset；需要按张量元素访问时应通过 YTensor/YTensorBase 接口处理。
+    /// @note 不包含张量当前 layout 视图偏移；需要按张量元素访问时应通过 YTensor/YTensorBase 接口处理。
     char* rawData();
     const char* rawData() const;
 
@@ -115,6 +130,7 @@ public:
     const char* get() const;
 
     /// @brief 深拷贝底层存储，返回新的内存句柄。
+    /// @throws std::runtime_error object-backed storage 必须通过 tensor 生命周期 owner clone 时抛出。
     YMemory clone() const;
 
     /// @brief 将底层存储复制到指定设备，返回新的内存句柄。
@@ -132,4 +148,4 @@ private:
     std::shared_ptr<YStorageBase> _storage; // 底层线性存储的共享所有权。
 };
 
-} // namespace yt
+}  // namespace yt

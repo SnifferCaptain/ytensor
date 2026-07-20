@@ -73,7 +73,7 @@ target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
 
 ### 影响
 
-- **启用时**：`yt::infos::MatmulBackend::Eigen` 后端可用，矩阵乘法性能显著提升
+- **启用时**：`yt::info::MatmulBackend::Eigen` 后端可用，矩阵乘法性能显著提升
 - **禁用时**：仅能使用 `Naive` 和 `AVX2` 后端
 
 :::info
@@ -141,7 +141,7 @@ cl /std:c++20 /O2 /arch:AVX2 main.cpp
 
 ### 影响
 
-- **启用时**：`yt::infos::MatmulBackend::AVX2` 后端可用，提供高性能的 SIMD 加速
+- **启用时**：`yt::info::MatmulBackend::AVX2` 后端可用，提供高性能的 SIMD 加速
 - **禁用时**：仅能使用 `Naive` 和 `Eigen` 后端
 
 ### 性能对比
@@ -374,14 +374,14 @@ int main() {
     
     // 检查默认后端
     std::cout << "  默认矩阵乘法后端: ";
-    switch(yt::infos::defaultMatmulBackend) {
-        case yt::infos::MatmulBackend::Naive:
+    switch(yt::info::defaultMatmulBackend) {
+        case yt::info::MatmulBackend::Naive:
             std::cout << "Naive" << std::endl;
             break;
-        case yt::infos::MatmulBackend::Eigen:
+        case yt::info::MatmulBackend::Eigen:
             std::cout << "Eigen" << std::endl;
             break;
-        case yt::infos::MatmulBackend::AVX2:
+        case yt::info::MatmulBackend::AVX2:
             std::cout << "AVX2" << std::endl;
             break;
     }

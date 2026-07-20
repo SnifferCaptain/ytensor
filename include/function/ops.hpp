@@ -8,7 +8,7 @@ namespace yt::function {
     // ========== 通用算子 / 层 ==========
 
     template<typename T, int dim0, int dim1>
-    yt::YTensor<T, yt::concepts::CONSTEXPR_MAX({dim0, dim1, 2})> matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
+    yt::YTensor<T, yt::utils::CONSTEXPR_MAX({dim0, dim1, 2})> matmul(const yt::YTensor<T, dim0>& a, const yt::YTensor<T, dim1>& b);
 
     /// @brief 线性层，权重形状遵循PyTorch格式 [out_features, in_features]
     template<typename T, int dim>
@@ -46,7 +46,7 @@ namespace yt::function {
     );
 
     template<typename T, int dim, typename MaskFunc>
-    requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+    requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
     yt::YTensor<T, dim> scaledDotProductAttention(
         yt::YTensor<T, dim>& query,
         yt::YTensor<T, dim>& key,
@@ -58,7 +58,7 @@ namespace yt::function {
     );
 
     template<typename T, int dim, typename MaskFunc>
-    requires (!yt::traits::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
+    requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
     yt::YTensor<T, dim> scaledDotProductAttention(
         yt::YTensor<T, dim>& query,
         yt::YTensor<T, dim>& key,

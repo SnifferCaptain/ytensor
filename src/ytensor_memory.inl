@@ -1,25 +1,37 @@
 #pragma once
+/***************
+ * file: ytensor_memory.inl
+ * purpose: CPU storage和共享YMemory handle实现。
+ ***************/
 
 #include <cstring>
 #include <stdexcept>
 
 namespace yt{
 
+// ==================== CPU storage ownership ====================
+
 YT_IMPL_INLINE YCpuStorage::YCpuStorage(size_t nbytes):
     _data(nbytes == 0 ? nullptr : std::shared_ptr<char>(new char[nbytes], [](char* p) { delete[] p; })),
     _nbytes(nbytes) {}
 
-YT_IMPL_INLINE YCpuStorage::YCpuStorage(const std::shared_ptr<char>& data, size_t nbytes):
+YT_IMPL_INLINE YCpuStorage::YCpuStorage(const std::shared_ptr<char>& data, size_t nbytes, bool byteCopyable):
     _data(data),
-    _nbytes(nbytes) {}
+    _nbytes(nbytes),
+    _byteCopyable(byteCopyable) {}
 
-YT_IMPL_INLINE YCpuStorage::YCpuStorage(const std::shared_ptr<char[]>& data, size_t nbytes):
+YT_IMPL_INLINE YCpuStorage::YCpuStorage(const std::shared_ptr<char[]>& data, size_t nbytes, bool byteCopyable):
+    // aliasing shared_ptr暴露char*接口，同时保留shared_ptr<char[]>原控制块和delete[]语义。
     _data(data ? std::shared_ptr<char>(data, data.get()) : std::shared_ptr<char>()),
-    _nbytes(nbytes) {}
+    _nbytes(nbytes),
+    _byteCopyable(byteCopyable) {}
 
-YT_IMPL_INLINE YCpuStorage::YCpuStorage(char* ptr, size_t nbytes, std::function<void(char*)> deleter):
+YT_IMPL_INLINE YCpuStorage::YCpuStorage(
+    char* ptr, size_t nbytes, std::function<void(char*)> deleter, bool byteCopyable
+):
     _data(ptr, deleter),
-    _nbytes(nbytes) {}
+    _nbytes(nbytes),
+    _byteCopyable(byteCopyable) {}
 
 YT_IMPL_INLINE size_t YCpuStorage::nbytes() const {
     return _nbytes;
@@ -38,6 +50,10 @@ YT_IMPL_INLINE const char* YCpuStorage::rawData() const {
 }
 
 YT_IMPL_INLINE std::shared_ptr<YStorageBase> YCpuStorage::clone() const {
+    // memcpy只对明确byte-copyable的storage合法；C++对象数组必须由tensor dtype owner逐对象clone。
+    if (!_byteCopyable) {
+        throw std::runtime_error("YCpuStorage::clone: object-backed storage requires tensor lifecycle clone");
+    }
     std::shared_ptr<YCpuStorage> result(new YCpuStorage(_nbytes));
     if (_nbytes > 0 && _data) {
         std::memcpy(result->rawData(), rawData(), _nbytes);
@@ -52,33 +68,42 @@ YT_IMPL_INLINE std::shared_ptr<YStorageBase> YCpuStorage::to(const std::string& 
     throw std::runtime_error("YCpuStorage::to: unsupported target device: " + device);
 }
 
+// ==================== shared storage handle ====================
+
 YT_IMPL_INLINE YMemory::YMemory(std::nullptr_t) {}
 
 YT_IMPL_INLINE YMemory::YMemory(const std::shared_ptr<YStorageBase>& storage):
     _storage(storage) {}
 
-YT_IMPL_INLINE YMemory::YMemory(const std::shared_ptr<char>& data, size_t nbytes, const std::string& device) {
+YT_IMPL_INLINE YMemory::YMemory(
+    const std::shared_ptr<char>& data, size_t nbytes, const std::string& device, bool byteCopyable
+) {
     if (!data) return;
     if (device != "cpu") {
         throw std::runtime_error("YMemory: only cpu shared_ptr storage is supported now");
     }
-    _storage.reset(new YCpuStorage(data, nbytes));
+    _storage.reset(new YCpuStorage(data, nbytes, byteCopyable));
 }
 
-YT_IMPL_INLINE YMemory::YMemory(const std::shared_ptr<char[]>& data, size_t nbytes, const std::string& device) {
+YT_IMPL_INLINE YMemory::YMemory(
+    const std::shared_ptr<char[]>& data, size_t nbytes, const std::string& device, bool byteCopyable
+) {
     if (!data) return;
     if (device != "cpu") {
         throw std::runtime_error("YMemory: only cpu shared_ptr storage is supported now");
     }
-    _storage.reset(new YCpuStorage(data, nbytes));
+    _storage.reset(new YCpuStorage(data, nbytes, byteCopyable));
 }
 
-YT_IMPL_INLINE YMemory::YMemory(char* ptr, size_t nbytes, const std::string& device, std::function<void(char*)> deleter) {
+YT_IMPL_INLINE YMemory::YMemory(
+    char* ptr, size_t nbytes, const std::string& device, std::function<void(char*)> deleter,
+    bool byteCopyable
+) {
     if (!ptr) return;
     if (device != "cpu") {
         throw std::runtime_error("YMemory: only cpu raw pointer storage is supported now");
     }
-    _storage.reset(new YCpuStorage(ptr, nbytes, deleter));
+    _storage.reset(new YCpuStorage(ptr, nbytes, deleter, byteCopyable));
 }
 
 YT_IMPL_INLINE YMemory& YMemory::operator=(std::nullptr_t) {
@@ -109,6 +134,7 @@ YT_IMPL_INLINE size_t YMemory::nbytes() const {
 }
 
 YT_IMPL_INLINE const std::string& YMemory::device() const {
+    // 空handle仍报告cpu，保持默认tensor和尚未分配tensor的历史device合同。
     static const std::string cpu = "cpu";
     return _storage ? _storage->device() : cpu;
 }
@@ -157,4 +183,4 @@ YT_IMPL_INLINE bool operator!=(std::nullptr_t, const YMemory& memory) {
     return !memory.empty();
 }
 
-} // namespace yt
+}  // namespace yt

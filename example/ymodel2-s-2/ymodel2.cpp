@@ -309,7 +309,7 @@ bool YModel2::load(const std::string& path) {
     int loaded_count = 0;
     yt::YTensorBase base;
     bool useTranspose = false;
-    if(yt::infos::defaultMatmulBackend == yt::infos::MatmulBackend::Eigen){
+    if(yt::info::defaultMatmulBackend == yt::info::MatmulBackend::Eigen){
         // 使用Eigen的时候，权重矩阵主序相同会更加高效。
         useTranspose = true;
     }

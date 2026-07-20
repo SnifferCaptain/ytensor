@@ -1,14 +1,14 @@
 # YTensor Documentation
 
-> A modern, lightweight C++20 multi-dimensional tensor library — header-only, easy to integrate, suitable for research, competition, and engineering.
+> A modern C++20 tensor library: header-only by default, with optional precompiled and release single-header forms.
 
 ## Welcome to YTensor
 
-YTensor is a pure header-only C++ tensor library, designed for scenarios requiring high-performance multi-dimensional array operations. It provides an interface similar to NumPy/PyTorch, but without any runtime dependencies; just include a single header file to use.
+The development source form includes `ytensor.hpp`; release packages may also provide a generated `ytensor_single.hpp`. `YT_USE_LIB` enables the optional precompiled backend. File I/O links zlib.
 
 ## Features
 
-- 🧩 **Header-only**: Only `ytensor_single.hpp` is needed, zero third-party dependencies, just `#include` and use.
+- 🧩 **Header-only by default**: Include `ytensor.hpp`; use generated `ytensor_single.hpp` from release packages when desired.
 - 📐 **Arbitrary Dimensions**: Supports `shape`, `slice`, `transpose`, `reshape`, `permute`, and other common operations.
 - ⚡ **Multi-functional**: Supports parallelism, broadcasting, basic math, common deep learning functions, multi-axis normalization, and SDPA / Flash Attention.
 - 🛠️ **Easy to Extend**: Clean source code, easy for secondary development.
@@ -24,7 +24,7 @@ See the [Installation Guide](./installation/installation.mdx) to learn how to in
 ### Basic Example
 
 ```cpp
-#include "ytensor_single.hpp"
+#include "ytensor.hpp"
 
 int main() {
     // Create a 3x4 float tensor

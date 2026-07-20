@@ -73,7 +73,7 @@ target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
 
 ### Impact
 
-- **When enabled**: The `yt::infos::MatmulBackend::Eigen` backend becomes available, significantly improving GEMM performance.
+- **When enabled**: The `yt::info::MatmulBackend::Eigen` backend becomes available, significantly improving GEMM performance.
 - **When disabled**: Only the `Naive` and `AVX2` backends can be used.
 
 :::info
@@ -141,7 +141,7 @@ cl /std:c++20 /O2 /arch:AVX2 main.cpp
 
 ### Impact
 
-- **When enabled**: The `yt::infos::MatmulBackend::AVX2` backend becomes available, providing high-performance SIMD acceleration.
+- **When enabled**: The `yt::info::MatmulBackend::AVX2` backend becomes available, providing high-performance SIMD acceleration.
 - **When disabled**: Only the `Naive` and `Eigen` backends can be used.
 
 ### Performance Comparison
@@ -375,14 +375,14 @@ int main() {
     
     // Check default backend
     std::cout << "  Default GEMM Backend: ";
-    switch(yt::infos::defaultMatmulBackend) {
-        case yt::infos::MatmulBackend::Naive:
+    switch(yt::info::defaultMatmulBackend) {
+        case yt::info::MatmulBackend::Naive:
             std::cout << "Naive" << std::endl;
             break;
-        case yt::infos::MatmulBackend::Eigen:
+        case yt::info::MatmulBackend::Eigen:
             std::cout << "Eigen" << std::endl;
             break;
-        case yt::infos::MatmulBackend::AVX2:
+        case yt::info::MatmulBackend::AVX2:
             std::cout << "AVX2" << std::endl;
             break;
     }

@@ -1,6 +1,6 @@
 # YTensorBase 概览
 
-YTensorBase 是 YTensor 库的**运行时多态基类**，提供类型擦除的张量接口。
+YTensorBase 是 YTensor 库的**运行时张量门面**，也是 `YTensor<T, dim>` 的非模板基类。它提供类型擦除接口，同时保持 layout 分发边界清晰可见。
 
 ---
 
@@ -22,6 +22,59 @@ YTensorBase b({2, 3, 4}, "float32");  // 类型和维度在运行时确定
 - **运行时维度**：维度数量在运行时确定
 - **类型擦除**：所有类型共享统一接口
 - **与 YTensor 兼容**：可以相互转换
+
+---
+
+## 运行时架构
+
+```text
+应用代码
+    |
+    +-- YTensor<T, dim> -------- 编译期 dtype/rank 检查与 typed 热路径
+    |          |
+    |          +-------------------+
+    |                              |
+    +-- YTensorBase ---------------+-- runtime facade
+                                   |
+                                   v
+                              共享张量状态
+                    +------------------------------+
+                    | YMemory _memory              | 共享 values storage
+                    | YLayout _layout              | tagged metadata union
+                    | string _dtype                | runtime dtype key
+                    | size_t _element_size         | 单元素字节数
+                    +------------------------------+
+                                   |
+                         layoutType() 选择
+                   +---------------+---------------+
+                   |                               |
+                   v                               v
+        YMeta<Strided>                    YMeta<Nested>
+       offset, shape, stride         offsets, values, shape
+                   |                               |
+                   v                               +-- 仅 metadata/lifetime
+             yt::strided                               groundwork
+    +-----------+--------+--------+--------+
+    |           |        |        |        |
+ broadcast    view      copy    reduce   matmul
+    |                              |        |
+    +------------------------------+--------+
+                                   |
+                                   v
+                     yt::type::YDTypeKernels
+                         runtime dtype 分发
+                                   |
+                         +---------+---------+
+                         |                   |
+                         v                   v
+                      yt::blas          typed kernels
+
+横切命名空间：yt::utils、yt::info、yt::io、yt::function
+```
+
+`YTensorBase` 负责运行时选择、校验和共享张量状态，不持有 dense 算法实现。Strided 操作会路由到 `yt::strided` 的五个 owner 之一：`broadcast`、`view`、`copy`、`reduce` 或 `matmul`。运行时数值操作在进入元素循环前选择一次 `yt::type::YDTypeKernels` 条目；当编译期 dtype 和 rank 有价值时，`YTensor<T, dim>` 保留直接 typed 路径。矩阵运算可以继续委托给 `yt::blas` backend。
+
+`YLayout` 是由 `YLayoutType` 选择 active metadata 的 tagged union。Strided metadata 是 dense `offset`、`shape` 和 `stride` 的唯一权威来源。Nested 目前只提供 metadata 和对象生命周期基础，尚未实现完整 Nested 算子；当前架构也不包含 Sparse layout 支持。
 
 ---
 
@@ -80,7 +133,7 @@ YTensorBase from_python(PyObject* obj) {
 |------|----------------|-------------|
 | 类型检查 | **编译时** | 运行时 |
 | 维度检查 | **编译时** | 运行时 |
-| 性能 | **更快**（内联、优化） | 稍慢（虚函数、类型擦除）|
+| 性能 | 直接 typed 热路径 | 运行时检查 layout 与 dtype |
 | 灵活性 | 类型固定 | **类型动态** |
 | 存储 | 不同类型不兼容 | **统一接口** |
 | 安全性 | **编译期保证** | 运行期检查 |
@@ -141,7 +194,7 @@ int main() {
 YTensorBase a({2, 3, 4}, "float32");
 
 // 2. 拷贝构造
-YTensorBase b = a;  // 深拷贝
+YTensorBase b = a;  // 共享 values storage，独立复制 metadata
 
 // 3. 工厂方法
 auto zeros = YTensorBase::zeros({2, 3}, "float32");
@@ -193,7 +246,7 @@ YTensor 继承自 YTensorBase，可以隐式转换：
 YTensor<float, 3> a({2, 3, 4});
 
 // 隐式转换
-YTensorBase b = a;  // ✅ 深拷贝
+YTensorBase b = a;  // 共享 values storage，独立复制 metadata
 
 // 引用（避免拷贝）
 YTensorBase& ref = a;  // ✅ 引用同一对象
@@ -210,7 +263,7 @@ YTensorBase a({2, 3, 4}, "float32");
 YTensor<float, 3> b(a.shape());
 b.copy_(a);
 
-// ❌ 类型或维度不匹配会导致未定义行为
+// dtype或rank不匹配时抛出std::invalid_argument
 // YTensor<int, 3> c(a.shape());
 // c.copy_(a);  // ⚠️ 类型不匹配
 
@@ -229,11 +282,18 @@ YTensorBase 与 YTensor 共享相同的内存模型：
 
 ```cpp
 YTensorBase a({2, 3, 4}, "float32");
-YTensorBase b = a;  // 深拷贝（独立数据）
+YTensorBase b = a;  // values 浅拷贝（共享 storage）
 
-auto c = a.slice(0, 0, 1);  // 浅拷贝（共享数据）
+b.at<float>(0, 0, 0) = 1.0f;
+// a.at<float>(0, 0, 0) == 1.0f
+
+auto c = a.slice(0, 0, 1);  // metadata 独立、storage 共享的 view
 c.at<float>(0, 0, 0) = 1.0f;
-// a.at<float>(0, 0, 0) == 1.0f  ✅ 共享
+// a.at<float>(0, 0, 0) == 1.0f
+
+auto d = a.clone();  // 独立 storage
+d.at<float>(0, 0, 0) = 2.0f;
+// 通过 d 写入不会修改 a
 ```
 
 ### 连续性
@@ -254,11 +314,14 @@ std::cout << c.isContiguous() << std::endl;  // true
 
 ```cpp
 YTensorBase a({2, 3, 4}, "float32");
-YTensorBase b = a;  // 深拷贝
+YTensorBase b = a;  // 增加共享 storage 的所有权计数
 
-// 修改 b 不影响 a
+// 两个句柄引用相同的 values storage
 b.at<float>(0, 0, 0) = 1.0f;
-// a.at<float>(0, 0, 0) != 1.0f  ✅ 独立
+// a.at<float>(0, 0, 0) == 1.0f
+
+// 写入必须独立时使用 clone()
+YTensorBase c = a.clone();
 ```
 
 ---
@@ -273,7 +336,7 @@ YTensorBase a({2, 3}, "float32");
 // ✅ 正确类型
 float val = a.at<float>(0, 0);
 
-// ❌ 错误类型（未定义行为）
+// dtype错误时抛出std::invalid_argument
 // int val2 = a.at<int>(0, 0);  // ⚠️ 类型不匹配
 ```
 
@@ -307,27 +370,25 @@ void process(YTensorBase& tensor) {
 
 ## 性能考虑
 
-### 虚函数开销
+### 分发模型
 
-YTensorBase 使用虚函数实现多态，有少量性能开销：
+运行时数学操作不会为每个元素执行虚函数调用或 dtype registry 查找。`YTensorBase` 先选择 active layout，Strided owner 完成操作校验，再在元素循环前选择 `yt::type::YDTypeKernels` 回调。当编译期信息可以避免运行时 dtype 检查时，`YTensor<T, dim>` 保留直接 typed 访问路径。
 
 ```cpp
-// YTensor: 内联优化
+// typed facade：dtype 和 rank 是编译期属性
 YTensor<float, 3> a({100, 100, 100});
 for (int i = 0; i < 100; i++) {
-    a.at(i, i, i) = 1.0f;  // 编译器可内联
+    a.at(i, i, i) = 1.0f;
 }
 
-// YTensorBase: 虚函数调用
+// runtime facade：运行时校验请求的访问类型
 YTensorBase b({100, 100, 100}, "float32");
 for (int i = 0; i < 100; i++) {
-    b.at<float>(i, i, i) = 1.0f;  // 虚函数开销
+    b.at<float>(i, i, i) = 1.0f;
 }
 ```
 
-**基准测试**（1M 次访问）：
-- YTensor: ~45ms
-- YTensorBase: ~52ms（~15% 开销）
+实际成本取决于具体操作、dtype、layout 和所选 backend。应以应用级实测为准，而不是采用固定的开销估算。
 
 ### 优化建议
 
@@ -433,7 +494,7 @@ auto val = a.at<float>(0, 0);
 ```cpp
 YTensorBase a({2, 3}, "float32");
 
-// ❌ 错误类型（未定义行为）
+// dtype错误时抛出std::invalid_argument
 // int val = a.at<int>(0, 0);  // ⚠️ 读取到错误数据
 
 // ✅ 使用 dtype() 检查

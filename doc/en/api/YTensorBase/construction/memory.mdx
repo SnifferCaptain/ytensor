@@ -112,7 +112,7 @@ inline YTensorBase YTensorBase::clone() const {
     // ...
     
     // Check for non-POD types
-    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    auto typeInfoOpt = yt::type::getTypeInfo(_dtype);
     if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
         // Non-POD type: use copy constructor logic
         // ...

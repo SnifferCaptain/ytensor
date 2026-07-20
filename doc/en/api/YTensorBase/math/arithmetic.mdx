@@ -17,7 +17,7 @@ YTensorBase c = a + b;
 ## Type Checking
 
 If types mismatch (e.g., float32 + int32), YTensor will attempt to cast or throw a runtime error based on configuration.
-Currently, mixed-type dispatch (`dispatch2`) is supported for standard numeric types.
+Mixed dtype tensor arithmetic is rejected. Explicit conversion uses `cast()` or a registered pairwise cast kernel.
 
 ## In-Place Operations
 

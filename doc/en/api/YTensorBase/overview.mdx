@@ -1,6 +1,6 @@
 # YTensorBase Overview
 
-`YTensorBase` is the **runtime polymorphic base class** of the YTensor library, providing a type-erased tensor interface.
+`YTensorBase` is the YTensor library's **runtime tensor facade** and the non-template base of `YTensor<T, dim>`. It provides a type-erased interface while keeping layout selection explicit.
 
 ---
 
@@ -22,6 +22,59 @@ YTensorBase b({2, 3, 4}, "float32");  // Type and dimensions determined at runti
 - **Runtime Dimensions**: The number of dimensions is determined at runtime.
 - **Type Erasure**: All types share a unified interface.
 - **Compatibility**: Tensors can be converted between `YTensor` and `YTensorBase`.
+
+---
+
+## Runtime Architecture
+
+```text
+Application code
+    |
+    +-- YTensor<T, dim> -------- typed dtype/rank checks and hot paths
+    |          |
+    |          +-------------------+
+    |                              |
+    +-- YTensorBase ---------------+-- runtime facade
+                                   |
+                                   v
+                         Shared tensor state
+                    +------------------------------+
+                    | YMemory _memory              | shared values storage
+                    | YLayout _layout              | tagged metadata union
+                    | string _dtype                | runtime dtype key
+                    | size_t _element_size         | byte size per element
+                    +------------------------------+
+                                   |
+                         layoutType() selection
+                   +---------------+---------------+
+                   |                               |
+                   v                               v
+        YMeta<Strided>                    YMeta<Nested>
+      offset, shape, stride          offsets, values, shape
+                   |                               |
+                   v                               +-- metadata/lifetime
+             yt::strided                               groundwork only
+    +-----------+--------+--------+--------+
+    |           |        |        |        |
+ broadcast    view      copy    reduce   matmul
+    |                              |        |
+    +------------------------------+--------+
+                                   |
+                                   v
+                     yt::type::YDTypeKernels
+                       runtime dtype dispatch
+                                   |
+                         +---------+---------+
+                         |                   |
+                         v                   v
+                      yt::blas          typed kernels
+
+Cross-cutting namespaces: yt::utils, yt::info, yt::io, yt::function
+```
+
+`YTensorBase` owns runtime selection, validation, and shared tensor state; it does not own dense algorithms. A Strided operation is routed to one of the five `yt::strided` owners: `broadcast`, `view`, `copy`, `reduce`, or `matmul`. Runtime numeric operations select a `yt::type::YDTypeKernels` entry once before entering an element loop, while `YTensor<T, dim>` can retain direct typed paths when compile-time dtype and rank are useful. Matrix operations may delegate to `yt::blas` backends.
+
+`YLayout` is a tagged union whose active metadata is selected by `YLayoutType`. Strided metadata is the authority for dense `offset`, `shape`, and `stride`. Nested currently provides metadata and object-lifetime groundwork only; full Nested operators are not implemented. Sparse layout support is not part of the current architecture.
 
 ---
 
@@ -80,7 +133,7 @@ YTensorBase from_python(PyObject* obj) {
 |------|----------------|-------------|
 | **Type Checking** | **Compile-time** | Runtime |
 | **Dim Checking** | **Compile-time** | Runtime |
-| **Performance** | **Faster** (inlining, optimization) | Slightly slower (virtual functions) |
+| **Performance** | Direct typed hot paths | Layout and dtype checked at runtime |
 | **Flexibility** | Fixed type | **Dynamic type** |
 | **Storage** | Mismatched types incompatible | **Unified interface** |
 | **Safety** | **Guaranteed at compile time** | Checked at runtime |
@@ -141,7 +194,7 @@ int main() {
 YTensorBase a({2, 3, 4}, "float32");
 
 // 2. Copy construction
-YTensorBase b = a;  // Deep copy
+YTensorBase b = a;  // Shared values storage; metadata is copied
 
 // 3. Factory methods
 auto zeros = YTensorBase::zeros({2, 3}, "float32");
@@ -193,7 +246,7 @@ Since `YTensor` inherits from `YTensorBase`, it can be implicitly converted:
 YTensor<float, 3> a({2, 3, 4});
 
 // Implicit conversion
-YTensorBase b = a;  // ✅ Deep copy
+YTensorBase b = a;  // Shared values storage; metadata is copied
 
 // Reference (avoids copy)
 YTensorBase& ref = a;  // ✅ Points to the same object
@@ -210,7 +263,7 @@ YTensorBase a({2, 3, 4}, "float32");
 YTensor<float, 3> b(a.shape());
 b.copy_(a);
 
-// ❌ Mismatched type or dimensions leading to undefined behavior
+// Mismatched dtype or rank throws std::invalid_argument
 // YTensor<int, 3> c(a.shape());
 // c.copy_(a);  // ⚠️ Type mismatch
 
@@ -229,11 +282,18 @@ b.copy_(a);
 
 ```cpp
 YTensorBase a({2, 3, 4}, "float32");
-YTensorBase b = a;  // Deep copy (independent data)
+YTensorBase b = a;  // Shallow value copy (shared storage)
 
-auto c = a.slice(0, 0, 1);  // Shallow copy (shared data)
+b.at<float>(0, 0, 0) = 1.0f;
+// a.at<float>(0, 0, 0) == 1.0f
+
+auto c = a.slice(0, 0, 1);  // View with independent metadata and shared storage
 c.at<float>(0, 0, 0) = 1.0f;
-// a.at<float>(0, 0, 0) == 1.0f  ✅ Shared
+// a.at<float>(0, 0, 0) == 1.0f
+
+auto d = a.clone();  // Independent storage
+d.at<float>(0, 0, 0) = 2.0f;
+// a is unchanged by writes through d
 ```
 
 ### Contiguity
@@ -254,11 +314,14 @@ std::cout << c.isContiguous() << std::endl;  // true
 
 ```cpp
 YTensorBase a({2, 3, 4}, "float32");
-YTensorBase b = a;  // Deep copy
+YTensorBase b = a;  // Increments shared storage ownership
 
-// Modifying b does not affect a
+// Both handles refer to the same values storage
 b.at<float>(0, 0, 0) = 1.0f;
-// a.at<float>(0, 0, 0) != 1.0f  ✅ Independent
+// a.at<float>(0, 0, 0) == 1.0f
+
+// Use clone() when writes must be independent
+YTensorBase c = a.clone();
 ```
 
 ---
@@ -273,7 +336,7 @@ YTensorBase a({2, 3}, "float32");
 // ✅ Correct type
 float val = a.at<float>(0, 0);
 
-// ❌ Incorrect type (undefined behavior)
+// Incorrect dtype throws std::invalid_argument
 // int val2 = a.at<int>(0, 0);  // ⚠️ Type mismatch
 ```
 
@@ -307,27 +370,25 @@ void process(YTensorBase& tensor) {
 
 ## Performance Considerations
 
-### Virtual Function Overhead
+### Dispatch Model
 
-`YTensorBase` uses virtual functions for polymorphism, which introduces some performance overhead:
+Runtime math does not perform a virtual call or dtype registry lookup for every element. `YTensorBase` first selects the active layout, the Strided owner validates the operation, and a `yt::type::YDTypeKernels` callback is selected before the element loop. `YTensor<T, dim>` keeps direct typed access paths where compile-time information avoids runtime dtype checks.
 
 ```cpp
-// YTensor: Inline optimization possible
+// Typed facade: dtype and rank are compile-time properties
 YTensor<float, 3> a({100, 100, 100});
 for (int i = 0; i < 100; i++) {
-    a.at(i, i, i) = 1.0f;  // Compiler can inline
+    a.at(i, i, i) = 1.0f;
 }
 
-// YTensorBase: Virtual function calls
+// Runtime facade: validates the requested access type at runtime
 YTensorBase b({100, 100, 100}, "float32");
 for (int i = 0; i < 100; i++) {
-    b.at<float>(i, i, i) = 1.0f;  // Virtual function overhead
+    b.at<float>(i, i, i) = 1.0f;
 }
 ```
 
-**Benchmark** (1M accesses):
-- YTensor: ~45ms
-- YTensorBase: ~52ms (~15% overhead)
+The exact cost depends on the operation, dtype, layout, and selected backend. Prefer measured application benchmarks over a fixed overhead estimate.
 
 ### Optimization Suggestions
 
@@ -433,7 +494,7 @@ auto val = a.at<float>(0, 0);
 ```cpp
 YTensorBase a({2, 3}, "float32");
 
-// ❌ Incorrect type (undefined behavior)
+// Incorrect dtype throws std::invalid_argument
 // int val = a.at<int>(0, 0);  // ⚠️ Reads incorrect data
 
 // ✅ Use dtype() for checking

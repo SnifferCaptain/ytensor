@@ -19,10 +19,10 @@
 namespace yt::io {
 
 /// @brief 文件头标识
-using yt::infos::YTENSOR_FILE_MAGIC;
+using yt::io::YTENSOR_FILE_MAGIC;
 
 /// @brief 文件版本
-using yt::infos::YTENSOR_FILE_VERSION;
+using yt::io::YTENSOR_FILE_VERSION;
 
 /// @brief 压缩级别，在zlib压缩方式中使用
 static int8_t compressLevel = Z_DEFAULT_COMPRESSION;
@@ -73,21 +73,24 @@ std::vector<char> decompressData(std::fstream& file, size_t compressedSize, size
 struct TensorInfo {
     std::string name;                   // 张量名称
     std::string typeName;               // 元素类型名称
-    int32_t typeSize;                   // 元素类型的字节大小
+    int32_t typeSize = 0;               // 元素类型的字节大小
     std::string tensorType;             // dense, sparse等
     std::vector<int> shape;             // 张量形状
-    uint64_t dataOffset;                // 在文件中的偏移
-    uint64_t compressedSize;            // 压缩后的数据大小
+    uint64_t dataOffset = 0;            // 在文件中的偏移
+    uint64_t compressedSize = 0;        // 压缩后的数据大小
     std::string compressMethod;         // 压缩算法
-    uint64_t uncompressedSize;          // 原始张量数据大小（通过shape计算得到，单位是字节，不等于解压后的字节数）
+    uint64_t uncompressedSize = 0;      // 原始张量数据大小（通过shape计算得到，单位是字节，不等于解压后的字节数）
     std::vector<char> compressedData;   // 为空表示数据在磁盘，使用dataOffset读取；不为空表示数据在内存中，且原dataOffset失效。
+    bool payloadStaged = false;         // true时空compressedData表示已暂存的零字节payload
 };
 
 /// @brief yt::YTensor/YTensorBase 专用的 IO 类
 class YTensorIO {
 public:
     YTensorIO() = default;
-    ~YTensorIO();
+    /// @brief 执行 best-effort close，但不报告或抛出提交失败。
+    /// @note 写入方必须显式调用 close() 并检查返回值，才能确认临时文件已成功提交。
+    ~YTensorIO() noexcept;
 
     /// @brief 打开文件
     /// @param fileName 文件名
@@ -95,8 +98,8 @@ public:
     /// @return 如果文件打开成功，返回true；否则返回false。
     bool open(const std::string& fileName, int fileMode = yt::io::Read);
 
-    /// @brief 关闭文件
-    void close();
+    /// @brief 关闭文件；写模式下仅在临时文件成功提交后返回true。
+    bool close();
 
     /// @brief 获取文件中所有张量的名称
     /// @return 张量名称列表
@@ -110,7 +113,7 @@ public:
     /// @brief 保存张量数据
     /// @param tensor 需要保存的张量
     /// @param name 张量名称
-    /// @return 如果保存成功，返回true；否则返回false。
+    /// @return 序列化成功进入待提交事务时返回true；持久化结果由close()返回。
     bool save(const yt::YTensorBase& tensor, const std::string& name);
 
     /// @brief 保存张量数据 (模板版本)
@@ -118,7 +121,7 @@ public:
     /// @tparam dim 张量维度
     /// @param tensor 需要保存的张量
     /// @param name 张量名称
-    /// @return 如果保存成功，返回true；否则返回false。
+    /// @return 序列化成功进入待提交事务时返回true；持久化结果由close()返回。
     template<typename T, int dim>
     bool save(const yt::YTensor<T, dim>& tensor, const std::string& name);
 
@@ -159,10 +162,10 @@ protected:
     /// @return 如果成功，返回true；否则返回false。
     bool writeIndex(std::vector<uint64_t> tensorStructureOffsets);
 
-    /// @brief 保存POD类型张量（dense格式）
+    /// @brief 将POD类型张量编码为未压缩的dense payload
     static std::vector<char> encDense(const yt::YTensorBase& tensor);
     
-    /// @brief 保存非POD类型张量（map格式）
+    /// @brief 将非POD类型张量编码为未压缩的map payload
     static std::vector<char> encMap(const yt::YTensorBase& tensor);
     
     /// @brief 加载POD类型张量（dense格式）
@@ -175,6 +178,7 @@ protected:
     std::fstream _file;                     // 文件流
     std::string _fileName;                  // 文件名
     int _fileMode = yt::io::Closed;         // 当前文件模式
+    bool _writeFailed = false;              // 当前写事务发生过staging失败，close时必须丢弃
     bool _isHeaderRead = false;             // 是否已读取文件头
     uint8_t _version = 0;                   // 版本号
     std::string _metadata;                  // JSON格式的元数据
@@ -216,4 +220,3 @@ template<typename T, int dim>
 bool loadTensor(const std::string& fileName, yt::YTensor<T, dim>& tensor, const std::string& name = "");
 
 }; // namespace yt::io
-

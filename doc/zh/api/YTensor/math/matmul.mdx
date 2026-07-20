@@ -14,7 +14,7 @@
 template <int dim1>
 YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> matmul(
     const YTensor<T, dim1>& other,
-    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+    yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
 ) const;
 ```
 
@@ -137,7 +137,7 @@ YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
     const YTensor<T, dim1>& other,
     const YTensor<bool, 2>& mask,
     const T& maskedValue = static_cast<T>(0),
-    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+    yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
 ) const;
 ```
 
@@ -145,12 +145,12 @@ YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
 
 ```cpp
 template <int dim1, typename Func>
-requires (!yt::traits::is_ytensor_v<std::decay_t<Func>>)
+requires (!yt::utils::is_ytensor_v<std::decay_t<Func>>)
 YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
     const YTensor<T, dim1>& other,
     Func&& func,
     const T& maskedValue = static_cast<T>(0),
-    yt::infos::MatmulBackend backend = yt::infos::defaultMatmulBackend
+    yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
 ) const;
 ```
 
@@ -303,13 +303,13 @@ auto a = YTensor<float, 2>::randn(100, 100);
 auto b = YTensor<float, 2>::randn(100, 100);
 
 // 使用 Naive 后端
-auto c1 = a.matmul(b, yt::infos::MatmulBackend::Naive);
+auto c1 = a.matmul(b, yt::info::MatmulBackend::Naive);
 
 // 使用 Eigen 后端
-auto c2 = a.matmul(b, yt::infos::MatmulBackend::Eigen);
+auto c2 = a.matmul(b, yt::info::MatmulBackend::Eigen);
 
 // 使用 AVX2 后端
-auto c3 = a.matmul(b, yt::infos::MatmulBackend::AVX2);
+auto c3 = a.matmul(b, yt::info::MatmulBackend::AVX2);
 ```
 
 ---

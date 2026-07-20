@@ -6,10 +6,10 @@
 
 | 方法 | 功能 | 维度变化 | 说明 |
 | --- | --- | --- | --- |
-| `unsqueeze()` / `unsqueeze_()` | 插入大小为 1 的维度 | +1 | 零拷贝 |
-| `squeeze()` / `squeeze_()` | 移除大小为 1 的维度 | -1 或 -N | 零拷贝 |
+| `unsqueeze()` | 插入大小为 1 的维度 | +1 | 返回runtime `YTensorBase`视图 |
+| `squeeze()` | 移除大小为 1 的维度 | -1 或 -N | 返回runtime `YTensorBase`视图 |
 | `repeat()` / `repeat_()` | 沿维度重复 | 不变 | 需要拷贝 |
-| `unfold()` / `unfold_()` | 滑动窗口展开 | +1 | 零拷贝视图 |
+| `unfold()` | 滑动窗口展开 | +1 | 返回runtime `YTensorBase`视图 |
 
 ---
 
@@ -18,8 +18,7 @@
 ### 函数签名
 
 ```cpp
-YTensor<T, dim+1> unsqueeze(int atDim) const;
-YTensor<T, dim+1>& unsqueeze_(int atDim);
+YTensorBase unsqueeze(int atDim) const;
 ```
 
 ### 参数说明
@@ -59,11 +58,9 @@ void example() {
 ```cpp
 // 移除指定维度（必须大小为 1）
 YTensorBase squeeze(int atDim) const;
-YTensorBase& squeeze_(int atDim);
 
 // 移除所有大小为 1 的维度
 YTensorBase squeeze() const;
-YTensorBase& squeeze_();
 ```
 
 ### 核心功能描述
@@ -127,7 +124,6 @@ std::cout << "Shape: [" << r.shape()[0] << ", " << r.shape()[1] << "]" << std::e
 
 ```cpp
 YTensorBase unfold(int atDim, int size, int step) const;
-YTensorBase& unfold_(int atDim, int size, int step);
 ```
 
 ### 参数说明
@@ -142,6 +138,8 @@ YTensorBase& unfold_(int atDim, int size, int step);
 
 返回一个滑动窗口视图。在指定维度上，以 `size` 为窗口大小、`step` 为步长展开一个新的额外维度。
 常用于卷积或图像分块处理。
+
+固定rank的 `YTensor<T, dim>` 会隐藏改变rank的原地方法。请使用返回的 `YTensorBase` 视图，或通过检查转换构造 `YTensor<T, newDim>`。
 
 ### 使用示例
 

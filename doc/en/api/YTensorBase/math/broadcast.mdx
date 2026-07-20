@@ -105,7 +105,7 @@ When all tensors are **contiguous** and have the **same shape**, the system uses
 ```cpp
 if (allContiguous && allEqualShape) {
     // Direct pointer access; no coordinate conversion overhead
-    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+    yt::utils::parallelFor(0, totalSize, [&](int index) {
         func(thisDataPtr[index], getValue(tensors, index)...);
     });
 }
@@ -118,8 +118,8 @@ When tensors are non-contiguous or have different shapes, broadcast indices are 
 ```cpp
 else {
     // Compute broadcast strides and indices
-    yt::kernel::parallelFor(0, totalSize, [&](int index) {
-        auto indices = yt::kernel::computeBroadcastIndices(...);
+    yt::utils::parallelFor(0, totalSize, [&](int index) {
+        auto indices = yt::strided::computeBroadcastIndices(...);
         func(thisDataPtr[indices[0]], getValue(tensors)...);
     });
 }
@@ -149,7 +149,7 @@ if (broadcastShape.size() != thisDim ||
 
 ## Performance Optimizations
 
-- **OpenMP Parallelization**: Automatically parallelized via `yt::kernel::parallelFor`.
+- **OpenMP Parallelization**: Automatically parallelized via `yt::utils::parallelFor`.
 - **Contiguous Layout Optimization**: Skips coordinate calculations for a direct linear pass when possible.
 - **Compile-time Optimizations**: Uses `std::array` and other compile-time structures to minimize heap allocations.
 

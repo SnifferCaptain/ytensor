@@ -24,114 +24,6 @@
 namespace yt {
 
 //=============================================================================
-// YTensor extern template 声明
-//=============================================================================
-
-// 默认仅启用 YTensorBase 方法模板的 extern。
-// 若要实验性启用 YTensor 整类 extern，请额外定义 YT_ENABLE_YTENSOR_CLASS_EXTERN。
-#if defined(YT_ENABLE_YTENSOR_CLASS_EXTERN)
-
-// 定义 YTensor extern 声明宏
-#define EXTERN_YTENSOR(Type, Dim) \
-    extern template class YTensor<Type, Dim>;
-
-//=============================================================================
-// 标准浮点类型 (1D - 5D)
-//=============================================================================
-EXTERN_YTENSOR(float, 1)
-EXTERN_YTENSOR(float, 2)
-EXTERN_YTENSOR(float, 3)
-EXTERN_YTENSOR(float, 4)
-EXTERN_YTENSOR(float, 5)
-
-EXTERN_YTENSOR(double, 1)
-EXTERN_YTENSOR(double, 2)
-EXTERN_YTENSOR(double, 3)
-EXTERN_YTENSOR(double, 4)
-EXTERN_YTENSOR(double, 5)
-
-//=============================================================================
-// 标准有符号整数类型 (1D - 5D)
-//=============================================================================
-EXTERN_YTENSOR(int8_t, 1)
-EXTERN_YTENSOR(int8_t, 2)
-EXTERN_YTENSOR(int8_t, 3)
-EXTERN_YTENSOR(int8_t, 4)
-EXTERN_YTENSOR(int8_t, 5)
-
-EXTERN_YTENSOR(int16_t, 1)
-EXTERN_YTENSOR(int16_t, 2)
-EXTERN_YTENSOR(int16_t, 3)
-EXTERN_YTENSOR(int16_t, 4)
-EXTERN_YTENSOR(int16_t, 5)
-
-EXTERN_YTENSOR(int32_t, 1)
-EXTERN_YTENSOR(int32_t, 2)
-EXTERN_YTENSOR(int32_t, 3)
-EXTERN_YTENSOR(int32_t, 4)
-EXTERN_YTENSOR(int32_t, 5)
-
-EXTERN_YTENSOR(int64_t, 1)
-EXTERN_YTENSOR(int64_t, 2)
-EXTERN_YTENSOR(int64_t, 3)
-EXTERN_YTENSOR(int64_t, 4)
-EXTERN_YTENSOR(int64_t, 5)
-
-//=============================================================================
-// 标准无符号整数类型 (1D - 5D)
-//=============================================================================
-EXTERN_YTENSOR(uint8_t, 1)
-EXTERN_YTENSOR(uint8_t, 2)
-EXTERN_YTENSOR(uint8_t, 3)
-EXTERN_YTENSOR(uint8_t, 4)
-EXTERN_YTENSOR(uint8_t, 5)
-
-EXTERN_YTENSOR(uint16_t, 1)
-EXTERN_YTENSOR(uint16_t, 2)
-EXTERN_YTENSOR(uint16_t, 3)
-EXTERN_YTENSOR(uint16_t, 4)
-EXTERN_YTENSOR(uint16_t, 5)
-
-EXTERN_YTENSOR(uint32_t, 1)
-EXTERN_YTENSOR(uint32_t, 2)
-EXTERN_YTENSOR(uint32_t, 3)
-EXTERN_YTENSOR(uint32_t, 4)
-EXTERN_YTENSOR(uint32_t, 5)
-
-EXTERN_YTENSOR(uint64_t, 1)
-EXTERN_YTENSOR(uint64_t, 2)
-EXTERN_YTENSOR(uint64_t, 3)
-EXTERN_YTENSOR(uint64_t, 4)
-EXTERN_YTENSOR(uint64_t, 5)
-
-//=============================================================================
-// 扩展浮点类型 (1D - 4D)
-//=============================================================================
-EXTERN_YTENSOR(yt::bfloat16, 1)
-EXTERN_YTENSOR(yt::bfloat16, 2)
-EXTERN_YTENSOR(yt::bfloat16, 3)
-EXTERN_YTENSOR(yt::bfloat16, 4)
-
-EXTERN_YTENSOR(yt::float16, 1)
-EXTERN_YTENSOR(yt::float16, 2)
-EXTERN_YTENSOR(yt::float16, 3)
-EXTERN_YTENSOR(yt::float16, 4)
-
-EXTERN_YTENSOR(yt::float8_e5m2, 1)
-EXTERN_YTENSOR(yt::float8_e5m2, 2)
-EXTERN_YTENSOR(yt::float8_e5m2, 3)
-EXTERN_YTENSOR(yt::float8_e5m2, 4)
-
-EXTERN_YTENSOR(yt::float8_e4m3, 1)
-EXTERN_YTENSOR(yt::float8_e4m3, 2)
-EXTERN_YTENSOR(yt::float8_e4m3, 3)
-EXTERN_YTENSOR(yt::float8_e4m3, 4)
-
-#undef EXTERN_YTENSOR
-
-#endif // YT_ENABLE_YTENSOR_CLASS_EXTERN
-
-//=============================================================================
 // YTensorBase 模板方法 extern 声明
 //=============================================================================
 #define EXTERN_YTENSOR_BASE_METHOD(T)                               \
@@ -159,6 +51,7 @@ EXTERN_YTENSOR_BASE_METHOD(yt::bfloat16)
 EXTERN_YTENSOR_BASE_METHOD(yt::float16)
 EXTERN_YTENSOR_BASE_METHOD(yt::float8_e5m2)
 EXTERN_YTENSOR_BASE_METHOD(yt::float8_e4m3)
+EXTERN_YTENSOR_BASE_METHOD(yt::float8_e8m0)
 
 #undef EXTERN_YTENSOR_BASE_METHOD
 

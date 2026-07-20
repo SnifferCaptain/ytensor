@@ -3,7 +3,7 @@
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::mseLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::mseLoss()");
-    return yt::kernel::broadcast([](const T& a, const T& b) {
+    return yt::strided::broadcast([](const T& a, const T& b) {
         T diff = a - b;
         return diff * diff;
     }, input, target);
@@ -88,7 +88,7 @@ template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::binaryCrossEntropyLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::binaryCrossEntropyLoss()");
     constexpr T eps = static_cast<T>(1e-7);
-    return yt::kernel::broadcast([eps](const T& a, const T& b) {
+    return yt::strided::broadcast([eps](const T& a, const T& b) {
         T clamped = std::max(eps, std::min(static_cast<T>(1) - eps, a));
         return -(b * std::log(clamped) + (static_cast<T>(1) - b) * std::log(static_cast<T>(1) - clamped));
     }, input, target);
@@ -110,7 +110,7 @@ yt::YTensor<T, dim>& yt::function::binaryCrossEntropyLoss_(yt::YTensor<T, dim>& 
 template <typename T, int dim>
 yt::YTensor<T, dim> yt::function::huberLoss(const yt::YTensor<T, dim>& input, const yt::YTensor<T, dim>& target, T delta) {
     static_assert(std::is_floating_point_v<T>, "T must be floating point type in yt::function::huberLoss()");
-    return yt::kernel::broadcast([delta](const T& a, const T& b) {
+    return yt::strided::broadcast([delta](const T& a, const T& b) {
         T diff = a - b;
         T abs_diff = std::abs(diff);
         if (abs_diff <= delta) {

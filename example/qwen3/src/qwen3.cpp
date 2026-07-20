@@ -311,7 +311,7 @@ bool Qwen3Model::load(const std::string& path) {
 	int loaded_count = 0;
 	yt::YTensorBase base;
 	bool useTranspose = false;
-	if (yt::infos::defaultMatmulBackend == yt::infos::MatmulBackend::Eigen) {
+	if (yt::info::defaultMatmulBackend == yt::info::MatmulBackend::Eigen) {
 		useTranspose = true;
 	}
 

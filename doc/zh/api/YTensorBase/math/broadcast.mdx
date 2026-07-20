@@ -105,7 +105,7 @@ a.broadcastInplace([](float& dst, float b_val, float s) {
 ```cpp
 if (allContiguous && allEqualShape) {
     // 直接使用指针访问，无坐标转换开销
-    yt::kernel::parallelFor(0, totalSize, [&](int index) {
+    yt::utils::parallelFor(0, totalSize, [&](int index) {
         func(thisDataPtr[index], getValue(tensors, index)...);
     });
 }
@@ -118,8 +118,8 @@ if (allContiguous && allEqualShape) {
 ```cpp
 else {
     // 计算广播stride和索引
-    yt::kernel::parallelFor(0, totalSize, [&](int index) {
-        auto indices = yt::kernel::computeBroadcastIndices(...);
+    yt::utils::parallelFor(0, totalSize, [&](int index) {
+        auto indices = yt::strided::computeBroadcastIndices(...);
         func(thisDataPtr[indices[0]], getValue(tensors)...);
     });
 }
@@ -149,7 +149,7 @@ if (broadcastShape.size() != thisDim ||
 
 ## 性能优化
 
-- **OpenMP 并行化**: 使用 `yt::kernel::parallelFor` 自动并行
+- **OpenMP 并行化**: 使用 `yt::utils::parallelFor` 自动并行
 - **连续张量优化**: 跳过坐标计算，直接线性遍历
 - **编译期优化**: 使用 `std::array` 避免堆分配
 

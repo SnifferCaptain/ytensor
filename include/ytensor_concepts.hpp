@@ -10,7 +10,7 @@ class YTensorBase;
 template<typename T, int dim> class YTensor;
 }
 
-namespace yt::concepts {
+namespace yt::utils {
     // binary operation concepts
     template<typename T> concept HAVE_ADD = requires(T a, T b) { { a + b } -> std::same_as<T>; };
     template<typename T> concept HAVE_SUB = requires(T a, T b) { { a - b } -> std::same_as<T>; };
@@ -58,7 +58,7 @@ namespace yt::concepts {
     }
 };
 
-namespace yt::traits {
+namespace yt::utils {
     /// @brief 判断类型是否为YTensor或YTensorBase（广义tensor类型）
     template<typename U>
     struct is_ytensor : std::bool_constant<std::is_base_of_v<yt::YTensorBase, std::decay_t<U>>> {};

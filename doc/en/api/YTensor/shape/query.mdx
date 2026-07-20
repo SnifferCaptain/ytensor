@@ -258,20 +258,20 @@ std::cout << b.size();  // Output: 25 (logical size)
 
 ---
 
-## ndim() / shapeSize()
+## ndim / shapeSize()
 
 Retrieves the number of dimensions (rank).
 
 ### Function Signature
 
 ```cpp
-int ndim() const;                 // Inherited from YTensorBase
-constexpr int shapeSize() const;  // Compile-time version in YTensor
+static constexpr int ndim = dim; // Compile-time rank constant
+int shapeSize() const;           // Runtime metadata rank
 ```
 
 ### Core Function Description
 
-Retrieves the number of dimensions (rank). `ndim()` is the runtime version, `shapeSize()` is the compile-time constant version.
+`YTensor<T, dim>::ndim` is the compile-time rank constant. `shapeSize()` checks the runtime layout rank.
 
 ### Return Value
 
@@ -281,16 +281,16 @@ Returns an `int` representing the number of dimensions.
 
 ```cpp
 auto a = YTensor<float, 3>(2, 3, 4);
-int dims1 = a.ndim();       // 3 (runtime)
-int dims2 = a.shapeSize();  // 3 (compile-time constant)
+int dims1 = decltype(a)::ndim; // 3 (compile-time constant)
+int dims2 = a.shapeSize();     // 3 (runtime metadata)
 ```
 
 ### Comparison
 
 | Method | Source | Characteristics |
 |------|------|------|
-| `ndim()` | `YTensorBase` | Calculated at runtime. |
-| `shapeSize()` | `YTensor<T, dim>` | Compile-time constant; returns the template parameter `dim`. |
+| `YTensor<T, dim>::ndim` | `YTensor<T, dim>` | Compile-time constant. |
+| `shapeSize()` | `YTensorBase` | Runtime active-layout rank. |
 
 ---
 

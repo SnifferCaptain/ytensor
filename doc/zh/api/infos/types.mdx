@@ -1,6 +1,6 @@
 # 类型注册
 
-本文档介绍 `yt::infos` 命名空间中的类型注册系统。
+本文档介绍 `yt::type` 命名空间中的类型注册系统。
 
 ## TypeRegItem 结构体
 
@@ -12,6 +12,8 @@ struct TypeRegItem {
     bool isPOD = true;                             // 是否为 POD 类型
     std::function<void(void*)> destructor = nullptr;   // 析构函数
     std::function<void(void*, const void*)> copyConstruct = nullptr;  // 拷贝构造
+    std::function<void(void*, const void*)> copyAssign = nullptr;  // 拷贝赋值
+    std::function<void(void*, void*)> swap = nullptr;  // 事务提交用 noexcept swap
     std::function<void(void*)> defaultConstruct = nullptr;  // 默认构造
     
     // IO 序列化支持 (用于非 POD 类型)
@@ -23,10 +25,10 @@ struct TypeRegItem {
 ## 类型注册表
 
 ```cpp
-auto& getTypeRegistry();
+auto getTypeRegistry();
 ```
 
-返回全局类型注册表的引用。
+返回加锁复制的自定义类型注册表快照。Builtin信息通过 `getBuiltinTypeInfo()` 查询，`getTypeInfo()` 可解析builtin或custom生命周期信息。修改注册表必须使用注册API。
 
 ### 注册类型
 
@@ -51,6 +53,12 @@ void registerType(const std::string& typeName,
 ```
 
 此重载允许你为非 POD 类型（如 `std::string` 或自定义对象）提供序列化和反序列化函数，从而使这些类型能够被 `YTensorIO` 正确存储和加载。
+
+## Runtime Compute与Cast注册
+
+生命周期注册不会自动提供runtime数学能力。`registerDTypeKernels(dtype, kernels)` 覆盖调用方提供的非空能力，`mergeDTypeKernels(dtype, kernels)` 仅填充缺失能力。`hasDTypeKernels(dtype)` 表示至少存在一个callback；`getDTypeKernels(dtype)` 返回kernel table副本。
+
+`registerCastKernel(src, dst, callback)` 替换一个精确dtype pair转换，未注册时 `getCastKernel()` 返回 `nullptr`。注册会拒绝空callback和无法解析的dtype。Callback代码必须在进程生命周期内保持加载；该接口是同工具链C++扩展接口，不是稳定C ABI。
 
 ---
 
@@ -155,17 +163,17 @@ YTensor 采用规范化的 dtype 命名格式，支持嵌套张量类型的表�
 
 // 解析嵌套 dtype
 std::string dtype = "YTensorBase<YTensor<float32, 2>>";
-std::string baseDtype = yt::types::getBaseDtype(dtype);  // "float32"
+std::string baseDtype = yt::type::getBaseDtype(dtype);  // "float32"
 
 // 构建 dtype
-std::string ytensorDtype = yt::types::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
+std::string ytensorDtype = yt::type::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
 
 // 配合 dispatch 使用
 YTensorBase tensor({2, 3, 4}, "float32");
 auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
 
 // dispatch 会自动解析嵌套类型
-yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+yt::type::dispatch<yt::type::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
     // T 被解析为 float
 });
 ```
@@ -184,7 +192,7 @@ struct MyStruct {
 };
 
 // 注册并提供 IO 支持
-yt::types::registerType<MyStruct>(
+yt::type::registerType<MyStruct>(
     "MyStruct",
     // formatter
     [](const void* ptr) { return static_cast<const MyStruct*>(ptr)->data; },

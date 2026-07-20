@@ -37,6 +37,16 @@ protected:
     /// @brief 抛出操作符不支持的异常
     static void throwOperatorNotSupport(const std::string& typeName, const std::string& opName);
 
+    void validateReplacement(const YTensorBase& replacement) const override {
+        const std::string expectedDtype = yt::type::getYTensorDtype<T, dim>();
+        if (replacement.ndim() != dim) {
+            throw std::invalid_argument("YTensor replacement rank mismatch");
+        }
+        if (replacement.dtype() != expectedDtype || replacement.elementSize() != sizeof(T)) {
+            throw std::invalid_argument("YTensor replacement dtype mismatch");
+        }
+    }
+
     /// @brief 随机数生成器辅助结构体
     struct _RandnGenerator {
         _RandnGenerator(std::mt19937& gen_p): gen(gen_p) {}
@@ -46,7 +56,7 @@ protected:
             std::normal_distribution<double> dist(0.0, 1.0);
             auto op = YTensor<T, sizeof...(args)>(args...);
             auto max = op.size();
-            std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
+            std::lock_guard<std::mutex> lock(yt::info::rngMutex);
             for (size_t i = 0; i < max; i++){
                 op.atData_(i) = static_cast<T>(dist(gen));
             }
@@ -63,7 +73,7 @@ protected:
             std::uniform_real_distribution<double> dist(0.0, 1.0);
             auto op = YTensor<T, sizeof...(args)>(args...);
             auto max = op.size();
-            std::lock_guard<std::mutex> lock(yt::infos::rngMutex);
+            std::lock_guard<std::mutex> lock(yt::info::rngMutex);
             #pragma omp simd
             for (size_t i = 0; i < max; i++){
                 op.atData_(i) = static_cast<T>(dist(gen));
@@ -97,7 +107,8 @@ public:
 
     /// @brief 从 YTensorBase 构造。
     /// @param base 源 YTensorBase 对象。
-    /// @note 类型和维度必须匹配，否则行为未定义。
+    /// @throws std::invalid_argument dtype、元素大小或rank与T/dim不匹配。
+    /// @note 成功时共享 values storage，同时独立复制 layout metadata。
     explicit YTensor(const YTensorBase& base);
 
     /// @brief 拷贝构造函数。默认行为是浅拷贝。
@@ -174,9 +185,9 @@ public:
     template<typename... Args> int offset(Args... index) const;
     int offset(const std::vector<int>& index) const;
 
-    /// @brief 获取张量的物理偏移量，考虑了张量自身的_offset
+    /// @brief 获取张量的物理偏移量，考虑了张量当前 strided layout 的基偏移
     /// @param index 元素的索引
-    /// @return 返回 _offset + offset(index)
+    /// @return 返回当前 strided layout 基偏移 + offset(index)
     template<typename... Args> int offset_(Args... index) const;
     int offset_(const std::vector<int>& index) const;
 
@@ -193,7 +204,7 @@ public:
 
     /// @brief 获取这个张量尽可能连续的视图，注意张量的形状会发生变化。
     /// @return 返回一个张量，表示当前张量最大可能的连续排布的视图。
-    /// @note 这个张量并不能保证连续。适用于处理elementwise操作加速。
+    /// @note 这个张量并不能保证连续。适用于逐元素访问加速。
     YTensor mostContinuousView() const;
 
     /// @brief 获取坐标对应的位置，可以使用atData()方法获取数据。
@@ -381,6 +392,12 @@ public:
 
 /////////////////// externs ////////////////
     #include "ytensor_math.hpp"
+
+private:
+    // 固定rank facade不能暴露会改变runtime rank的原地Base API。
+    using YTensorBase::squeeze_;
+    using YTensorBase::unfold_;
+    using YTensorBase::unsqueeze_;
 
 protected:
     /// @brief 标准cout输出流

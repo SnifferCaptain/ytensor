@@ -69,7 +69,7 @@ constexpr int dims = YTensor<float, 3>::ndim;    // dims = 3
 | 特性 | YTensor&lt;T, dim&gt; | YTensorBase |
 | --- | --- | --- |
 | **类型安全** | 编译时类型检查 | 运行时类型擦除 |
-| **性能** | 更优（编译器优化） | 略低（虚函数开销） |
+| **性能** | 直接 typed 热路径 | 运行时检查 layout 与 dtype |
 | **灵活性** | 类型和维度固定 | 类型和维度可变 |
 | **适用场景** | 已知类型和维度 | 动态类型或容器存储 |
 
@@ -88,11 +88,11 @@ YTensor<float, 2> a(3, 4);
 YTensorBase base = a;  // 向上转型（安全）
 
 // YTensorBase 可以显式转换为 YTensor（需要类型匹配）
-YTensor<float, 2> b(base);  // 显式构造（如果类型不匹配会有未定义行为）
+YTensor<float, 2> b(base);  // dtype或rank不匹配时抛出std::invalid_argument
 ```
 
 :::warning
-从 `YTensorBase` 构造 `YTensor<T, dim>` 时，必须确保类型 `T` 和维度 `dim` 与源张量匹配，否则行为未定义。
+从 `YTensorBase` 构造 `YTensor<T, dim>` 时会验证dtype、元素大小和rank；不匹配时抛出 `std::invalid_argument`。
 :::
 
 ## 核心概念

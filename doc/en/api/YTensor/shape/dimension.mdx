@@ -6,10 +6,10 @@ This document describes the dimension transformation methods for the `YTensor<T,
 
 | Method | Function | Dimension Change | Notes |
 | --- | --- | --- | --- |
-| `unsqueeze()` / `unsqueeze_()` | Inserts a dimension of size 1 | +1 | Zero-copy |
-| `squeeze()` / `squeeze_()` | Removes dimension(s) of size 1 | -1 or -N | Zero-copy |
+| `unsqueeze()` | Inserts a dimension of size 1 | +1 | Returns a runtime `YTensorBase` view |
+| `squeeze()` | Removes dimension(s) of size 1 | -1 or -N | Returns a runtime `YTensorBase` view |
 | `repeat()` / `repeat_()` | Repeats along dimensions | Unchanged | Requires copy |
-| `unfold()` / `unfold_()` | Sliding window expansion | +1 | Zero-copy view |
+| `unfold()` | Sliding window expansion | +1 | Returns a runtime `YTensorBase` view |
 
 ---
 
@@ -18,8 +18,7 @@ This document describes the dimension transformation methods for the `YTensor<T,
 ### Function Signature
 
 ```cpp
-YTensor<T, dim+1> unsqueeze(int atDim) const;
-YTensor<T, dim+1>& unsqueeze_(int atDim);
+YTensorBase unsqueeze(int atDim) const;
 ```
 
 ### Parameters
@@ -59,10 +58,8 @@ void example() {
 ```cpp
 // Remove a specific dimension (must have size 1)
 YTensorBase squeeze(int atDim) const;
-YTensorBase& squeeze_(int atDim);
 
 YTensorBase squeeze() const;
-YTensorBase& squeeze_();
 ```
 
 ### Core Function Description
@@ -126,7 +123,6 @@ std::cout << "Shape: [" << r.shape()[0] << ", " << r.shape()[1] << "]" << std::e
 
 ```cpp
 YTensorBase unfold(int atDim, int size, int step) const;
-YTensorBase& unfold_(int atDim, int size, int step);
 ```
 
 ### Parameters
@@ -141,6 +137,8 @@ YTensorBase& unfold_(int atDim, int size, int step);
 
 Returns a sliding window view. Expands a new extra dimension with `size` as window size and `step` as stride at the specified dimension.
 Commonly used for convolution or image patching.
+
+Fixed-rank `YTensor<T, dim>` intentionally hides rank-changing inplace methods. Use the returned `YTensorBase` view, or construct `YTensor<T, newDim>` through its checked conversion boundary.
 
 ### Usage Example
 

@@ -1,6 +1,6 @@
 # Type Registration
 
-This document introduces the type registration system in the `yt::infos` namespace.
+This document introduces the type registration system in the `yt::type` namespace.
 
 ## TypeRegItem Struct
 
@@ -12,6 +12,8 @@ struct TypeRegItem {
     bool isPOD = true;                             // Is POD type
     std::function<void(void*)> destructor = nullptr;   // Destructor
     std::function<void(void*, const void*)> copyConstruct = nullptr;  // Copy constructor
+    std::function<void(void*, const void*)> copyAssign = nullptr;  // Copy assignment
+    std::function<void(void*, void*)> swap = nullptr;  // Noexcept transactional swap
     std::function<void(void*)> defaultConstruct = nullptr;  // Default constructor
     
     // IO Serialization Support (for non-POD types)
@@ -23,10 +25,10 @@ struct TypeRegItem {
 ## Type Registry
 
 ```cpp
-auto& getTypeRegistry();
+auto getTypeRegistry();
 ```
 
-Returns a reference to the global type registry.
+Returns a locked snapshot of the custom-type registry. Builtins are queried through `getBuiltinTypeInfo()`; `getTypeInfo()` resolves either builtin or custom lifecycle metadata. Mutations must use registration APIs.
 
 ### Registering Types
 
@@ -51,6 +53,12 @@ void registerType(const std::string& typeName,
 ```
 
 This overload allows you to provide serialization and deserialization functions for non-POD types (such as `std::string` or custom objects), enabling them to be correctly stored and loaded by `YTensorIO`.
+
+## Runtime Compute And Cast Registration
+
+Lifecycle registration does not automatically provide runtime math. `registerDTypeKernels(dtype, kernels)` overwrites the non-null capabilities supplied by the caller, while `mergeDTypeKernels(dtype, kernels)` fills only missing capabilities. `hasDTypeKernels(dtype)` means at least one callback is available; `getDTypeKernels(dtype)` returns a copied table.
+
+`registerCastKernel(src, dst, callback)` replaces one exact dtype-pair conversion and `getCastKernel()` returns `nullptr` when absent. Registration rejects null callbacks and unresolved dtype names. Callback code must remain loaded for the process lifetime; this is a same-toolchain C++ extension interface, not a stable C ABI.
 
 ---
 
@@ -155,17 +163,17 @@ Use `getBaseTypeName<T>()` to get the base C++ type name:
 
 // Parse nested dtype
 std::string dtype = "YTensorBase<YTensor<float32, 2>>";
-std::string baseDtype = yt::types::getBaseDtype(dtype);  // "float32"
+std::string baseDtype = yt::type::getBaseDtype(dtype);  // "float32"
 
 // Build dtype
-std::string ytensorDtype = yt::types::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
+std::string ytensorDtype = yt::type::makeYTensorDtype("float32", 3);  // "YTensor<float32, 3>"
 
 // Use with dispatch
 YTensorBase tensor({2, 3, 4}, "float32");
 auto matView = tensor.matView();  // dtype: "YTensorBase<float32>"
 
 // Dispatch automatically parses nested types
-yt::kernel::dispatch<yt::types::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
+yt::type::dispatch<yt::type::AllNumericTypes>(matView.dtype(), [&]<typename T>() {
     // T is parsed as float
 });
 ```
@@ -184,7 +192,7 @@ struct MyStruct {
 };
 
 // Register and provide IO support
-yt::types::registerType<MyStruct>(
+yt::type::registerType<MyStruct>(
     "MyStruct",
     // formatter
     [](const void* ptr) { return static_cast<const MyStruct*>(ptr)->data; },

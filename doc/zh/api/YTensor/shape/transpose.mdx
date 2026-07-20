@@ -114,7 +114,7 @@ void example() {
 ### 函数签名
 
 ```cpp
-YTensor<T, dim>& permute_(const std::vector<int>& newOrder);
+YTensorBase& permute_(const std::vector<int>& newOrder); // 继承的runtime facade
 ```
 
 ### 参数说明

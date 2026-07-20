@@ -15,7 +15,7 @@ YTensorBase a;
 // 2. 形状和类型构造
 YTensorBase b({2, 3, 4}, "float32");
 
-// 3. 拷贝构造（深拷贝）
+// 3. 拷贝构造（共享 values storage）
 YTensorBase c = b;
 ```
 
@@ -149,7 +149,7 @@ auto stride = a.stride();
 
 ### 核心功能描述
 
-创建现有张量的深拷贝。
+创建现有张量的新 handle：独立复制 layout metadata 和 dtype，并共享 values storage。
 
 ### 函数签名
 
@@ -165,7 +165,7 @@ YTensorBase(const YTensorBase& other);
 
 ### 拷贝行为
 
-拷贝构造函数执行**深拷贝**：
+拷贝构造函数执行**浅拷贝**：
 - 复制形状、步幅、偏移量
 - **共享**底层数据指针（`std::shared_ptr`）
 - 数据本身不被复制

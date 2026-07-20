@@ -197,7 +197,7 @@ auto mask = a > 10; // {true, false, false, false}
 
 | 运算符 | 类型约束 | 说明 |
 |--------|---------|------|
-| `+`, `-`, `*`, `/` | `yt::concepts::HAVE_ADD<T>` 等 | 需要类型支持对应运算 |
+| `+`, `-`, `*`, `/` | `yt::utils::HAVE_ADD<T>` 等 | 需要类型支持对应运算 |
 | `%` | 整数或浮点数 | 整数用 `%`，浮点数用 `fmod` |
 | `&`, `|`, `^` | 整数类型 | 位运算仅支持整数 |
 | `<<`, `>>` | 整数类型 | 移位运算仅支持整数 |
@@ -221,13 +221,13 @@ auto b = a + 1.0f;
 
 ### 内部机制
 
-所有运算符使用 `yt::kernel::broadcast` 实现：
+所有运算符使用 `yt::strided::broadcast` 实现：
 
 ```cpp
 // 非原地版本
 template <int dim1>
 YTensor<T, std::max(dim, dim1)> operator+(const YTensor<T, dim1>& other) const {
-    return yt::kernel::broadcast([](const T& a, const T& b) {
+    return yt::strided::broadcast([](const T& a, const T& b) {
         return a + b;
     }, *this, other);
 }

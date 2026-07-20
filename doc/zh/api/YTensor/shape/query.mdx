@@ -258,20 +258,20 @@ std::cout << b.size();  // 输出: 25（逻辑大小）
 
 ---
 
-## ndim() / shapeSize()
+## ndim / shapeSize()
 
 获取张量的维度数。
 
 ### 函数签名
 
 ```cpp
-int ndim() const;           // 继承自 YTensorBase
-constexpr int shapeSize() const;  // YTensor 的编译时版本
+static constexpr int ndim = dim; // 编译期rank常量
+int shapeSize() const;           // runtime metadata rank
 ```
 
 ### 核心功能描述
 
-获取张量的维度数（Rank）。`ndim()` 是运行时版本，`shapeSize()` 是编译时常量版本。
+`YTensor<T, dim>::ndim` 是编译期rank常量，`shapeSize()` 返回runtime活跃layout rank。
 
 ### 返回值
 
@@ -281,16 +281,16 @@ constexpr int shapeSize() const;  // YTensor 的编译时版本
 
 ```cpp
 auto a = YTensor<float, 3>(2, 3, 4);
-int dims1 = a.ndim();       // 3
-int dims2 = a.shapeSize();  // 3（编译时常量）
+int dims1 = decltype(a)::ndim; // 3（编译期）
+int dims2 = a.shapeSize();     // 3（runtime metadata）
 ```
 
 ### 差异说明
 
 | 方法 | 来源 | 特点 |
 |------|------|------|
-| `ndim()` | `YTensorBase` | 运行时计算 |
-| `shapeSize()` | `YTensor<T, dim>` | 编译时常量，返回模板参数 `dim` |
+| `YTensor<T, dim>::ndim` | `YTensor<T, dim>` | 编译期常量 |
+| `shapeSize()` | `YTensorBase` | runtime活跃layout rank |
 
 ---
 

@@ -1,6 +1,6 @@
 # 归约操作
 
-本文档介绍 `YTensorBase` 类的归约方法，包括 `sum()` 和 `max()`。
+本文档介绍 `YTensorBase` 的 `sum()`、`mean()` 和 `max()`。
 
 ## 概述
 
@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | `sum(axis)` | `YTensorBase` | 沿指定轴求和 |
 | `sum(axes)` | `YTensorBase` | 沿多个轴求和 |
+| `mean(axis)` | `YTensorBase` | 沿指定轴进行同dtype平均 |
+| `mean(axes)` | `YTensorBase` | 沿规范化后的多个轴依次进行同dtype平均 |
 | `max(axis)` | `std::pair<YTensorBase, YTensorBase>` | 沿指定轴求最大值和索引 |
 | `max(axes)` | `std::pair<YTensorBase, YTensorBase>` | 沿多个轴求最大值和索引 |
 
@@ -81,6 +83,17 @@ YTensorBase sum(const std::vector<int>& axes) const {
 
 ---
 
+## `mean()`
+
+```cpp
+YTensorBase mean(int axis) const;
+YTensorBase mean(const std::vector<int>& axes) const;
+```
+
+`mean()` 保持rank和dtype。负轴会规范化，多轴会排序并去重；整数保持同dtype整数除法。归约空轴时返回零初始化结果。
+
+---
+
 ## `max()`
 
 ### 函数签名
@@ -151,13 +164,14 @@ YTensorBase squeezed = s.squeeze(1);
 
 | 情况 | 异常类型 |
 | --- | --- |
-| 0维张量调用 sum/max | `std::runtime_error` |
+| 0维张量调用 sum/mean/max | `std::runtime_error` |
+| max归约空轴 | `std::domain_error` |
 
 ---
 
 ## 性能说明
 
-- 使用 `yt::kernel::parallelFor` 自动并行化
+- 使用 `yt::utils::parallelFor` 自动并行化
 - 并行粒度基于 `axisSize`（归约轴的大小）
 
 ---

@@ -69,7 +69,7 @@ constexpr int dims = YTensor<float, 3>::ndim;    // dims = 3
 | Feature | YTensor&lt;T, dim&gt; | YTensorBase |
 | --- | --- | --- |
 | **Type Safety** | Compile-time type checking | Runtime type erasure |
-| **Performance** | Better (compiler optimization) | Slightly lower (virtual function overhead) |
+| **Performance** | Direct typed hot paths | Layout and dtype checked at runtime |
 | **Flexibility** | Fixed type and dimensions | Variable type and dimensions |
 | **Use Case** | Known type and dimensions | Dynamic types or container storage |
 
@@ -88,11 +88,11 @@ YTensor<float, 2> a(3, 4);
 YTensorBase base = a;  // Upcasting (safe)
 
 // YTensorBase can be explicitly converted to YTensor (requires type match)
-YTensor<float, 2> b(base);  // Explicit construction (undefined behavior if types mismatch)
+YTensor<float, 2> b(base);  // Throws std::invalid_argument if dtype/rank mismatch
 ```
 
 :::warning
-When constructing a `YTensor<T, dim>` from a `YTensorBase`, you must ensure that type `T` and dimension `dim` match the source tensor; otherwise, behavior is undefined.
+Constructing `YTensor<T, dim>` from `YTensorBase` validates dtype, element size, and rank. A mismatch throws `std::invalid_argument`.
 :::
 
 ## Core Concepts

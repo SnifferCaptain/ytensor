@@ -1,25 +1,57 @@
 #pragma once
 /***************
-* @file: ytensor_base.hpp
-* @brief: YTensorBase基类的功能实现，YTensorBase类不包含模板参数，提供运行时接口。
-***************/
-#include <memory>
-#include <vector>
-#include <string>
-#include <numeric>
-#include <stdexcept>
-#include <functional>
-#include <random>
+ * @file: ytensor_base.hpp
+ * @brief: YTensorBase基类的功能实现，YTensorBase类不包含模板参数，提供运行时接口。
+ ***************/
 #include <cstring>
+#include <functional>
+#include <memory>
+#include <numeric>
+#include <random>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "ytensor_concepts.hpp"
 #include "ytensor_infos.hpp"
+#include "ytensor_layout.hpp"
 #include "ytensor_memory.hpp"
 
-namespace yt{
+namespace yt {
+
+class YTensorBase;
+
+namespace strided {
+struct BaseViewAccess;
+struct BroadcastAccess;
+
+template <typename T, int dim>
+struct TensorAccess;
+template <typename T, int dim>
+struct ViewTensorAccess;
+
+template <typename Func, typename... Args>
+YTensorBase& broadcastInplaceBase(YTensorBase& target, Func&& func, Args&&... tensors);
+
+YTensorBase matView(const YTensorBase& tensor);
+YTensorBase clone(const YTensorBase& tensor);
+YTensorBase& copy_(YTensorBase& dst, const YTensorBase& src);
+YTensorBase contiguous(const YTensorBase& tensor);
+YTensorBase& contiguous_(YTensorBase& tensor);
+YTensorBase sum(const YTensorBase& tensor, int axis);
+YTensorBase sum(const YTensorBase& tensor, const std::vector<int>& axes);
+std::pair<YTensorBase, YTensorBase> max(const YTensorBase& tensor, int axis);
+std::pair<YTensorBase, YTensorBase> max(const YTensorBase& tensor, const std::vector<int>& axes);
+YTensorBase matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBackend backend);
+YTensorBase masked_matmul(
+    const YTensorBase& left, const YTensorBase& right, const YTensorBase& mask, double maskedValue,
+    yt::info::MatmulBackend backend
+);
+}  // namespace strided
 
 class YTensorBase {
-public:
+   public:
     YTensorBase() = default;
 
     /// @brief 构造函数
@@ -30,13 +62,15 @@ public:
 
     /// @brief 拷贝构造函数
     /// @param other 另一个张量
+    /// @note values storage 使用共享所有权；layout metadata 和 dtype 字符串独立复制。
     YTensorBase(const YTensorBase& other);
-    
+
     /// @brief 拷贝赋值运算符
     /// @param other 另一个张量
     /// @return 返回自身的引用
+    /// @note values storage 使用共享所有权；layout metadata 和 dtype 字符串独立复制。
     YTensorBase& operator=(const YTensorBase& other);
-    
+
     virtual ~YTensorBase() = default;
 
     /// @brief 获取张量的形状。可以根据这个形状信息进行数据的访问和操作。如at()方法或者下标(operator[])。
@@ -91,13 +125,15 @@ public:
 
     /// @brief 获取张量的数据偏移量（以元素为单位）。
     /// @return 返回当前视图相对于数据存储区头部的偏移量。
-    template <typename... Args> int offset(Args... index) const;
+    template <typename... Args>
+    int offset(Args... index) const;
     int offset(const std::vector<int>& index) const;
 
-    /// @brief 获取张量的物理偏移量，考虑了张量自身的_offset
+    /// @brief 获取张量的物理偏移量，考虑了张量当前 strided layout 的基偏移
     /// @param index 元素的索引
-    /// @return 返回 _offset + offset(index)
-    template <typename... Args> int offset_(Args... index) const;
+    /// @return 返回当前 strided layout 基偏移 + offset(index)
+    template <typename... Args>
+    int offset_(Args... index) const;
     int offset_(const std::vector<int>& index) const;
 
     /// @brief 获取张量的数据指针（按元素类型 T 返回指针）。已经包含偏移量。
@@ -110,6 +146,10 @@ public:
     /// @brief 便捷重载：当 dtype 为 float32 时可直接使用无模板 data()
     float* data();
     const float* data() const;
+    /// @brief 返回当前view起点的原始字节指针，不对dtype做类型解释。
+    /// @note 不转移所有权；当前 tensor 替换或释放 storage 后指针失效，共享该 storage 的其他句柄可延长其生命周期。
+    char* rawData();
+    const char* rawData() const;
 
     /// @brief 获取张量的连续版本
     /// @return 返回连续张量。
@@ -125,7 +165,7 @@ public:
     /// @brief 检查张量的形状是否与另一个形状匹配
     /// @param otherShape 另一个张量的形状。
     /// @return 如果形状匹配则返回true，否则返回false。
-    bool shapeMatch(const std::vector<int> &otherShape) const;
+    bool shapeMatch(const std::vector<int>& otherShape) const;
 
     /// @brief 获取张量的形状在某个轴上的大小（无安全检查、循环版的高效实现）
     /// @param atDim 维度索引，从0开始。
@@ -158,14 +198,16 @@ public:
     /// @example YTensor<float, 3> a(3, 4, 5); auto offset = a.toIndex(1, 2, 3); // offset = 31
     /// @note 如果张量是非contiguous的，toIndex()方法返回的是逻辑索引，而不是实际的内存索引。
     //       如果需要获取实际的内存索引，请使用toIndex_()方法
-    template <typename... Args> size_t toIndex(const Args... args) const;
-    size_t toIndex(const std::vector<int> &pos) const;
+    template <typename... Args>
+    size_t toIndex(const Args... args) const;
+    size_t toIndex(const std::vector<int>& pos) const;
 
     /// @brief 获取坐标对应的物理位置，可以使用atData_()方法获取数据。
     /// @return 相对data的偏移量
     /// @example YTensor<float, 3> a(3, 4, 5); auto offset = a.toIndex_(1, 2, 3); // offset = 31
-    template <typename... Args> size_t toIndex_(const Args... args) const;
-    size_t toIndex_(const std::vector<int> &pos) const;
+    template <typename... Args>
+    size_t toIndex_(const Args... args) const;
+    size_t toIndex_(const std::vector<int>& pos) const;
 
     /// @brief 获取位置对应的坐标
     /// @param index 位置
@@ -196,7 +238,7 @@ public:
     const T& atData_(int index) const;
 
     /// @brief 浅拷贝（共享底层数据）
-    void shallowCopyTo(YTensorBase &other) const;
+    void shallowCopyTo(YTensorBase& other) const;
 
     /// @brief 深拷贝：返回一个独立拥有自己数据的 YTensorBase
     YTensorBase clone() const;
@@ -216,10 +258,12 @@ public:
     /// @brief 自动推导合适形状
     /// @param shape 形状
     /// @return 返回一个vector<int>，表示推断出的张量的形状。
-    /// @example YTensor<float, 3> a(3, 4, 5); auto inferredShape = a.autoShape({-1, 2, 2, -1}); // inferredShape = [3, 2, 2, 5]
+    /// @example YTensor<float, 3> a(3, 4, 5); auto inferredShape = a.autoShape({-1, 2, 2, -1}); //
+    /// inferredShape = [3, 2, 2, 5]
     /// @note 自动推导逻辑，按优先级排序：1、形状相同，返回形状。2、存在一个-1，则在-1维度填充。
     //          3、存在多个-1，表示与原形状对应位置相同，最后一个-1依然是自动填充
-    template<typename... Args> std::vector<int> autoShape(const Args... shape) const;
+    template <typename... Args>
+    std::vector<int> autoShape(const Args... shape) const;
     std::vector<int> autoShape(const std::vector<int>& shape) const;
 
     /// @brief 对指定轴进行切片操作。
@@ -239,7 +283,8 @@ public:
     /// @param newOrder 包含新维度顺序的 vector。
     /// @return 返回一个新的 YTensorBase 视图。
     YTensorBase permute(const std::vector<int>& newOrder) const;
-    template<typename... Args> YTensorBase permute(const Args... newOrder) const;
+    template <typename... Args>
+    YTensorBase permute(const Args... newOrder) const;
 
     /// @brief 原地改变张量维度顺序
     /// @param newOrder 包含新维度顺序的 vector。
@@ -256,14 +301,16 @@ public:
     /// @return 返回一个新的 YTensorBase 视图。
     /// @note 要求张量必须是连续的。
     YTensorBase view(const std::vector<int>& newShape) const;
-    template<typename... Args> YTensorBase view(const Args... newShape) const;
+    template <typename... Args>
+    YTensorBase view(const Args... newShape) const;
 
     /// @brief 重塑张量形状
     /// @param newShape 新的形状
     /// @return 返回一个新的张量（可能是视图，也可能是拷贝）
     /// @note 等价于 contiguous().view(newShape)
     YTensorBase reshape(const std::vector<int>& newShape) const;
-    template<typename... Args> YTensorBase reshape(const Args... newShape) const;
+    template <typename... Args>
+    YTensorBase reshape(const Args... newShape) const;
 
     /// @brief 在指定位置插入一个大小为1的维度（零拷贝）
     /// @param dim 插入的位置（支持负索引）
@@ -294,7 +341,8 @@ public:
     /// @brief 沿指定维度重复张量（Args...版本）
     /// @param times 每个维度重复的次数
     /// @return 返回一个新的 YTensorBase 视图。
-    template<typename... Args> YTensorBase repeat(const Args... times) const;
+    template <typename... Args>
+    YTensorBase repeat(const Args... times) const;
 
     /// @brief 原地沿指定维度重复张量（配合 repeat 的行为）
     /// @param times 每个维度重复的次数。
@@ -324,25 +372,26 @@ public:
 
     /// @brief 高级随机生成器：正态分布
     struct _RandnGenerator {
-        _RandnGenerator(std::mt19937& gen_p): gen(gen_p) {}
+        _RandnGenerator(std::mt19937& gen_p) : gen(gen_p) {}
         std::mt19937& gen;
         YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
     };
 
     /// @brief 高级随机生成器：均匀分布
     struct _RanduGenerator {
-        _RanduGenerator(std::mt19937& gen_p): gen(gen_p) {}
+        _RanduGenerator(std::mt19937& gen_p) : gen(gen_p) {}
         std::mt19937& gen;
         YTensorBase operator()(const std::vector<int>& shape, std::string dtype = "float32") const;
     };
 
     /// @brief 运行时可用的随机生成器实例
-    inline static _RandnGenerator randn{yt::infos::gen};
-    inline static _RanduGenerator randu{yt::infos::gen};
+    inline static _RandnGenerator randn{yt::info::gen};
+    inline static _RanduGenerator randu{yt::info::gen};
 
     /// @brief 创建指定大小的，零张量
     /// @param shape 张量的形状
     /// @return 返回张量
+    /// @note 内置POD按全零位模式初始化；non-POD custom dtype保持注册的默认构造状态。
     static YTensorBase zeros(const std::vector<int>& shape, std::string dtype = "float32");
 
     /// @brief 创建指定大小的，全1张量
@@ -387,20 +436,59 @@ public:
     /// @brief 获取底层内存占用的字节数
     size_t nbytes() const;
 
+    /// @brief 获取当前张量layout类型。
+    YLayoutType layoutType() const;
+
+    /// @brief 当前张量是否为strided layout。
+    bool isStrided() const;
+
+    /// @brief 当前张量是否为nested layout。
+    bool isNested() const;
+
     /// @brief 标准cout输出流
     friend std::ostream& operator<<(std::ostream& os, const YTensorBase& tensor);
-/////////////////// externs ////////////////
-    #include "ytensor_base_math.hpp"
-protected:
-    YMemory _memory;                // 底层线性存储，不包含 shape/stride/offset 语义
-    int _offset = 0;                // 数据偏移 (以元素为单位)
-    std::vector<int> _shape;        // 形状
-    std::vector<int> _stride;       // 步长 (以元素为单位)
-    size_t _element_size = 0;       // 元素大小（字节）
-    std::string _dtype;             // 用于序列化/反序列化友好名称
+    /////////////////// externs ////////////////
+#include "ytensor_base_math.hpp"
+   protected:
+    template <typename T, int dim>
+    friend struct strided::TensorAccess;
+    template <typename T, int dim>
+    friend struct strided::ViewTensorAccess;
+    friend struct strided::BaseViewAccess;
+    friend struct strided::BroadcastAccess;
+
+    friend YTensorBase strided::matView(const YTensorBase& tensor);
+    friend YTensorBase strided::clone(const YTensorBase& tensor);
+    friend YTensorBase& strided::copy_(YTensorBase& dst, const YTensorBase& src);
+    friend YTensorBase strided::contiguous(const YTensorBase& tensor);
+    friend YTensorBase& strided::contiguous_(YTensorBase& tensor);
+    friend YTensorBase strided::matmul(
+        const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBackend backend
+    );
+    friend YTensorBase strided::masked_matmul(
+        const YTensorBase& left, const YTensorBase& right, const YTensorBase& mask, double maskedValue,
+        yt::info::MatmulBackend backend
+    );
+
+    YMeta<YLayoutType::Strided>& stridedMeta();
+    const YMeta<YLayoutType::Strided>& stridedMeta() const;
+    std::vector<int>& stridedShape();
+    const std::vector<int>& stridedShape() const;
+    std::vector<int>& stridedStride();
+    const std::vector<int>& stridedStride() const;
+    int& stridedOffset();
+    const int& stridedOffset() const;
+
+    /// @brief Validate assignment through a YTensorBase reference before any state is replaced.
+    virtual void validateReplacement(const YTensorBase&) const {}
+
+    YMemory _memory;           // 底层线性存储，不包含 shape/stride/offset 语义
+    YLayout _layout;           // layout专属元数据，strided 元数据由其唯一持有
+    size_t _element_size = 0;  // 元素大小（字节）
+    std::string _dtype;        // 用于序列化/反序列化友好名称
 
     /// @brief cout接口
-    virtual std::ostream& _cout(std::ostream &os) const;
+    virtual std::ostream& _cout(std::ostream& os) const;
 };
 
 YT_IMPL_INLINE YTensorBase YTensorBase::cast(const std::string& newDtype) const {
@@ -410,4 +498,4 @@ YT_IMPL_INLINE YTensorBase YTensorBase::cast(const std::string& newDtype) const 
     return res;
 }
 
-} // namespace yt
+}  // namespace yt

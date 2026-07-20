@@ -21,15 +21,16 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# OFF: header-only；ON: 构建并链接仓库内的libytensor runtime后端。
+option(YT_USE_LIB "Use the precompiled YTensor runtime backend" OFF)
+set(YTENSOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+
 find_package(ZLIB REQUIRED)
 find_package(OpenMP REQUIRED)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftime-trace")
 endif()
-
-option(YT_USE_LIB "Use prebuilt ytensor shared library backend" OFF)
-set(YTENSOR_LIB_ROOT "" CACHE PATH "Path to ytensor/lib directory (contains include/ and bin/)")
 
 set(SRC
 	main.cpp
@@ -41,7 +42,8 @@ add_executable(${PROJECT_NAME} ${SRC})
 
 target_include_directories(${PROJECT_NAME} PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/include
-	${CMAKE_CURRENT_SOURCE_DIR}/../../single-header
+	${YTENSOR_ROOT}
+	# ${CMAKE_CURRENT_SOURCE_DIR}/../../single-header
 )
 
 target_link_libraries(${PROJECT_NAME}
@@ -51,20 +53,13 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 if(YT_USE_LIB)
-	if(NOT YTENSOR_LIB_ROOT)
-		set(YTENSOR_LIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../lib")
+	if(NOT TARGET ytensor)
+		add_subdirectory(${YTENSOR_ROOT}/lib ${CMAKE_CURRENT_BINARY_DIR}/ytensor-lib)
 	endif()
-	target_compile_definitions(${PROJECT_NAME} PRIVATE YT_USE_LIB)
-	target_include_directories(${PROJECT_NAME} PRIVATE
-		${CMAKE_CURRENT_SOURCE_DIR}/../../
-	)
-	target_include_directories(${PROJECT_NAME} PRIVATE
-		${YTENSOR_LIB_ROOT}/include
-	)
-	target_link_directories(${PROJECT_NAME} PRIVATE
-		${YTENSOR_LIB_ROOT}/bin
-	)
+	target_compile_definitions(${PROJECT_NAME} PRIVATE YT_USE_LIB=1)
 	target_link_libraries(${PROJECT_NAME} ytensor)
+else()
+	target_compile_definitions(${PROJECT_NAME} PRIVATE YT_USE_LIB=0)
 endif()
 
 if(use_blas)

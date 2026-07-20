@@ -153,7 +153,7 @@ YTensorBase mask = a > 0; // 返回 bool 类型的 mask
 - `float32`, `float64`
 - `int8`, `int16`, `int32`, `int64`
 - `uint8`, `uint16`, `uint32`, `uint64`
-- `bfloat16`
+- `bfloat16`, `float16`, `float8_e5m2`, `float8_e4m3`, `float8_e8m0`, `float8_ue8m0`
 - `%` 运算符在浮点类型下使用 `fmod` 实现
 
 ### 整数类型（`&`, `|`, `^`）
@@ -168,7 +168,7 @@ YTensorBase mask = a > 0; // 返回 bool 类型的 mask
 
 ### 比较运算符（返回 `bool` 类型）
 
-- 支持所有类型（浮点、整数、布尔）
+- builtin runtime kernel支持上述数值类型和 `bool`；custom dtype需要注册comparison kernel
 
 ---
 
@@ -179,7 +179,7 @@ YTensorBase mask = a > 0; // 返回 bool 类型的 mask
 ```cpp
 // 非原地版本
 YTensorBase operator+(const YTensorBase& other) const {
-    auto opShape = yt::kernel::computeBroadcastShape({this->shape(), other.shape()});
+    auto opShape = yt::utils::computeBroadcastShape({this->shape(), other.shape()});
     YTensorBase result(opShape, _dtype);
     result.copy_(*this);
     result.broadcastInplace([](DType& a, const DType& b) { a = a + b; }, other);

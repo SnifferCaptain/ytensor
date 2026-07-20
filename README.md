@@ -219,7 +219,7 @@ auto siluOutput = x.broadcastInplace([](float& v) {
 });
 
 // Element-wise custom multi-input compute. out: [3, 4]
-auto out = yt::kernel::broadcast([](
+auto out = yt::strided::broadcast([](
     const float& t1,    // Element from tensor x
     const float& t2,    // Element from tensor y
     const float& t3,    // Element from tensor reluOutput
@@ -242,7 +242,7 @@ Common operations are supported out of the box, while custom operation compositi
 ---
 
 ## 🦾 Multi-Type Support
-Supports tensors with many data types, including standard library types such as `float` and `std::string`, and also custom types. Whether an operation is available depends on operator overloads for that type.
+Supports tensors with many data types, including standard library and custom types. Typed `YTensor<T, dim>` math is available when `T` provides the required operators. Runtime `YTensorBase` math instead requires a registered `YDTypeKernels` capability; tensor-scalar conversion may additionally require an exact cast kernel.
 
 ```cpp
 yt::YTensor<std::string, 2> strTensor(3, 4);    // Create a 3x4 std::string tensor
@@ -262,7 +262,7 @@ struct MyType {
 
 // Register type and provide a string conversion function.
 // Type name is required; conversion function is optional (affects print output).
-yt::types::registerType<MyType>("MyType", [](const void* data) {
+yt::type::registerType<MyType>("MyType", [](const void* data) {
     const MyType* p = reinterpret_cast<const MyType*>(data); // Cast to MyType pointer
     return std::to_string(p->value + 1); // Print value+1 directly
 });
@@ -330,8 +330,8 @@ You can also use conversion scripts under `example/convert/` for partial format 
 Starting from version `0.14`, tensor storage is wrapped by `YMemory` instead of being stored directly as a raw `shared_ptr<char[]>` member.
 
 - `YMemory` owns a linear byte storage handle and exposes `rawData()`, `get()`, `nbytes()`, and `device()`.
-- `YTensorBase` still keeps the classic tensor metadata model: `_offset`, `_shape`, `_stride`, `_element_size`, and `_dtype`.
-- Shape, stride, offset, dtype, and object construction semantics remain in the tensor layer, not in `YMemory`.
+- `YTensorBase` owns `_memory`, `_layout`, `_element_size`, and `_dtype`; active shape, stride, and offset metadata live only in `YLayout`.
+- Layout semantics and object construction remain in the tensor/layout owners, not in `YMemory`.
 - `device()` currently returns the storage device string such as `"cpu"`; no implicit cross-device synchronization is performed.
 
 This keeps the user-facing tensor API unchanged while preparing the storage layer for future device-specific backends.
@@ -492,13 +492,11 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 
 ## Latest Update
 
-- Added `YMemory`, `YStorageBase`, and `YCpuStorage` as the tensor storage wrapper layer.
-- `YTensorBase` now owns storage through `YMemory` while keeping shape/stride/offset logic in the tensor layer.
-- Added `device()` and `nbytes()` storage queries on `YTensorBase`.
-- Refactored the code structure.
-- Added multiple commonly used functions.
-- Fixed the `order` interface so that only truly element-wise operations keep derivative / integral interfaces.
-- Added the `FLASH_AVX2` SDPA backend, using the Flash Attention algorithm to accelerate attention computation.
+- Refactored the runtime tensor architecture with `YLayoutType`, `YMeta`, and `YLayout`, and split Strided behavior into five owners: `broadcast`, `view`, `copy`, `reduce`, and `matmul`.
+- Added runtime dtype-kernel and pairwise-cast registries, with complete construction, copy, destruction, formatting, and serialization lifecycle support for custom dtypes.
+- Fixed correctness issues in broadcast aliasing, overlapping-view writes, non-POD copies, numeric conversion, reduction, matmul, and file I/O, while restoring typed-access and KV-cache performance.
+- Clarified that ordinary copies share values storage while `clone()` creates an independent copy, and expanded the bilingual runtime architecture documentation and implementation comments.
+- Regenerated and verified `ytensor_single.hpp`; the `YT_USE_LIB` backend remains optional, and the Qwen3 example can switch between header-only and shared-library modes through CMake.
 
 ---
 For more examples, API details, or contribution suggestions, check the `example/` directory or open an issue.

@@ -107,7 +107,7 @@ float total = a.sum();  // 55.0 (Scalar)
 
 ## mean()
 
-Computes the mean along specified axes using the **Welford algorithm** for improved numerical stability.
+Computes a same-dtype sum followed by same-dtype division along the specified axes.
 
 ### Function Signatures
 
@@ -125,7 +125,8 @@ T mean(int axis = 0) const requires(dim == 1);
 ### Core Function Description
 
 computes the arithmetic mean along the specified axis/axes.
-*   Uses **Welford's algorithm** internally for online interaction, significantly improving numerical stability and avoiding precision loss from large sum accumulations.
+*   Integer tensors use integer division; multi-axis means apply this operation sequentially after axis normalization.
+*   An empty reduced axis yields the zero-initialized result.
 *   **Always maintains dimensions**.
 
 ### Parameters
@@ -163,20 +164,18 @@ auto b = YTensor<float, 1>({5}, {1, 2, 3, 4, 5});
 float avg = b.mean();  // 3.0
 ```
 
-### Welford Algorithm
+### Accumulation Contract
 
-`mean()` uses the Welford algorithm to compute the mean online, which improves numerical stability:
+`mean()` accumulates in `T` and divides once by the axis length:
 
 ```cpp
 // Pseudo-code
-T mean = 0;
+T sum = 0;
 for (int j = 0; j < axisLen; j++) {
-    T x = data[j];
-    mean += (x - mean) / (j + 1);  // Welford update
+    sum += data[j];
 }
+T mean = axisLen == 0 ? T(0) : sum / T(axisLen);
 ```
-
-**Advantage**: Prevents precision loss that can occur when summing many large numbers.
 
 ---
 
@@ -306,7 +305,7 @@ auto a = YTensor<float, 3>::randn(100, 100, 100);
 auto sum = a.sum(0);  // Executed multi-threaded
 ```
 
-**Threshold**: `yt::infos::minParOps`. Parallelism is enabled when the number of elements exceeds this threshold.
+**Threshold**: `yt::info::minParOps`. Parallelism is enabled when the number of elements exceeds this threshold.
 
 ### Vectorization
 
@@ -473,8 +472,8 @@ Summing many large numbers can lead to precision loss:
 auto a = YTensor<float, 1>::ones(10000000);
 float sum = a.sum();  // May not be exactly 10,000,000
 
-// mean() uses Welford algorithm, providing better precision
-float mean = a.mean();  // Much closer to 1.0
+// mean() uses the same float accumulation as sum()
+float mean = a.mean();
 ```
 :::
 

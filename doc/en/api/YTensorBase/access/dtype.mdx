@@ -139,7 +139,7 @@ Common `dtype()` string values include:
 | `"bfloat16"`| 2 bytes | `bfloat16_t` |
 
 :::tip
-The specific types supported depend on the configuration of the type registry. You can view all registered types via `yt::types::getTypeRegistry()`.
+`yt::type::getTypeRegistry()` returns a snapshot of custom registrations. Use `getBuiltinTypeInfo()` for builtin lifecycle metadata and `getTypeInfo()` to resolve either category.
 :::
 
 ---

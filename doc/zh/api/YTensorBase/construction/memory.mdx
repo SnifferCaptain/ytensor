@@ -113,7 +113,7 @@ inline YTensorBase YTensorBase::clone() const {
     // ...
     
     // 检查是否为非POD类型
-    auto typeInfoOpt = yt::types::getTypeInfo(_dtype);
+    auto typeInfoOpt = yt::type::getTypeInfo(_dtype);
     if (typeInfoOpt && !typeInfoOpt->get().isPOD) {
         // 非POD类型：使用拷贝构造函数
         // ...
