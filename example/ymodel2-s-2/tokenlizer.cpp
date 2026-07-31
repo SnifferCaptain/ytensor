@@ -485,7 +485,7 @@ std::string MiniTokenizer::decode(const std::vector<int64_t>& ids) const {
 // "<|im_start|>system\n{{ system_message }}<|im_end|>\n" 等
 std::string MiniTokenizer::apply_chat_template(
     const std::vector<std::pair<std::string, std::string>>& messages,
-    bool add_generation_prompt) const {
+    bool) const {
     std::string out;
     // 开头 system：若首条不是 system，注入默认 system
     if (!messages.empty() && messages.front().first == "system") {
@@ -506,9 +506,7 @@ std::string MiniTokenizer::apply_chat_template(
             out += "<|im_start|>user\n";
             out += content;
             out += "<|im_end|>\n";
-            if (add_generation_prompt && i == messages.size() - 1) {
-                out += "<|im_start|>assistant\n"; // 生成从 assistant 段落开始
-            }
+            out += "<|im_start|>assistant\n";
         } else if (role == "assistant") {
             out += content;
             out += "<|im_end|>\n";

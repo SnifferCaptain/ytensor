@@ -17,13 +17,13 @@ namespace yt::type {
 template<typename T>
 constexpr const char* getDTypeName();
 
-// ======================== 分发实现（折叠表达式） ========================
+// ======================== 类型列表分发（折叠表达式） ========================
 
 /// @brief 使用折叠表达式进行类型分发（替代递归展开）
 /// 将每个唯一Func类型的模板实例化从O(N)降低到O(1)，其中N为TypeList中的类型数量。
 /// 对于15种类型的AllNumericTypes，这意味着约15倍的模板实例化减少。
-template<typename Func, typename... Ts>
-bool dispatchImpl(const std::string& dtype, Func&& func, yt::type::TypeList<Ts...>);
+template <typename Func, typename... Ts>
+bool dispatchRegisteredTypeList(const std::string& dtype, Func&& func, yt::type::TypeList<Ts...>);
 
 /// @brief 根据 dtype 字符串分发到对应类型的模板函数
 /// @tparam TypeListT 要尝试匹配的类型列表（来自 yt::type）
@@ -31,9 +31,9 @@ bool dispatchImpl(const std::string& dtype, Func&& func, yt::type::TypeList<Ts..
 /// @param func 模板 lambda，形如 [&]<typename DType>() { ... }
 /// @return 是否成功匹配并执行
 /// @note 如果dtype是嵌套类型（如"YTensorBase<float32>"），会自动解析并匹配内部基础类型
-template<typename TypeListT, typename Func>
+template <typename TypeListT, typename Func>
 void dispatch(const std::string& dtype, Func&& func, const std::string& opName = "dispatch");
 
-} // namespace yt::type
+}  // namespace yt::type
 
 #include "../../src/type/type_dispatch.inl"

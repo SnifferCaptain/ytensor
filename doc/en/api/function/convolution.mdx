@@ -1,0 +1,219 @@
+# Convolution
+
+YTensor provides one-dimensional and two-dimensional cross-correlation operators in the `yt::function` namespace. Like most deep-learning frameworks, these functions do not reverse the kernel.
+
+## Supported Contract
+
+| Function | Input layout | Weight layout | Output layout |
+| --- | --- | --- | --- |
+| `conv1d` | `[N, C_in, L]` | `[C_out, C_in / groups, K]` | `[N, C_out, L_out]` |
+| `conv2d` | `[N, C_in, H, W]` | `[C_out, C_in / groups, K_h, K_w]` | `[N, C_out, H_out, W_out]` |
+
+The supported storage types are `float` and `yt::float16`. FP16 inputs and weights use FP32 accumulation before conversion to FP16 output.
+
+The current public contract does not accept NLC, NHWC, transposed-convolution, backward, or quantized-convolution layouts.
+
+## `conv1d`
+
+### Signatures
+
+```cpp
+template <typename T>
+yt::YTensor<T, 3> conv1d(
+    const yt::YTensor<T, 3>& input,
+    const yt::YTensor<T, 3>& weight,
+    int stride = 1,
+    const std::vector<int>& padding = {0, 0},
+    int dilation = 1,
+    int groups = 1
+);
+
+template <typename T>
+yt::YTensor<T, 3> conv1d(
+    const yt::YTensor<T, 3>& input,
+    const yt::YTensor<T, 3>& weight,
+    const yt::YTensor<T, 1>& bias,
+    int stride = 1,
+    const std::vector<int>& padding = {0, 0},
+    int dilation = 1,
+    int groups = 1
+);
+```
+
+`padding` follows the `torch.nn.functional.pad` order:
+
+```text
+{left, right}
+```
+
+The output length is:
+
+```text
+effective_kernel = dilation * (K - 1) + 1
+L_out = floor((L + left + right - effective_kernel) / stride) + 1
+```
+
+### Example
+
+```cpp
+#include "ytensor.hpp"
+
+auto input = yt::YTensor<float, 3>::randn(2, 4, 32);
+auto weight = yt::YTensor<float, 3>::randn(6, 2, 3);
+auto bias = yt::YTensor<float, 1>::zeros(6);
+
+auto output = yt::function::conv1d(
+    input,
+    weight,
+    bias,
+    2,
+    {1, 2},
+    1,
+    2
+);
+// output shape: [2, 6, 17]
+```
+
+## `conv2d`
+
+### Signatures
+
+```cpp
+template <typename T>
+yt::YTensor<T, 4> conv2d(
+    const yt::YTensor<T, 4>& input,
+    const yt::YTensor<T, 4>& weight,
+    std::array<int, 2> stride = {1, 1},
+    const std::vector<int>& padding = {0, 0, 0, 0},
+    std::array<int, 2> dilation = {1, 1},
+    int groups = 1
+);
+
+template <typename T>
+yt::YTensor<T, 4> conv2d(
+    const yt::YTensor<T, 4>& input,
+    const yt::YTensor<T, 4>& weight,
+    const yt::YTensor<T, 1>& bias,
+    std::array<int, 2> stride = {1, 1},
+    const std::vector<int>& padding = {0, 0, 0, 0},
+    std::array<int, 2> dilation = {1, 1},
+    int groups = 1
+);
+```
+
+`stride` and `dilation` use `{height, width}` order. `padding` follows the `torch.nn.functional.pad` order:
+
+```text
+{left, right, top, bottom}
+```
+
+The output height and width are computed independently:
+
+```text
+effective_h = dilation_h * (K_h - 1) + 1
+effective_w = dilation_w * (K_w - 1) + 1
+
+H_out = floor((H + top + bottom - effective_h) / stride_h) + 1
+W_out = floor((W + left + right - effective_w) / stride_w) + 1
+```
+
+### Example
+
+```cpp
+#include "ytensor.hpp"
+
+auto input = yt::YTensor<float, 4>::randn(2, 4, 16, 20);
+auto weight = yt::YTensor<float, 4>::randn(8, 2, 3, 3);
+
+auto output = yt::function::conv2d(
+    input,
+    weight,
+    std::array{2, 1},
+    {1, 2, 1, 0},
+    std::array{1, 2},
+    2
+);
+// output shape: [2, 8, 8, 19]
+```
+
+## Groups and Depthwise Convolution
+
+The channel constraints are:
+
+```text
+C_in % groups == 0
+C_out % groups == 0
+weight.shape(1) == C_in / groups
+```
+
+- `groups == 1` is ordinary convolution.
+- `groups > 1` partitions input and output channels into independent groups.
+- `groups == C_in` is depthwise convolution. `C_out / C_in` is the channel multiplier and may be greater than one.
+
+When provided, `bias` must be one-dimensional with shape `[C_out]`. Strided bias views are supported.
+
+## Implementation Architecture
+
+The public interface defines cross-correlation, layout, padding, stride, dilation, groups, and bias behavior. The build capabilities and group relationship select the execution path:
+
+```text
+conv1d / conv2d
+        │
+        ▼
+validate parameters, shapes, channels, output extents
+        │
+        ├── groups == C_in
+        │       │
+        │       ▼
+        │   direct depthwise kernel
+        │   iterate batch/channel/output
+        │
+        ├── AVX2 + FMA
+        │       │
+        │       ▼
+        │   ordinary/grouped packed panels
+        │   ├── pack weight panels once per group
+        │   ├── generate input panels by output tile
+        │   └── reuse BLAS dispatcher and row microkernel
+        │
+        └── non-AVX2
+                │
+                ▼
+            strided reference
+```
+
+The optimized ordinary/grouped path uses blockwise implicit im2col without materializing either a complete columns matrix or a padded input:
+
+1. weights are converted and packed into FP32 panels per group, outside the batch loop;
+2. the input packer applies padding, stride, and dilation while producing the current output tile;
+3. panels use the same `GemmKernelSpec` and packed-panel ABI as BLAS GEMM;
+4. convolution invokes the dispatcher/microkernel directly instead of entering the complete public GEMM frame;
+5. bias and storage conversion are applied when committing convolution output.
+
+Depthwise convolution remains a separate direct kernel rather than being forced into GEMM. This boundary reuses the physical compute kernel while preserving convolution-specific traversal semantics.
+
+## Strides and Backend Behavior
+
+The operators accept contiguous tensors and read-only views produced by operations such as `permute`, `slice`, negative-step slicing, and `unfold`. A contiguous spatial layout is normally faster, but callers do not need to materialize a contiguous copy for correctness.
+
+On AVX2+FMA builds, YTensor uses optimized depthwise or packed-panel paths when eligible. Other builds use the scalar reference path. Backend selection does not change the public layout, padding, grouping, or accumulation contract.
+
+## Errors
+
+The functions throw `std::invalid_argument` when:
+
+- `stride` or `dilation` is not positive;
+- a padding value is negative or the padding vector has the wrong length;
+- `groups` is not positive or does not divide the channel counts;
+- the weight or bias channel dimensions do not match the input contract;
+- the effective kernel is larger than the padded input.
+
+They throw `std::overflow_error` when an output or workspace extent cannot be represented safely.
+
+## See Also
+
+- [BLAS Overview](../blas/overview.mdx)
+- [BLAS Level-3](../blas/level3.mdx)
+- [Matrix Multiplication](../YTensor/math/matmul.mdx)
+- [Pooling](./pooling.mdx)
+- [Backend Selection](../guides/backend_selection.mdx)

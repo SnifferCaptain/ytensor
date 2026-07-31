@@ -1,0 +1,456 @@
+# BLAS Level-3
+
+Level-3 contains matrix-matrix operations. Its core operation is GEMM:
+
+```text
+C[m,n] = beta*C + alpha*A[m,k]*B[k,n]
+```
+
+It supports FP32 and FP16 storage, arbitrary element strides, masked output, cache blocking, and OpenMP parallel execution.
+
+:::tip
+Prefer [`YTensor::matmul`](../YTensor/math/matmul.mdx) for tensor inputs. The raw-pointer interfaces on this page do not validate shape, storage capacity, dtype, or batch broadcasting.
+:::
+
+## Choosing an Interface
+
+| Scenario | Recommended interface |
+| --- | --- |
+| Dense row-major FP32 A/B/C | `sgemm_rowmajor` |
+| Dense column-major FP32 A/B/C | `sgemm_colmajor` |
+| Arbitrary FP32 layout, transpose, or slice | `sgemm` |
+| FP16 storage with FP32 compute | `hgemm` |
+| Different storage types for A, B, and C | typed `gemm` |
+| Update selected C coordinates | `sgemm_masked` |
+
+`matmul` and `hmatmul` are compatibility wrappers with common fixed parameters. New low-level code should prefer the explicit GEMM interfaces.
+
+## Dense Row-Major GEMM
+
+The simplest FP32 interface fixes `alpha = 1` and `beta = 0`:
+
+```cpp
+void yt::blas::sgemm_rowmajor(
+    const float* A,
+    const float* B,
+    float* C,
+    int m,
+    int n,
+    int k
+);
+```
+
+```text
+A: [m,k]
+B: [k,n]
+C: [m,n]
+```
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+    float B[] = {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f
+    };
+    float C[4];
+
+    yt::blas::sgemm_rowmajor(A, B, C, 2, 2, 3);
+
+    std::cout << C[0] << ", " << C[1] << '\n';  // 22, 28
+    std::cout << C[2] << ", " << C[3] << '\n';  // 49, 64
+}
+```
+
+The dimension order is `m, n, k`, not the element counts of A, B, and C.
+
+## General FP32 GEMM
+
+Use `sgemm` for custom `alpha/beta` values or strides:
+
+```cpp
+void yt::blas::sgemm(
+    const float* A,
+    const float* B,
+    float* C,
+    int m,
+    int n,
+    int k,
+    float alpha,
+    float beta,
+    int64_t rsa,
+    int64_t csa,
+    int64_t rsb,
+    int64_t csb,
+    int64_t rsc,
+    int64_t csc
+);
+```
+
+| Parameter | Description |
+| --- | --- |
+| `A`, `B` | Logical `(0,0)` of the input matrices |
+| `C` | Logical `(0,0)` of the input/output matrix |
+| `m` | Rows in A and C |
+| `n` | Columns in B and C |
+| `k` | Columns in A and rows in B |
+| `alpha`, `beta` | Product and previous-output scale |
+| `rsa`, `csa` | A row and column strides |
+| `rsb`, `csb` | B row and column strides |
+| `rsc`, `csc` | C row and column strides |
+
+```text
+A(i,p) = A[i*rsa + p*csa]
+B(p,j) = B[p*rsb + j*csb]
+C(i,j) = C[i*rsc + j*csc]
+```
+
+All strides are measured in elements.
+
+```cpp
+// C = 0.5*C + 2*A*B
+yt::blas::sgemm(
+    A, B, C,
+    m, n, k,
+    2.0f, 0.5f,
+    k, 1,  // A row-major
+    n, 1,  // B row-major
+    n, 1   // C row-major
+);
+```
+
+When `beta == 0`, GEMM does not read the old C value.
+
+## Common Layouts
+
+### Row-Major
+
+```text
+A: rsa = k, csa = 1
+B: rsb = n, csb = 1
+C: rsc = n, csc = 1
+```
+
+Equivalent shorthand:
+
+```cpp
+yt::blas::sgemm(A, B, C, m, n, k);
+```
+
+### Column-Major
+
+```text
+A: rsa = 1, csa = m
+B: rsb = 1, csb = k
+C: rsc = 1, csc = m
+```
+
+With fixed `alpha = 1`, `beta = 0`:
+
+```cpp
+yt::blas::sgemm_colmajor(A, B, C, m, n, k);
+```
+
+### Mixed Layouts
+
+A, B, and C may use different physical orders:
+
+```cpp
+yt::blas::sgemm(
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,  // A row-major [m,k]
+    1, k,  // B column-major [k,n]
+    n, 1   // C row-major [m,n]
+);
+```
+
+## Transpose Without Copying
+
+GEMM does not need a transpose enum because exchanging row and column strides represents a transposed view.
+
+For dense row-major X with shape `[3,2]` and strides `{2,1}`, treat the same storage as `Xᵀ[2,3]` by passing `rsa = 1`, `csa = 2`:
+
+```cpp
+float X[] = {
+    1.0f, 2.0f,
+    3.0f, 4.0f,
+    5.0f, 6.0f
+};
+float B[] = {
+    1.0f, 0.0f,
+    0.0f, 1.0f,
+    1.0f, 1.0f
+};
+float C[4];
+
+yt::blas::sgemm(
+    X, B, C,
+    2, 2, 3,
+    1.0f, 0.0f,
+    1, 2,  // X viewed as Xᵀ[2,3]
+    2, 1,  // B[3,2] row-major
+    2, 1   // C[2,2] row-major
+);
+
+// C = [[6, 8],
+//      [8, 10]]
+```
+
+The same rule applies to padded matrix slices: the pointer must refer to logical `(0,0)`, and strides must map every coordinate correctly.
+
+## FP16 GEMM
+
+```cpp
+void yt::blas::hgemm(
+    const yt::float16* A,
+    const yt::float16* B,
+    yt::float16* C,
+    int m,
+    int n,
+    int k,
+    float alpha = 1.0f,
+    float beta = 0.0f
+);
+```
+
+The arbitrary-stride overload adds the six A/B/C strides after `alpha` and `beta`.
+
+```cpp
+yt::float16 A[] = {
+    yt::float16(1.0f), yt::float16(2.0f),
+    yt::float16(3.0f), yt::float16(4.0f)
+};
+yt::float16 B[] = {
+    yt::float16(5.0f), yt::float16(6.0f),
+    yt::float16(7.0f), yt::float16(8.0f)
+};
+yt::float16 C[4] = {};
+
+yt::blas::hgemm(A, B, C, 2, 2, 2);
+// C is approximately [[19,22], [43,50]]
+```
+
+FP16 is a storage type:
+
+1. A and B are converted to FP32 while loading or packing.
+2. The complete K reduction uses FP32.
+3. `alpha/beta` are applied in FP32.
+4. The final result is converted to FP16 once.
+
+## Mixed Storage Types
+
+Typed `gemm` allows A, B, and C to independently use `float` or `yt::float16`, while compute remains FP32:
+
+```cpp
+yt::blas::BlasContext context;
+
+yt::float16 A[/* m*k */];
+yt::float16 B[/* k*n */];
+float C[/* m*n */];
+
+yt::blas::gemm(
+    context,
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,
+    n, 1,
+    n, 1
+);
+```
+
+Use `hgemm` when all three matrices use FP16 storage.
+
+## Masked GEMM
+
+`sgemm_masked` updates only coordinates for which the mask is `true`:
+
+- `true`: apply `C = beta*C + alpha*A*B`;
+- `false`: do not read or write C, preserving its previous value.
+
+### Dense Boolean Mask
+
+The mask must use dense row-major `[m,n]` storage:
+
+```cpp
+float A[] = {1.0f, 2.0f, 3.0f, 4.0f};
+float B[] = {5.0f, 6.0f, 7.0f, 8.0f};
+float C[] = {-1.0f, -1.0f, -1.0f, -1.0f};
+bool mask[] = {
+    true, false,
+    true, true
+};
+
+yt::blas::sgemm_masked(
+    A, B, C,
+    2, 2, 2,
+    1.0f, 0.0f,
+    2, 1,
+    2, 1,
+    2, 1,
+    mask
+);
+
+// C == [[19, -1],
+//       [43, 50]]
+```
+
+### Coordinate Predicate
+
+Use a callable `bool(int row, int column)` to avoid materializing a mask:
+
+```cpp
+yt::blas::sgemm_masked(
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,
+    n, 1,
+    n, 1,
+    [](int row, int column) {
+        return column <= row;
+    }
+);
+```
+
+:::warning
+The predicate may be invoked more than once. It must be side-effect free and return a stable result for each coordinate. A boolean mask pointer must not be `nullptr`.
+:::
+
+## Threads
+
+Level-3 is serial by default:
+
+```cpp
+yt::blas::set_num_threads(4);
+yt::blas::sgemm_rowmajor(A, B, C, m, n, k);
+```
+
+To use the environment recommendation, set it explicitly:
+
+```cpp
+yt::blas::set_num_threads(
+    yt::blas::default_num_threads()
+);
+```
+
+The thread count is process-wide and should not be changed between concurrent GEMM calls.
+
+## Context and Blocking
+
+The default context contains GEMM cache blocks:
+
+```cpp
+struct BlasContext {
+    int mc = 642;
+    int kc = 500;
+    int nc = 4800;
+    int af = 8;
+    int df = 4;
+};
+```
+
+Most callers should keep the defaults. For a fixed hardware/workload tuning experiment, use a local context:
+
+```cpp
+yt::blas::BlasContext context;
+yt::blas::set_gemm_block_sizes(context, 768, 384, 4096);
+
+yt::blas::sgemm_rowmajor(
+    context,
+    A, B, C,
+    m, n, k
+);
+```
+
+Cache capacities can also generate candidate blocks:
+
+```cpp
+yt::blas::set_gemm_cache_sizes_kb(
+    context,
+    32,    // L1
+    1024,  // L2
+    32768  // L3
+);
+```
+
+:::warning
+The cache setter estimates blocks from the current packed-panel contract. It does not detect hardware and is not guaranteed to beat the defaults. Benchmark the actual shapes, CPU, and thread count.
+:::
+
+## Boundary Behavior and Exceptions
+
+| Condition | Behavior |
+| --- | --- |
+| `m < 0`, `n < 0`, or `k < 0` | Throws `std::invalid_argument` |
+| `m == 0` or `n == 0` | Returns without accessing matrices |
+| `k == 0` or `alpha == 0` | Applies only `C = beta*C` to active output positions |
+| Mask is `false` | Does not read or write that C position |
+| Boolean mask is `nullptr` | Throws `std::invalid_argument` |
+| Workspace allocation fails | Throws `std::bad_alloc` |
+| FP16 deferred-output size overflows | Throws `std::overflow_error` |
+
+The interface does not check A, B, or C for null and cannot validate storage capacity.
+
+## Memory Overlap
+
+A and B are read-only, but they must not overlap writable C in a way that destroys input that has not yet been consumed:
+
+```cpp
+// Unsafe: writes to C may destroy future A input.
+yt::blas::sgemm_rowmajor(A, B, A, m, n, k);
+```
+
+Use a temporary output and copy it back when in-place semantics are required.
+
+## Implementation Architecture
+
+GEMM uses BLIS-style packing, cache blocking, and a fixed microkernel:
+
+```text
+sgemm / hgemm / gemm
+          │
+          ▼
+dimensions, alpha/beta, masks, strides
+          │
+          ▼
+nc / kc / mc cache blocking
+          │
+          ├── pack A: arbitrary strides ──► [kc][MR]
+          └── pack B: arbitrary strides ──► [kc][NR]
+                                │
+                                ▼
+                    AVX2/FMA FP32 microkernel
+                                │
+                                ▼
+                    edges, masks, storage writeback
+```
+
+The default physical specification is:
+
+```text
+MR = 6
+NR = 16
+vector lanes = 8
+```
+
+Typed packing converts storage to FP32, avoiding duplicated microkernels for each `float`/`float16` combination. Masked and unmasked GEMM share the same frame.
+
+Ordinary and grouped convolution reuse the packed-panel ABI and physical microkernel. Convolution has its own input-panel generator for padding, stride, dilation, and groups, so it does not enter the complete public GEMM frame.
+
+## See Also
+
+- [BLAS Overview](./overview.mdx)
+- [Level-1: Vector Operations](./level1.mdx)
+- [Level-2: Matrix-Vector Operations](./level2.mdx)
+- [YTensor Matrix Multiplication](../YTensor/math/matmul.mdx)
+- [Convolution](../function/convolution.mdx)

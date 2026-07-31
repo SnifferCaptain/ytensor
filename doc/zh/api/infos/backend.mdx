@@ -8,7 +8,7 @@
 enum class MatmulBackend {
     Naive = 0,  // 朴素实现，无依赖
     Eigen = 1,  // Eigen 库实现
-    AVX2 = 2    // 自定义 AVX2+FMA 实现
+    YBLAS = 2   // YTensor 自研 BLAS 实现
 };
 ```
 
@@ -16,8 +16,8 @@ enum class MatmulBackend {
 
 ```cpp
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen
 #else
@@ -26,14 +26,21 @@ static constexpr MatmulBackend defaultMatmulBackend =
 ;
 ```
 
-优先级：AVX2 > Eigen > Naive
+优先级：YBLAS > Eigen > Naive
 
 ## 编译宏
 
 | 宏 | 说明 |
 | --- | --- |
 | `YT_USE_EIGEN` | 启用 Eigen 后端 |
-| `YT_USE_AVX2` | 启用 AVX2 后端 |
+| `YT_USE_YBLAS` | 启用 YBLAS 后端 |
+| `YT_USE_AVX2` | 启用当前 YBLAS 使用的 AVX2+FMA 物理内核 |
+
+YBLAS 当前只有 AVX2+FMA 物理内核，因此 `YT_USE_YBLAS` 默认跟随 `YT_USE_AVX2`。
+`YT_USE_AVX2` 根据编译器的 AVX2/FMA feature macro 自动检测；可以显式定义为 `0` 以禁用，
+但不能只定义为 `1` 而不启用对应编译选项。
+
+`MatmulBackend` 参数表示后端偏好。当前 dtype 或构建配置不受指定后端支持时，会回退到可用实现。
 
 ## 后端性能与选择
 

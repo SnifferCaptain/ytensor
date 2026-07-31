@@ -16,10 +16,14 @@
 #include "include/utils/parallel_for.hpp"
 #include "include/type/type_dispatch.hpp"
 
-// AVX2 kernel
-#include "include/blas/avx2/hgemm.hpp"
-#include "include/blas/avx2/sgemm.hpp"
-#include "include/blas/avx2/sgemv.hpp"
+// YBLAS
+#include "include/blas/context.hpp"
+#include "include/blas/level1.hpp"
+#include "include/blas/level1f.hpp"
+#include "include/blas/level2.hpp"
+#include "include/blas/pack.hpp"
+#include "include/blas/level3.hpp"
+#include "include/blas/attention.hpp"
 
 // Backend switch: define YT_USE_LIB to use precompiled runtime backend.
 

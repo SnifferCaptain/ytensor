@@ -1,0 +1,223 @@
+# YBLAS
+
+YBLAS is YTensor's CPU linear algebra implementation, exposed through the `yt::blas` namespace. It
+operates on raw pointers, strided views, and custom operator storage, providing vector, matrix-vector,
+and matrix-matrix operations with `float`, `float16`, arbitrary element strides, and multithreaded GEMM.
+
+:::tip
+If your inputs are already `YTensor` objects, prefer [`matmul`](../YTensor/math/matmul.mdx). The tensor API handles shape validation, batch broadcasting, backend selection, and runtime dtype dispatch. Call `yt::blas` directly when implementing a low-level operator, integrating external memory, or controlling the physical layout explicitly.
+:::
+
+## Requirements
+
+The current YBLAS physical kernels are available when the compiler target enables both AVX2 and FMA:
+
+```cpp
+#include "ytensor.hpp"
+```
+
+For GCC or Clang, add:
+
+```bash
+-mavx2 -mfma
+```
+
+Add OpenMP only when parallel execution is required:
+
+```bash
+-fopenmp
+```
+
+:::warning
+Do not define AVX2/FMA feature macros without enabling the matching compiler target. Direct `yt::blas` calls do not fall back to Naive or Eigen. Use `YTensor::matmul` or provide your own fallback when the program must run across instruction sets.
+:::
+
+## Choosing an Interface
+
+| Operation | Recommended interface | Documentation |
+| --- | --- | --- |
+| Vector dot product | `sdot`, `hdot` | [Level-1](./level1.mdx) |
+| Matrix-vector product `A * x` | `gemv_col` | [Level-2](./level2.mdx) |
+| Row-vector matrix product `x * B` | `gemv_row` | [Level-2](./level2.mdx) |
+| Rank-1 update `x * yᵀ` | `ger`, `sger`, `hger` | [Level-2](./level2.mdx) |
+| Dense row-major matrix product | `sgemm_rowmajor` | [Level-3](./level3.mdx) |
+| Arbitrary-stride matrix product | `sgemm`, `hgemm` | [Level-3](./level3.mdx) |
+| Update selected output positions | `sgemm_masked` | [Level-3](./level3.mdx) |
+| Compute one attention head inside a low-level operator | `flash_attention` | [SDPA](../function/fused.mdx#scaleddotproductattention) |
+| Tensor or batched matrix product | `YTensor::matmul` | [Matrix Multiplication](../YTensor/math/matmul.mdx) |
+
+## Quick Start
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    float x[] = {1.0f, 2.0f, 3.0f};
+    float y[] = {4.0f, 5.0f, 6.0f};
+
+    float dot = yt::blas::sdot(x, y, 3);
+    std::cout << dot << '\n';  // 32
+
+    // A is 2x3, B is 3x2, and C is 2x2. All are dense row-major.
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+    float B[] = {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f
+    };
+    float C[4];
+
+    yt::blas::sgemm_rowmajor(A, B, C, 2, 2, 3);
+
+    std::cout << C[0] << ", " << C[1] << '\n';  // 22, 28
+    std::cout << C[2] << ", " << C[3] << '\n';  // 49, 64
+}
+```
+
+The BLAS interface does not own A, B, or C and cannot infer shape from a pointer.
+
+## Understanding Strides
+
+Every stride is measured in elements, not bytes. A matrix element is addressed as:
+
+```text
+matrix(row, column) =
+    base[row * row_stride + column * column_stride]
+```
+
+For shape `[rows, columns]`:
+
+| Layout | `row_stride` | `column_stride` |
+| --- | ---: | ---: |
+| Dense row-major | `columns` | `1` |
+| Dense column-major | `1` | `rows` |
+| Transposed view of a row-major matrix | `1` | original `columns` |
+
+A dense row-major `2 x 3` matrix has `row_stride = 3` and `column_stride = 1`. The same storage can be viewed as its `3 x 2` transpose without copying by using:
+
+```text
+row_stride = 1
+column_stride = 3
+```
+
+Vector increments follow the same rule. `incx = 2` advances by two elements. Negative strides are supported, but the pointer must already refer to the first logical element:
+
+```cpp
+float x[] = {1.0f, 2.0f, 3.0f};
+
+// Logical vector: {3, 2, 1}
+const float* reversed = x + 2;
+int64_t incx = -1;
+```
+
+## Storage and Precision
+
+| Interface | Input/output storage | Computation |
+| --- | --- | --- |
+| `sdot`, `sgemm`, `sger`, and related wrappers | `float` | FP32 |
+| `hdot` | `float16` | FP32 accumulation, returns `float` |
+| `hgemv`, `hger`, `hgemm`, and related wrappers | `float16` | FP32 computation, then FP16 output |
+| Typed `gemm` | A/B/C independently use `float` or `float16` | FP32 |
+
+FP16 GEMM converts the output only after the complete K reduction. It does not round back to FP16 after each K block.
+
+## `alpha` and `beta`
+
+GEMV, GER, and GEMM use:
+
+```text
+output = beta * output + alpha * result
+```
+
+| Goal | `alpha` | `beta` |
+| --- | ---: | ---: |
+| Replace output | `1` | `0` |
+| Accumulate into output | `1` | `1` |
+| Scale the product and replace output | custom | `0` |
+
+With `beta == 0`, the mathematical result does not depend on the previous output. FP32 GEMM also avoids reading it. The pointed-to objects and storage must still be valid. See [Level-2](./level2.mdx) for the FP16 Level-2 staging behavior.
+
+## Thread Configuration
+
+YBLAS is serial by default. Configure its process-wide thread count before starting the workload:
+
+```cpp
+yt::blas::set_num_threads(4);
+yt::blas::sgemm_rowmajor(A, B, C, m, n, k);
+```
+
+```cpp
+int yt::blas::default_num_threads();
+void yt::blas::set_num_threads(int n);
+int yt::blas::get_num_threads();
+```
+
+- `default_num_threads()` reports an environment recommendation but does not enable threading.
+- `set_num_threads(n)` clamps values below `1` to `1`.
+- Thread count and the default context are process-wide state. Configure them before worker threads start.
+- Parallel execution can be slower for small matrices; benchmark the actual workload.
+
+## Caller Responsibilities
+
+Before calling `yt::blas` directly, ensure that:
+
+1. every pointer and storage range is valid for the supplied shape and strides;
+2. strides are expressed in elements;
+3. a negative-stride pointer refers to the first logical element;
+4. A or B does not overlap writable C in a way that destroys future input;
+5. `m`, `n`, and `k` match the physical storage;
+6. both the CPU and compiler target support AVX2/FMA.
+
+These interfaces do not perform tensor-level shape, dtype, backend, or alias validation. Use the tensor API when those conditions cannot be proven at the call site.
+
+## Architecture Overview
+
+YBLAS uses BLIS-style layering for the subset required by the project:
+
+```text
+YTensor::matmul                     scaledDotProductAttention
+       │                                      │
+       ▼                                      ▼
+strided: shape/layout/backend       function: broadcast/mask/backend
+       │                                      │
+       ├── Naive                              ├── MATH
+       ├── Eigen                              └── FLASH
+       └──────────────┐                           │
+                      ▼                           ▼
+          stable YBLAS operations and extensions ◄── direct yt::blas calls
+                      │
+          ┌───────────┴────────────┐
+          ▼                        ▼
+    Level-1/2/3                 attention
+  vector, GEMV, GEMM      tiled prefill / decode GEMV
+          │                        │
+          └───────────┬────────────┘
+                      ▼
+           YBLAS physical-kernel selection
+                      │
+                      ▼
+             current: AVX2/FMA kernels
+```
+
+- `strided` selects a logical backend without depending on AVX2 tiles, register widths, or other ISA details.
+- `function` owns SDPA tensor semantics and logical backend selection without reading YBLAS tile or register fields.
+- YBLAS selects physical kernels within its own boundary. Adding another ISA does not add another `MatmulBackend`.
+- Level-2 composes GEMV and GER from Level-1v/1f primitives.
+- Level-3 packs arbitrary-stride A/B matrices into fixed panels before invoking GEMM microkernels.
+- Attention is a non-standard YBLAS extension. Prefill reuses packing and GEMM microkernels while fusing online softmax, masking, and V accumulation; decode reuses GEMV.
+- A fully hidden score tile is skipped before the QK microkernel, so each physical backend must preserve the mask tile-query contract.
+- Ordinary and grouped convolution reuse the packed-panel ABI and physical microkernel, but convolution is not a BLAS Level operation.
+
+This layering explains performance and extension boundaries. Most users should not call packing functions or physical microkernels directly.
+
+## See Also
+
+- [Level-1: Vector Operations](./level1.mdx)
+- [Level-2: Matrix-Vector Operations](./level2.mdx)
+- [Level-3: Matrix-Matrix Operations](./level3.mdx)
+- [YTensor Matrix Multiplication](../YTensor/math/matmul.mdx)
+- [Convolution](../function/convolution.mdx)

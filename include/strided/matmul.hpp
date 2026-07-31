@@ -46,7 +46,7 @@ YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> masked_matmul(
 );
 
 /// @brief 使用坐标谓词 func 计算 typed 掩码矩阵乘法。
-/// @details func 至少支持 `bool(int row, int col)`；可选 tile 谓词接口由 AVX2 backend 按 concept 检测。
+/// @details func 至少支持 `bool(int row, int col)`；可选 tile 谓词接口由 YBLAS backend 按 concept 检测。
 /// @note backend 是偏好而非强制要求；不支持当前 dtype/layout 时会安全回退。
 template <typename T, int leftDim, int rightDim, typename Func>
 requires(!yt::utils::is_ytensor_v<std::decay_t<Func>>)

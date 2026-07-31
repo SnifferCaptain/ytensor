@@ -1,11 +1,22 @@
-#include <string>
 #include "ymodel2.hpp"
-#include <iostream>
-#include <cstring>
-#include <random>
+
 #include <algorithm>
+#include <cstring>
+#include <iostream>
+#include <queue>
+#include <random>
+#include <string>
 
 namespace ymodel2 {
+
+static yt::YTensor<bool, 2> make_causal_mask(int query_len, int kv_len) {
+    yt::YTensor<bool, 2> mask(query_len, kv_len);
+    int start = kv_len - query_len;
+    for (int qi = 0; qi < query_len; ++qi)
+        for (int ki = 0; ki < kv_len; ++ki)
+            mask.at(qi, ki) = ki <= start + qi;
+    return mask;
+}
 
 template<int dim>
 yt::YTensor<float, dim> toFloat(const yt::YTensorBase& base, bool transpose = false) {
@@ -56,7 +67,6 @@ void KVCache::init(int batch, int max_length, int head_dim, bool transpose) {
     }else{
         buffer.reserve({batch, 2, max_length, head_dim}); // [b, 2, l, hd]
     }
-    buffer.fill(0.0f);  // 其实这是不必要的
 }
 
 void KVCache::append(const yt::YTensor<float, 4>& new_kv) {
@@ -197,16 +207,11 @@ yt::YTensor<float, 3> PEGA2::forward(
     auto qkv = yt::function::linear(yt::function::linear(x, qkv_0), qkv_1);
 
     // 将qkv计算结果拆分为qpe, q, kpe, kv四部分，分别表示 带位置嵌入q，不带位置嵌入q，带位置嵌入k，不带位置嵌入的共享kv
-    int qpe_size = hh * hd, q_size = hh * hd, kpe_size = hd, kv_size = hd;
-    auto qpe_flat = qkv.slice(-1, 0, qpe_size);
-    auto q_flat = qkv.slice(-1, qpe_size, qpe_size + q_size);
-    auto kpe_flat = qkv.slice(-1, qpe_size + q_size, qpe_size + q_size + kpe_size);
-    auto kv_flat = qkv.slice(-1, qpe_size + q_size + kpe_size, qpe_size + q_size + kpe_size + kv_size);
-
-    auto qpe = qpe_flat.reshape(b, l, hh, hd).permute(0, 2, 1, 3);  // 拆分多头，使用GQA
-    auto q = q_flat.reshape(b, l, hh, hd).permute(0, 2, 1, 3);
-    auto kpe = kpe_flat.reshape(b, l, 1, hd).permute(0, 2, 1, 3);
-    auto kv = kv_flat.reshape(b, l, 1, hd).permute(0, 2, 1, 3);
+    auto qkv_heads = qkv.reshape(b, l, 2 * hh + 2, hd);
+    auto qpe = qkv_heads.slice(2, 0, hh).permute(0, 2, 1, 3);
+    auto q = qkv_heads.slice(2, hh, 2 * hh).permute(0, 2, 1, 3);
+    auto kpe = qkv_heads.slice(2, 2 * hh, 2 * hh + 1).permute(0, 2, 1, 3);
+    auto kv = qkv_heads.slice(2, 2 * hh + 1, 2 * hh + 2).permute(0, 2, 1, 3);
 
     // 对位嵌入部分进行RoPE嵌入
     ops::rope(qpe, kpe, cos, sin);
@@ -216,12 +221,15 @@ yt::YTensor<float, 3> PEGA2::forward(
     auto kv_full = yt::YTensor<float, 4>(kpe.concat(kv, 1));
     
     // 使用KVCache，先追加新的kv，然后获取完整的kv序列
+    bool cache_was_empty = kv_cache && kv_cache->empty();
     if (kv_cache) {
         kv_cache->append(kv_full);
     }
     
     yt::YTensor<float, 4> kv_out;
-    if (kv_cache && !kv_cache->empty()) {
+    if (cache_was_empty && l <= kv_cache->max_len) {
+        kv_out = kv_full;
+    } else if (kv_cache && !kv_cache->empty()) {
         // 从cache获取完整的kv（包含刚追加的）
         kv_out = kv_cache->get();
     } else {
@@ -240,18 +248,20 @@ yt::YTensor<float, 3> PEGA2::forward(
     // [b, h, l, hd] -> [b, 2, hh, l, hd]对齐
     yt::YTensor<float, 5> q_5d = q_full.reshape(b, 2, hh, l, hd);
     
-    // 获取causal mask
-    yt::YTensor<bool, 2> causal_mask = kv_cache->get_mask(l);
-    
-    // 使用 scaledDotProductAttention完成标准注意力计算。
-    // q_5d, k_5d, v_5d: [b, 2, hh, l, hd]
-    auto attn_5d = yt::function::scaledDotProductAttention(
-        q_5d, k_5d, v_5d, 
-        rsqrt_dim,  // scale
-        &causal_mask,
-        nullptr,
-        yt::function::sdpaBackend::FLASH_AVX2
-    );
+    yt::YTensor<float, 5> attn_5d;
+    if (l == 1) {
+        attn_5d = yt::function::scaledDotProductAttention(
+            q_5d, k_5d, v_5d, rsqrt_dim,
+            static_cast<yt::YTensor<bool, 2>*>(nullptr), nullptr,
+            yt::function::sdpaBackend::FLASH
+        );
+    } else {
+        auto causal_mask = kv_cache ? kv_cache->get_mask(l) : make_causal_mask(l, kv_out.shape(2));
+        attn_5d = yt::function::scaledDotProductAttention(
+            q_5d, k_5d, v_5d, rsqrt_dim, &causal_mask, nullptr,
+            yt::function::sdpaBackend::FLASH
+        );
+    }
 
     // 直接在 5D 上进行 gate 操作，避免拷贝
     // 第二个轴上的第一个是带位置嵌入的注意力输出，第二个是不带位置嵌入的注意力输出
@@ -314,7 +324,7 @@ bool YModel2::load(const std::string& path) {
         useTranspose = true;
     }
     
-    if (io.load(base, "model.embed_tokens.weight")) { embed = toFloat<2>(base, useTranspose); loaded_count++; }
+    if (io.load(base, "model.embed_tokens.weight")) { embed = toFloat<2>(base, false); loaded_count++; }
     
     for (int i = 0; i < config.num_layers; ++i) {
         std::string p = "model.layers." + std::to_string(i) + ".";
@@ -328,9 +338,7 @@ bool YModel2::load(const std::string& path) {
     }
     if (io.load(base, "model.norm.weight")) { norm.weight = toFloat<1>(base); loaded_count++; }
     
-    // 尝试加载 lm_head（如果存在）
-    if (io.load(base, "lm_head.weight")) {
-        // lm_head 与 embed_tokens 共享权重，这里只是验证文件中有这个张量
+    if (std::find(tensor_names.begin(), tensor_names.end(), "lm_head.weight") != tensor_names.end()) {
         loaded_count++;
         std::cout << "  lm_head.weight found in file (shared with embed_tokens)" << std::endl;
     }
@@ -346,26 +354,22 @@ yt::YTensor<float, 3> YModel2::forward(const yt::YTensor<int, 2>& ids, std::vect
     int start = (kv_caches && !kv_caches->empty() && !(*kv_caches)[0].empty()) 
                 ? (*kv_caches)[0].get_global_position() : 0;
     
-    // 安全检查：如果全局位置超出预计算范围，回退到使用相对位置
-    if (start + l > config.max_position_embeddings) {
-        // 回退到相对位置（从kv cache当前长度开始）
-        start = (kv_caches && !kv_caches->empty()) ? (*kv_caches)[0].cur_len : 0;
-        // 如果仍然超出，则从0开始（极端情况，通常不应该发生）
-        if (start + l > config.max_position_embeddings) {
-            start = 0;
-        }
+    int required_positions = start + l;
+    if (required_positions > rope.cos.shape(0)) {
+        int expanded_positions = std::max(required_positions, rope.cos.shape(0) * 2);
+        rope.precompute(config.head_dim, expanded_positions, config.rope_theta);
     }
     
     int hidden = config.hidden_size;
     
     yt::YTensor<float, 3> x(b, l, hidden);
-    #pragma omp simd collapse(2)
+    #pragma omp parallel for collapse(2) proc_bind(close)
     for (int i = 0; i < b; ++i) {
         for (int j = 0; j < l; ++j) {
             // 手动词嵌入
             // embed:[vocab_size, hidden]
-            auto tokenEmbed = embed.slice(0, ids.at(i, j), ids.at(i, j) + 1).contiguous();
-            std::memcpy(&x.at(i, j, 0), tokenEmbed.data(), hidden * sizeof(float));
+            int token = ids.at(i, j);
+            std::memcpy(&x.at(i, j, 0), embed.data() + token * embed.stride_(0), hidden * sizeof(float));
         }
     }
     
@@ -426,41 +430,53 @@ std::vector<int> YForCausalLM2::generate(const std::vector<int>& new_ids, int ma
     static std::mt19937 rng(42);
     
     auto sample_token = [&](const yt::YTensor<float, 2>& logits) -> int {
-        auto probs = yt::function::softmax(logits, -1);
         constexpr int k = 20;
-        int vocab_size = probs.shape(1);
-        std::vector<std::pair<float, int>> prob_idx(vocab_size);
+        int vocab_size = logits.shape(1);
+        int top_k = std::min(k, vocab_size);
+        std::priority_queue<std::pair<float, int>,
+            std::vector<std::pair<float, int>>, std::greater<std::pair<float, int>>> heap;
         for (int i = 0; i < vocab_size; ++i) {
-            prob_idx[i] = {probs.at(0, i), i};
+            std::pair<float, int> candidate{logits.at(0, i), i};
+            if (static_cast<int>(heap.size()) < top_k) heap.push(candidate);
+            else if (candidate.first > heap.top().first) {
+                heap.pop();
+                heap.push(candidate);
+            }
         }
-        std::partial_sort(prob_idx.begin(), prob_idx.begin() + k, prob_idx.end(),
-            [](const auto& a, const auto& b) { return a.first > b.first; });
-        float sum = 0;
-        for (int i = 0; i < k; ++i) sum += prob_idx[i].first;
+        std::vector<std::pair<float, int>> prob_idx(top_k);
+        for (int i = top_k - 1; i >= 0; --i) {
+            prob_idx[i] = heap.top();
+            heap.pop();
+        }
+        float max_logit = prob_idx[0].first;
+        float sum = 0.0f;
+        for (int i = 0; i < top_k; ++i) {
+            prob_idx[i].first = std::exp(prob_idx[i].first - max_logit);
+            sum += prob_idx[i].first;
+        }
         std::uniform_real_distribution<float> dist(0.0f, sum);
         float r = dist(rng);
         float cumsum = 0;
-        for (int i = 0; i < k; ++i) {
+        for (int i = 0; i < top_k; ++i) {
             cumsum += prob_idx[i].first;
             if (r <= cumsum) return prob_idx[i].second;
         }
         return prob_idx[0].second;
     };
     
-    // 循环KV缓存会自动覆盖旧数据，无需手动截断
     int new_len = static_cast<int>(new_ids.size());
-    int max_ctx = get_max_context_len();
-    
-    if (new_len > max_ctx) {
-        std::cerr << "[Warning] Input length (" << new_len << ") exceeds max context length (" 
-                  << max_ctx << "), only last " << max_ctx << " tokens will be used\n";
+    if (new_len == 0 || max_tokens <= 0) return out;
+
+    yt::YTensor<float, 2> logits;
+    int consumed = 0;
+    while (consumed < new_len) {
+        int remaining = get_max_context_len() - get_kv_cache_len();
+        int chunk = remaining > 0 ? std::min(remaining, new_len - consumed) : 1;
+        yt::YTensor<int, 2> input(1, chunk);
+        std::copy(new_ids.begin() + consumed, new_ids.begin() + consumed + chunk, input.data());
+        logits = forward(input);
+        consumed += chunk;
     }
-    
-    // prefill新增的tokens（循环KV cache会自动处理溢出）
-    yt::YTensor<int, 2> input(1, new_len);
-    std::copy(new_ids.begin(), new_ids.end(), input.data());
-    
-    auto logits = forward(input);  // KVCache在forward内部自动更新
     int next = sample_token(logits);
     
     if (next == eos) {
@@ -470,20 +486,27 @@ std::vector<int> YForCausalLM2::generate(const std::vector<int>& new_ids, int ma
     out.push_back(next);
     if (on_token) on_token(next);
     
-    // 自回归生成（循环KV cache会自动处理溢出）
+    bool final_token_cached = false;
     for (int step = 1; step < max_tokens; ++step) {
         yt::YTensor<int, 2> nid(1, 1);
         nid.at(0, 0) = next;
-        
+
         auto sl = forward(nid);
+        final_token_cached = true;
         next = sample_token(sl);
-        
+
         if (next == eos) {
             break;
         }
-        
+
         out.push_back(next);
+        final_token_cached = false;
         if (on_token) on_token(next);
+    }
+    if (!out.empty() && !final_token_cached) {
+        yt::YTensor<int, 2> final_input(1, 1);
+        final_input.at(0, 0) = out.back();
+        (void)forward(final_input);
     }
     return out;
 }

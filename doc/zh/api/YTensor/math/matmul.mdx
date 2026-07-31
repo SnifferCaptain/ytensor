@@ -23,14 +23,14 @@ YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> matmul(
 | 参数名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `other` | `const YTensor<T, dim1>&` | - | 右操作数张量 |
-| `backend` | `MatmulBackend` | `defaultMatmulBackend` | 矩阵乘法后端 |
+| `backend` | `MatmulBackend` | `defaultMatmulBackend` | 矩阵乘法后端偏好；不支持时回退 |
 
 ### 核心功能描述
 
 对张量的最后两个维度执行矩阵乘法。
 *   支持自动广播：前导维度（batch dimensions）会自动广播。
 *   支持批量操作：一次性计算多个矩阵乘积。
-*   后端优化：自动选择最佳后端（AVX2, Eigen, Naive）。
+*   后端选择：编译配置决定默认偏好（YBLAS、Eigen 或 Naive），当前 dtype 或 layout 不受所选后端支持时安全回退。
 
 ### 返回值
 
@@ -171,9 +171,9 @@ YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
 - 其余位置不参与乘加，保持 `maskedValue`。
 - 广播规则与 `matmul` 一致，掩码仅作用于最后两个维度的输出平面。
 
-### AVX2 谓词优化（可选）
+### YBLAS 谓词优化（可选）
 
-当使用 `Func` 版本并走 AVX2 后端时，若谓词对象额外提供以下方法，可进行块级剪枝：
+当使用 `Func` 版本并走 YBLAS 后端时，若谓词对象额外提供以下方法，可进行块级剪枝：
 
 ```cpp
 bool tileAllTrue(int row0, int col0, int mr, int nr) const;
@@ -258,7 +258,7 @@ std::cout << a.at(0, 1, 2);  // 输出 999.0
 
 ## 矩阵乘法后端
 
-YTensor 支持三种矩阵乘法后端，可在编译时或运行时选择。
+YTensor 支持三种矩阵乘法后端。编译配置决定默认偏好，调用方也可以显式传入偏好；该参数不是强制执行要求，不受支持的 dtype、layout 或构建组合会回退到可用实现。
 
 ### MatmulBackend 枚举
 
@@ -266,7 +266,7 @@ YTensor 支持三种矩阵乘法后端，可在编译时或运行时选择。
 enum class MatmulBackend {
     Naive = 0,  // 朴素三重循环实现
     Eigen = 1,  // Eigen 库实现
-    AVX2 = 2    // AVX2+FMA 指令优化
+    YBLAS = 2   // YTensor 自研 BLAS 实现
 };
 ```
 
@@ -274,18 +274,18 @@ enum class MatmulBackend {
 
 | 后端 | 依赖 | 性能 | 支持类型 | 适用场景 |
 |------|------|------|---------|---------|
-| **Naive** | 无 | 最慢 | 所有类型 | 开发调试、非算术类型 |
-| **Eigen** | Eigen 库 | 快 | 算术类型 | 通用场景、跨平台 |
-| **AVX2** | AVX2+FMA CPU | 最快 | `float` | x86_64 生产环境 |
+| **Naive** | 无 | 基准实现 | 所有类型 | 兼容、调试、非算术类型 |
+| **Eigen** | Eigen 库 | Eigen 优化实现 | 算术类型 | 通用场景、跨平台 |
+| **YBLAS** | 当前需要支持 AVX2+FMA 的 CPU 与编译目标 | blocked SIMD 实现 | `float`、`float16` | x86_64 矩阵计算 |
 
 ### 默认后端选择
 
-编译时自动选择最优后端：
+编译时按以下优先级选择默认偏好后端：
 
 ```cpp
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen
 #else
@@ -294,86 +294,55 @@ static constexpr MatmulBackend defaultMatmulBackend =
 ;
 ```
 
-**优先级**：AVX2 > Eigen > Naive
+**优先级**：YBLAS > Eigen > Naive
 
-### 手动指定后端
+### 手动指定后端偏好
 
 ```cpp
 auto a = YTensor<float, 2>::randn(100, 100);
 auto b = YTensor<float, 2>::randn(100, 100);
 
-// 使用 Naive 后端
+// 请求 Naive 后端
 auto c1 = a.matmul(b, yt::info::MatmulBackend::Naive);
 
-// 使用 Eigen 后端
+// 请求 Eigen 后端；当前构建或布局不支持时会回退
 auto c2 = a.matmul(b, yt::info::MatmulBackend::Eigen);
 
-// 使用 AVX2 后端
-auto c3 = a.matmul(b, yt::info::MatmulBackend::AVX2);
+// 请求 YBLAS 后端；当前 dtype 或构建不支持时会回退
+auto c3 = a.matmul(b, yt::info::MatmulBackend::YBLAS);
 ```
 
 ---
 
 ## 性能考虑
 
-### 后端性能对比
+不同后端的实际性能取决于 shape、storage layout、线程数、编译器和 CPU。本文不提供脱离当前 benchmark 环境的固定 GFLOPS 或加速倍数。
 
-基于 512×512 矩阵乘法的基准测试（Intel i7-10700K）：
+### 布局支持与复制成本
 
-| 后端 | 时间 (ms) | 相对性能 | GFLOPS |
-|------|----------|---------|--------|
-| Naive | ~1850 | 1.0x | 0.14 |
-| Eigen | ~12.5 | 148x | 21.5 |
-| AVX2 | ~8.3 | 223x | 32.4 |
-
-### 内存布局
-
-矩阵乘法假设**行主序（Row-major）**：
+矩阵乘法支持任意元素 stride，转置 view 不需要先复制为连续张量：
 
 ```cpp
 auto a = YTensor<float, 2>::randn(3, 4);  // 行主序，连续存储
 auto b = YTensor<float, 2>::randn(4, 5);
-auto c = a.matmul(b);  // 高效
+auto c = a.matmul(b);
 
-auto a_t = a.transpose(0, 1);  // 非连续（列主序）
-auto c2 = a_t.matmul(b);  // 较慢
+auto a_t = a.transpose(0, 1);  // 非连续 view
+auto b2 = YTensor<float, 2>::randn(3, 5);
+auto c2 = a_t.matmul(b2);       // 无需先调用 contiguous()
 ```
 
-### 内存布局与主序影响
+`transpose()` 只创建 view；`contiguous()` 则分配新 storage 并复制全部元素。连续化可能改善后续访问局部性，但也会增加一次完整复制，因此不能仅凭“非连续”就判断它一定更快。
 
-矩阵乘法的性能与矩阵的内存布局（主序）密切相关。不同后端对主序的敏感度不同：
+### 不同后端的布局行为
 
 | 后端 | 左矩阵主序 | 右矩阵主序 | 性能说明 |
 |------|----------|----------|----------|
-| **Naive** | 行主序 | 列主序 | 此内存布局下稳定达到 ~20 GFlops |
-| **Naive** | 其他 | 其他 | 内存访问模式不佳，性能下降 |
-| **Eigen** | 行主序 | 行主序 | 最佳性能（~75 GFlops） |
-| **Eigen** | 其他 | 其他 | 性能显著下降（内存排布不利于计算） |
-| **AVX2** | 任意 | 任意 | **主序不敏感**，稳定高性能（~95 GFlops） |
+| **Naive** | 任意 | 任意 | 直接按 stride 访问；局部性由具体布局决定 |
+| **Eigen** | 受适配路径支持的布局 | 受适配路径支持的布局 | 性能取决于 Eigen 映射与访问模式 |
+| **YBLAS** | 任意 | 任意 | 直接从源 stride packing；无需先转置整个矩阵 |
 
-:::tip
-**关于主序的建议**
-
-- 如果使用 **Eigen** 后端，确保两个矩阵都是行主序（连续内存），否则性能可能远不如预期
-- **Naive** 后端在左矩阵行主序、右矩阵列主序时性能最佳，在这种情况下甚至可能比 Eigen 主序不合适的情况更快
-- **AVX2** 后端完全不挑主序，始终能提供稳定的高性能
-:::
-
-### 推荐做法
-
-```cpp
-// ❌ 低效：转置后非连续
-auto a = YTensor<float, 2>::randn(1000, 1000);
-auto a_t = a.transpose(0, 1);
-auto b = YTensor<float, 2>::randn(1000, 1000);
-auto c = a_t.matmul(b);  // 非连续内存访问
-
-// ✅ 高效：先连续化
-auto a = YTensor<float, 2>::randn(1000, 1000);
-auto a_t = a.transpose(0, 1).contiguous();  // 复制为连续内存
-auto b = YTensor<float, 2>::randn(1000, 1000);
-auto c = a_t.matmul(b);  // 连续内存访问
-```
+这些是布局支持合同，不代表某一布局在所有 shape 和 CPU 上都更快。具体选择见本文末尾的“最佳实践”。
 
 ---
 
@@ -388,7 +357,8 @@ static_assert(HAVE_ADD<T> && HAVE_MUL<T>,
 
 ### 支持的类型
 
-- ✅ 所有算术类型：`float`, `double`, `int`, `int64_t` 等
+- ✅ 所有算术类型：`float`、`double`、`int`、`int64_t` 等
+- ✅ YTensor 内置低精度类型，如 `float16`、`bfloat16` 和 float8
 - ✅ 自定义类型（如果实现了 `operator+` 和 `operator*`）
 - ❌ 不支持加法或乘法的类型（编译错误）
 
@@ -422,7 +392,7 @@ auto b = YTensor<float, 2>::randn(4, 7);  // (4, 7)
 
 try {
     auto c = a.matmul(b);
-} catch (const std::runtime_error& e) {
+} catch (const std::invalid_argument& e) {
     // 错误：左张量的最后一个维度 (5) != 右张量的倒数第二个维度 (4)
     std::cout << e.what() << std::endl;
 }
@@ -455,7 +425,7 @@ auto c = a.matmul(b);
 | 特性 | NumPy/PyTorch | YTensor |
 |------|--------------|---------|
 | 运算符 | `@` 或 `matmul()` | 仅 `matmul()` |
-| 后端选择 | 自动（BLAS） | 可手动指定 |
+| 后端选择 | 自动（BLAS） | 可手动指定偏好，必要时回退 |
 | GPU 支持 | ✅ (PyTorch) | ❌ |
 | 编译时优化 | ❌ | ✅ （维度） |
 
@@ -463,49 +433,79 @@ auto c = a.matmul(b);
 
 ## 最佳实践
 
-### 1. 批量操作优先
+### 1. 数据已有批次维度时，保留批量表达
 
 ```cpp
-// ❌ 低效：循环调用
+auto a = YTensor<float, 3>::randn(100, m, k);
+auto b = YTensor<float, 3>::randn(100, k, n);
+
+// 不推荐：拆出矩阵并逐次调度
+auto a_matrices = a.matView();
+auto b_matrices = b.matView();
 std::vector<YTensor<float, 2>> results;
 for (int i = 0; i < 100; ++i) {
-    auto a = getMatrix(i);
-    auto b = getMatrix(i + 1);
-    results.push_back(a.matmul(b));
+    results.push_back(
+        a_matrices.at(i).matmul(b_matrices.at(i))
+    );
 }
 
-// ✅ 高效：批量矩阵乘法
-auto a_batch = YTensor<float, 3>::stack(aList);  // (100, m, k)
-auto b_batch = YTensor<float, 3>::stack(bList);  // (100, k, n)
-auto c_batch = a_batch.matmul(b_batch);          // (100, m, n)
+// 推荐：让 matmul 保留批次语义和后端调度空间
+auto c = a.matmul(b);  // (100, m, n)
 ```
 
-### 2. 连续内存
+如果数据原本分散在多个独立 tensor 中，`stack()` 自身需要组合并复制数据。不要只为了“批量”无条件 stack，应比较 stack 加一次批量计算与多次独立计算的总成本。
+
+所有 batch 共享同一个右矩阵时，直接使用广播，不要物化多份 B：
 
 ```cpp
-// ✅ 确保矩阵连续存储
-auto a = getTensor().contiguous();
-auto b = getTensor().contiguous();
-auto c = a.matmul(b);  // 最优性能
+auto a = YTensor<float, 3>::randn(100, m, k);
+auto b = YTensor<float, 2>::randn(k, n);
+auto c = a.matmul(b);  // b 广播到每个 batch
 ```
 
-### 3. 选择合适的后端
+### 2. 不要在每次乘法前无条件连续化
 
 ```cpp
-// 小矩阵：Naive 已足够
-if (m * n * k < 1000) {
-    c = a.matmul(b, MatmulBackend::Naive);
+auto view = getTensor().transpose(0, 1);
+
+// 单次使用：先直接计算，避免强制增加一次完整复制
+auto once = view.matmul(b);
+
+// 不推荐：在循环内反复复制同一个 view
+for (const auto& weight : weights) {
+    auto result = view.contiguous().matmul(weight);
 }
-// 大矩阵：使用 AVX2 或 Eigen
-else {
-    c = a.matmul(b);  // 使用默认最优后端
+
+// 如果 benchmark 证明连续布局对重复使用有收益，只复制一次
+auto prepared = view.contiguous();
+for (const auto& weight : weights) {
+    auto result = prepared.matmul(weight);
 }
 ```
+
+是否值得连续化取决于 view 的 stride、矩阵 shape、后端和复用次数。两种路径都合法，区别在于复制成本能否由后续复用摊薄。
+
+### 3. 默认使用自动偏好，只为稳定 workload 调优
+
+```cpp
+// 通常从默认偏好开始
+auto c = a.matmul(b);
+
+// 只有代表性 benchmark 证明更合适时才固定偏好
+auto tuned = a.matmul(
+    b,
+    yt::info::MatmulBackend::Eigen
+);
+```
+
+不要使用未经测量的固定阈值，例如仅凭 `m*n*k < 1000` 就强制选择 Naive。后端开销还取决于 batch、stride、dtype、线程数、编译器和 CPU。
 
 ---
 
 ## 相关内容
 
+- [BLAS 总览](../../blas/overview.mdx) - 裸指针线性代数接口的选型与使用条件
+- [BLAS Level-3](../../blas/level3.mdx) - GEMM 的 stride、精度、线程与 masked 输出
 - [算术运算](./arithmetic.mdx) - 逐元素运算
 - [广播操作](./broadcast.mdx) - 广播机制
 - [后端选择指南](../../guides/backend_selection.mdx) - 后端对比和选择

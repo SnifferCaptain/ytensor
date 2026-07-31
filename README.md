@@ -325,166 +325,48 @@ You can also use conversion scripts under `example/convert/` for partial format 
 
 ---
 
-## 🧠 Memory Storage Layer
-
-Starting from version `0.14`, tensor storage is wrapped by `YMemory` instead of being stored directly as a raw `shared_ptr<char[]>` member.
-
-- `YMemory` owns a linear byte storage handle and exposes `rawData()`, `get()`, `nbytes()`, and `device()`.
-- `YTensorBase` owns `_memory`, `_layout`, `_element_size`, and `_dtype`; active shape, stride, and offset metadata live only in `YLayout`.
-- Layout semantics and object construction remain in the tensor/layout owners, not in `YMemory`.
-- `device()` currently returns the storage device string such as `"cpu"`; no implicit cross-device synchronization is performed.
-
-This keeps the user-facing tensor API unchanged while preparing the storage layer for future device-specific backends.
-
----
-
-## 📦 Optional Precompiled Library
-
-Define `YT_USE_LIB=1` and link the library to reduce repeated compilation cost in large projects. API remains consistent with header-only mode.
-
-First build the library:
-
-```bash
-mkdir build && cd build
-cmake .. && make -j8
-```
-
-Library artifacts are output to `lib/bin/`. Define the macro and link the library when using:
-
-```cpp
-#define YT_USE_LIB 1
-#include "ytensor.hpp"
-```
-
-```bash
-# Linux link example
-g++ -std=c++20 -O2 -fopenmp main.cpp \
-  -I/path/to/ytensor -I/path/to/ytensor/lib/include \
-  -L/path/to/ytensor/lib/bin -Wl,-rpath,/path/to/ytensor/lib/bin \
-  -lytensor -lz -o main
-```
-
-> **Tip:** In library mode, use `YTensor<T>` instead of `YTensorBase` to get full support for custom types.
-
----
-
 ## File Structure
 
 ```tree
 ./
-├─ example/                                         | Example code
-│  ├─ convert/                                      | Data format conversion scripts
-│  │   ├─ __init__.py                               |
-│  │   ├─ numpy2yt.py                               | Convert numpy format to ytensor format [WIP]
-│  │   ├─ safetensors2yt.py                         | Convert safetensors format to ytensor format [WIP]
-│  │   └─ ytfile.py                                 | ytensor file class [WIP]
-│  ├─ qwen3/                                        | Qwen3 inference example
-│  │   ├─ CMakeLists.txt                            | Build configuration
-│  │   ├─ include/                                  |
-│  │   │   ├─ json.hpp                              | nlohmann JSON parser
-│  │   │   ├─ qwen3.hpp                             | Qwen3 model interface and inference wrapper declarations
-│  │   │   └─ tokenlizer.hpp                        | Tokenizer
-│  │   ├─ main.cpp                                  | Program entry
-│  │   ├─ model/                                    | Directory for model weights and tokenizer files
-│  │   │   ├─ config.json                           | Qwen3 model config file
-│  │   │   ├─ tokenizer.json                        | Tokenizer vocab file
-│  │   │   └─ tokenizer_config.json                 | Tokenizer config file
-│  │   └─ src/                                      | Source implementation directory
-│  │       ├─ qwen3.cpp                             | Qwen3 inference implementation
-│  │       └─ tokenlizer.cpp                        | Tokenizer implementation
-│  └─ ymodel2-s-2/                                  | ymodel2 language model inference example
-│      ├─ CMakeLists.txt                            |
-│      ├─ json.hpp                                  | nlohmann JSON parser
-│      ├─ main.cpp                                  | Main entry
-│      ├─ model/                                    | Stores model weights and tokenizer files
-│      │   ├─ tokenizer.json                        | Vocab file, must be downloaded from Hugging Face
-│      │   ├─ tokenizer_config.json                 | Tokenizer config, must be downloaded from Hugging Face
-│      │   └─ y2_sft_s-2.yt                         | Model weight file, must be downloaded from Hugging Face
-│      ├─ tokenlizer.cpp                            | Tokenizer implementation
-│      ├─ tokenlizer.hpp                            | Tokenizer header
-│      ├─ ymodel2.cpp                               | Model implementation ✨
-│      └─ ymodel2.hpp                               | Model header ✨
-├─ include/                                         | Header directory
-│  ├─ 3rd/                                          | Third-party deps
-│  │   └─ backward.hpp                              | Google stack tracing helper, optional, useful for debugging
-│  ├─ function/                                     | Functional submodules
-│  │   ├─ activation.hpp                            | Declarations for activation-related functions
-│  │   ├─ loss.hpp                                  | Declarations for loss functions
-│  │   ├─ normalization.hpp                         | Declarations for normalization-related functions
-│  │   └─ ops.hpp                                   | Declarations for generic operators and fused ops
-│  ├─ kernel/                                       | Kernel implementations
-│  │   ├─ avx2/                                     | AVX2 kernels
-│  │   │   ├─ flash_attention.hpp                   | Flash Attention kernel interface
-│  │   │   ├─ gemm_utils.hpp                        | AVX2 GEMM helper utilities
-│  │   │   ├─ hdot.hpp                              | Half-precision dot product kernel
-│  │   │   ├─ hgemm.hpp                             | Half-precision GEMM
-│  │   │   ├─ hgemv.hpp                             | Half-precision GEMV
-│  │   │   ├─ hger.hpp                              | Half-precision GER
-│  │   │   ├─ sdot.hpp                              | Single-precision dot product kernel
-│  │   │   ├─ sgemm.hpp                             | Single-precision GEMM
-│  │   │   ├─ sgemv.hpp                             | Single-precision GEMV
-│  │   │   ├─ sger.hpp                              | Single-precision GER
-│  │   ├─ broadcast.hpp                             | Broadcast ops
-│  │   ├─ memory_utils.hpp                          | Memory allocation
-│  │   ├─ parallel_for.hpp                          | Parallel loops
-│  │   └─ type_dispatch.hpp                         | Type dispatch helpers
-│  ├─ types/                                        | Type-related
-│  │   ├─ bfloat16.hpp                              | bfloat16 support
-│  │   └─ float_spec.hpp                            | Multiple float type support
-│  ├─ ytensor_base.hpp                              | YTensor base class
-│  ├─ ytensor_base_math.hpp                         | YTensor base math ops
-│  ├─ ytensor_concepts.hpp                          | Concepts/type checking
-│  ├─ ytensor_core.hpp                              | YTensor core class
-│  ├─ ytensor_function.hpp                          | Functional programming
-│  ├─ ytensor_extern_templates.hpp                  | Pre-instantiated template declarations
-│  ├─ ytensor_infos.hpp                             | Global settings info
-│  ├─ ytensor_io.hpp                                | File storage system
-│  ├─ ytensor_math.hpp                              | YTensor math ops
-│  ├─ ytensor_memory.hpp                            | Linear storage and device handle
-│  └─ ytensor_types.hpp                             | Type-related
-├─ lib/                                             | `YT_USE_LIB` precompiled backend
-│  ├─ bin/                                          | Library artifact dir (e.g., libytensor.so)
-│  ├─ CMakeLists.txt                                | Build config
-│  └─ src/                                          |
-│      └─ ytensor_library.cpp                       | Library implementation entry
-├─ single-header/                                   | Single-header version
-│  ├─ ytensor_single.hpp                            | Single-header YTensor with all features
-│  └─ packer.py                                     | Single-header packing script
-├─ src/                                             | Source implementation directory
-│  ├─ function/                                     | Functional implementations
-│  │   ├─ activation.inl                            | Implementations for activation-related functions
-│  │   ├─ loss.inl                                  | Implementations for loss functions
-│  │   ├─ normalization.inl                         | Implementations for normalization-related functions
-│  │   └─ ops.inl                                   | Implementations for generic operators and fused ops
-│  ├─ kernel/                                       | Low-level kernel implementations
-│  │   ├─ avx2/
-│  │   │   ├─ flash_attention.inl                   | AVX2 Flash Attention kernel
-│  │   │   ├─ gemm_utils.inl                        | AVX2 GEMM helper implementations
-│  │   │   ├─ hdot.inl                              | Half-precision dot product kernel
-│  │   │   ├─ hgemm.inl                             | Half-precision GEMM kernel
-│  │   │   ├─ hgemv.inl                             | Half-precision GEMV kernel
-│  │   │   ├─ hger.inl                              | Half-precision GER kernel
-│  │   │   ├─ sdot.inl                              | Single-precision dot product kernel
-│  │   │   ├─ sgemm.inl                             | AVX2 GEMM kernel
-│  │   │   ├─ sgemv.inl                             | AVX2 GEMV kernel
-│  │   │   └─ sger.inl                              | Single-precision GER kernel
-│  │   ├─ broadcast.inl                             | Broadcast kernel implementation
-│  │   ├─ memory_utils.inl                          | Memory utility implementation
-│  │   ├─ parallel_for.inl                          | Parallel loop implementation
-│  │   └─ type_dispatch.inl                         | Type dispatch implementation
-│  ├─ ytensor_base.inl                              | YTensor base class
-│  ├─ ytensor_base_math.inl                         | YTensor base math ops
-│  ├─ ytensor_base_templates.inl                    | YTensor base template instantiations
-│  ├─ ytensor_core.inl                              | YTensor implementation
-│  ├─ ytensor_function.inl                          | YTensor functional programming
-│  ├─ ytensor_io.inl                                | YTensor file storage system
-│  ├─ ytensor_io_templates.inl                      | YTensor file storage template instantiations
-│  ├─ ytensor_math.inl                              | YTensor math ops
-│  └─ ytensor_memory.inl                            | Linear storage implementation
-└─ ytensor.hpp                                      | Main header including all required headers
+├─ doc/                          | User guides and API reference
+│  ├─ en/                        | English documentation
+│  │  ├─ api/                    | English API reference
+│  │  └─ installation/           | English installation and build guides
+│  └─ zh/                        | Chinese documentation
+│     ├─ api/                    | Chinese API reference
+│     └─ installation/           | Chinese installation and build guides
+├─ example/                      | Data conversion and model inference examples
+│  ├─ convert/                   | Conversion tools for YTensor and other formats
+│  ├─ qwen3/                     | Qwen3 CPU inference example
+│  │  ├─ include/                | Qwen3 declarations and third-party headers
+│  │  ├─ model/                  | Qwen3 configuration, weights, and tokenizer resources
+│  │  └─ src/                    | Qwen3 implementation
+│  └─ ymodel2-s-2/               | YModel2 CPU inference example
+│     └─ model/                  | YModel2 weights and tokenizer resources
+├─ include/                      | Public declarations and template interfaces
+│  ├─ 3rd/                       | Third-party headers used by the project
+│  ├─ blas/                      | YBLAS interfaces and frame declarations
+│  │  └─ kernels/                | YBLAS physical microkernel declarations
+│  │     └─ avx2/                | AVX2/FMA microkernel declarations
+│  ├─ function/                  | Neural-network and functional operator interfaces
+│  ├─ strided/                   | Strided-layout algorithm interfaces
+│  ├─ type/                      | Dtype and numeric-type support
+│  └─ utils/                     | Common utility interfaces
+├─ src/                          | YTensor implementations
+│  ├─ blas/                      | YBLAS frames and operators
+│  │  └─ kernels/                | YBLAS physical microkernel implementations
+│  │     └─ avx2/                | AVX2/FMA microkernel implementations
+│  ├─ function/                  | Neural-network and functional operator implementations
+│  ├─ strided/                   | Strided-layout algorithm implementations
+│  ├─ type/                      | Dtype dispatch and type implementations
+│  └─ utils/                     | Common utility implementations
+├─ lib/                          | YTensor library build directory
+│  └─ src/                       | Library implementation entry
+└─ single-header/                | Single-header distribution and packing tools
 ```
 
-> YTensor version: 0.14
+> YTensor version: 0.16
 >
 > **Note:** The current version is still evolving rapidly. Some uncommon or low-level APIs may change significantly. Please keep an eye on release notes.
 
@@ -492,11 +374,9 @@ g++ -std=c++20 -O2 -fopenmp main.cpp \
 
 ## Latest Update
 
-- Refactored the runtime tensor architecture with `YLayoutType`, `YMeta`, and `YLayout`, and split Strided behavior into five owners: `broadcast`, `view`, `copy`, `reduce`, and `matmul`.
-- Added runtime dtype-kernel and pairwise-cast registries, with complete construction, copy, destruction, formatting, and serialization lifecycle support for custom dtypes.
-- Fixed correctness issues in broadcast aliasing, overlapping-view writes, non-POD copies, numeric conversion, reduction, matmul, and file I/O, while restoring typed-access and KV-cache performance.
-- Clarified that ordinary copies share values storage while `clone()` creates an independent copy, and expanded the bilingual runtime architecture documentation and implementation comments.
-- Regenerated and verified `ytensor_single.hpp`; the `YT_USE_LIB` backend remains optional, and the Qwen3 example can switch between header-only and shared-library modes through CMake.
+- Redesigned the BLAS backend architecture by introducing an independent YBLAS layer over the existing AVX2 implementation, removing the upper layers' dependency on a specific instruction set.
+- Improved Qwen3 CPU inference performance and restored expected encode performance.
+- Added convolution operators.
 
 ---
 For more examples, API details, or contribution suggestions, check the `example/` directory or open an issue.

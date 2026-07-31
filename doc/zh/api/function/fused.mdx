@@ -11,7 +11,7 @@
 | `logsumexp()` | 融合算子 | 稳定计算 `log(sum(exp(x)))` |
 | `logSoftmax()` | 融合算子 | `x - logsumexp(x)` |
 | `scaledDotProductAttention()` | 融合算子 | SDPA（支持 bool mask 与 bias） |
-| `sdpaBackend` | 枚举 | SDPA 后端选择（`MATH` / `FLASH_AVX2`） |
+| `sdpaBackend` | 枚举 | SDPA 后端选择（`MATH` / `FLASH`） |
 | `throwNotSupport()` | 辅助 | 内部抛异常工具（一般不应直接调用） |
 
 ---
@@ -170,12 +170,16 @@ Scaled Dot-Product Attention（SDPA）。对 `query/key/value` 的最后两维�
 
 如果某一整行 query 对所有 key 都被 mask 掉，输出行会被置为 0。
 
+`FLASH` 是与物理指令集无关的逻辑后端名称。多行 query 使用 YBLAS 的分块 QK、在线 softmax 与 V 融合累加；单行 decode 使用两次 GEMV，不进入 tiled Flash Attention。对于能够报告整块不可见区域的 mask，prefill 会在 QK 微内核之前跳过该 score tile，并同步跳过该块对应的 PV 累加。
+
+`MATH` 的 QK 阶段同样会使用 masked matmul 跳过完全不可见的计算块，但它仍需物化完整的 score 张量，并在 softmax 后执行独立的 score × V。因而 `FLASH` 的主要收益是减少中间张量的读写与存储、改善缓存局部性，并融合 softmax 和 V 累加；它没有改变注意力的渐进算术复杂度。因果 mask 能进一步减少被整块跳过的 QK 与 PV 工作量，实际加速比例会随序列长度、块大小和可跳过区域变化。
+
 ### 函数签名
 
 ```cpp
 enum struct sdpaBackend{
     MATH,
-    FLASH_AVX2
+    FLASH
 };
 
 template<typename T, int dim>
@@ -211,7 +215,7 @@ YTensor<T, dim> scaledDotProductAttention(
 | `scale` | `T` | `0.0` | 缩放系数；传 `0` 自动用 `1/sqrt(c0)` |
 | `mask` | `YTensor<bool, 2>*` | `nullptr` | 可选 bool mask，形状必须为 `[n0, n1]` |
 | `bias` | `YTensor<T, 2>*` | `nullptr` | 可选加性偏置，形状必须为 `[n0, n1]` |
-| `backend` | `sdpaBackend` | `MATH` | 支持 `MATH` 与 `FLASH_AVX2` |
+| `backend` | `sdpaBackend` | `MATH` | 支持 `MATH` 与 `FLASH` |
 
 ### 返回值
 
@@ -245,7 +249,7 @@ void example_sdpa() {
         query, key, value, 0.0f,
         [](int i, int j) { return j <= i; },
         &bias,
-        yt::function::sdpaBackend::FLASH_AVX2
+        yt::function::sdpaBackend::FLASH
     );
 }
 ```
@@ -263,7 +267,7 @@ SDPA 的后端枚举。
 ```cpp
 enum struct sdpaBackend{
     MATH,
-    FLASH_AVX2
+    FLASH
 };
 ```
 
@@ -277,7 +281,7 @@ enum struct sdpaBackend{
 
 ### 使用示例
 
-`MATH` 为通用数学路径；`FLASH_AVX2` 为 AVX2 Flash Attention 后端。
+`MATH` 会组合矩阵乘法、mask、softmax 和矩阵乘法；`FLASH` 会调用 YBLAS attention 后端。YBLAS 根据 query 长度选择 tiled Flash Attention 或 decode GEMV，物理指令集不属于该枚举的用户语义。
 
 ---
 

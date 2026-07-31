@@ -7,6 +7,7 @@
 #include <cstring>
 #include <random>
 #include <algorithm>
+#include <queue>
 
 using nlohmann::json;
 
@@ -63,27 +64,25 @@ void KVCache::init(int batch, int max_length, int kv_heads, int head_dim) {
 	this->head_dim = head_dim;
 	k_buffer.reserve({batch, kv_heads, max_length, head_dim});
 	v_buffer.reserve({batch, kv_heads, max_length, head_dim});
-	k_buffer.fill(0.0f);
-	v_buffer.fill(0.0f);
 }
 
 void KVCache::append(const yt::YTensor<float, 4>& new_k, const yt::YTensor<float, 4>& new_v) {
 	// new_k/new_v: [b, kv_h, l, hd]
 	int new_len = new_k.shape(2);
-	for (int t = 0; t < new_len; ++t) {
-		int pos = write_pos;
-		auto src_k = new_k.slice(2, t, t + 1);   // [b, kv_h, 1, hd]
-		auto src_v = new_v.slice(2, t, t + 1);
-		auto dst_k = k_buffer.slice(2, pos, pos + 1);
-		auto dst_v = v_buffer.slice(2, pos, pos + 1);
+	int copied = 0;
+	while (copied < new_len) {
+		int chunk = std::min(new_len - copied, max_len - write_pos);
+		auto src_k = new_k.slice(2, copied, copied + chunk);
+		auto src_v = new_v.slice(2, copied, copied + chunk);
+		auto dst_k = k_buffer.slice(2, write_pos, write_pos + chunk);
+		auto dst_v = v_buffer.slice(2, write_pos, write_pos + chunk);
 		dst_k.copy_(src_k);
 		dst_v.copy_(src_v);
 
-		write_pos = (write_pos + 1) % max_len;
-		total_written++;
-		if (cur_len < max_len) {
-			cur_len++;
-		}
+		copied += chunk;
+		write_pos = (write_pos + chunk) % max_len;
+		total_written += chunk;
+		cur_len = std::min(max_len, cur_len + chunk);
 	}
 }
 
@@ -211,10 +210,9 @@ void Qwen3Attention::prefill_kv_only(
 	int kv_h = num_kv_heads, hd = head_dim;
 
 	auto qkv = yt::function::linear(x, qkv_proj);
-	int q_size = num_heads * hd;
-	int kv_size = kv_h * hd;
-	auto k4 = qkv.slice(-1, q_size, q_size + kv_size).reshape(b, l, kv_h, hd).permute(0, 2, 1, 3);
-	auto v4 = qkv.slice(-1, q_size + kv_size, q_size + kv_size + kv_size).reshape(b, l, kv_h, hd).permute(0, 2, 1, 3);
+	auto qkv4 = qkv.reshape(b, l, num_heads + 2 * kv_h, hd);
+	auto k4 = qkv4.slice(2, num_heads, num_heads + kv_h).permute(0, 2, 1, 3);
+	auto v4 = qkv4.slice(2, num_heads + kv_h, num_heads + 2 * kv_h).permute(0, 2, 1, 3);
 
 	k_norm.forward_(k4);
 	ops::rope_k(k4, cos, sin);
@@ -232,11 +230,10 @@ yt::YTensor<float, 3> Qwen3Attention::forward(
 	int groups = num_groups;
 
 	auto qkv = yt::function::linear(x, qkv_proj);
-	int q_size = h * hd;
-	int kv_size = kv_h * hd;
-	auto q4 = qkv.slice(-1, 0, q_size).reshape(b, l, h, hd).permute(0, 2, 1, 3);
-	auto k4 = qkv.slice(-1, q_size, q_size + kv_size).reshape(b, l, kv_h, hd).permute(0, 2, 1, 3);
-	auto v4 = qkv.slice(-1, q_size + kv_size, q_size + kv_size + kv_size).reshape(b, l, kv_h, hd).permute(0, 2, 1, 3);
+	auto qkv4 = qkv.reshape(b, l, h + 2 * kv_h, hd);
+	auto q4 = qkv4.slice(2, 0, h).permute(0, 2, 1, 3);
+	auto k4 = qkv4.slice(2, h, h + kv_h).permute(0, 2, 1, 3);
+	auto v4 = qkv4.slice(2, h + kv_h, h + 2 * kv_h).permute(0, 2, 1, 3);
 
 	q_norm.forward_(q4);
 	k_norm.forward_(k4);
@@ -252,16 +249,20 @@ yt::YTensor<float, 3> Qwen3Attention::forward(
 	auto k_5d = ops::repeat_kv(k_full, groups);
 	auto v_5d = ops::repeat_kv(v_full, groups);
 	auto q_5d = q4.reshape(b, kv_h, groups, l, hd);
-	yt::YTensor<bool, 2> causal_mask = kv_cache ? kv_cache->get_mask(l) : make_causal_mask(l, k_full.shape(2));
-	auto attn_5d = yt::function::scaledDotProductAttention(
-		q_5d,
-		k_5d,
-		v_5d,
-		rsqrt_dim,
-		&causal_mask,
-		nullptr,
-		yt::function::sdpaBackend::FLASH_AVX2
-	);
+	yt::YTensor<float, 5> attn_5d;
+	if (l == 1) {
+		attn_5d = yt::function::scaledDotProductAttention(
+			q_5d, k_5d, v_5d, rsqrt_dim,
+			static_cast<yt::YTensor<bool, 2>*>(nullptr), nullptr,
+			yt::function::sdpaBackend::FLASH
+		);
+	} else {
+		auto causal_mask = kv_cache ? kv_cache->get_mask(l) : make_causal_mask(l, k_full.shape(2));
+		attn_5d = yt::function::scaledDotProductAttention(
+			q_5d, k_5d, v_5d, rsqrt_dim, &causal_mask, nullptr,
+			yt::function::sdpaBackend::FLASH
+		);
+	}
 
 	auto attn4 = attn_5d.reshape(b, h, l, hd);
 	auto attn3 = attn4.permute(0, 2, 1, 3).reshape(b, l, h * hd);
@@ -324,7 +325,11 @@ bool Qwen3Model::load(const std::string& path) {
 		if (io.load(base, p + "self_attn.k_proj.weight")) { k_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (io.load(base, p + "self_attn.v_proj.weight")) { v_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (q_w.size() > 0 && k_w.size() > 0 && v_w.size() > 0) {
-			auto qkv = yt::YTensor<float, 2>(q_w.concat(k_w.concat(v_w, 0), 0));
+			int qRows = q_w.shape(0), kRows = k_w.shape(0), vRows = v_w.shape(0);
+			yt::YTensor<float, 2> qkv(qRows + kRows + vRows, q_w.shape(1));
+			qkv.slice(0, 0, qRows).copy_(q_w);
+			qkv.slice(0, qRows, qRows + kRows).copy_(k_w);
+			qkv.slice(0, qRows + kRows, qRows + kRows + vRows).copy_(v_w);
 			// concat() 会强制把输入变为 contiguous(行主序) 再拷贝，
 			// 这会破坏 toFloat(..., useTranspose=true) 为 Eigen 准备的“列主序”布局。
 			// 为了保持 Eigen 下 weight.transpose() 的连续性，这里需要对合并后的权重重新做一次布局转换。
@@ -341,7 +346,10 @@ bool Qwen3Model::load(const std::string& path) {
 		if (io.load(base, p + "mlp.up_proj.weight")) { up_w = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (io.load(base, p + "mlp.down_proj.weight")) { layers[i].mlp.down = toFloat<2>(base, useTranspose); loaded_count++; }
 		if (gate_w.size() > 0 && up_w.size() > 0) {
-			auto gate_up = yt::YTensor<float, 2>(gate_w.concat(up_w, 0));
+			int gateRows = gate_w.shape(0), upRows = up_w.shape(0);
+			yt::YTensor<float, 2> gate_up(gateRows + upRows, gate_w.shape(1));
+			gate_up.slice(0, 0, gateRows).copy_(gate_w);
+			gate_up.slice(0, gateRows, gateRows + upRows).copy_(up_w);
 			if (useTranspose) {
 				gate_up = gate_up.transpose().contiguous().transpose();
 			}
@@ -379,8 +387,12 @@ yt::YTensor<float, 3> Qwen3Model::forward(const yt::YTensor<int, 2>& ids, std::v
 	#pragma omp parallel for collapse(2) proc_bind(close)
 	for (int i = 0; i < b; ++i) {
 		for (int j = 0; j < l; ++j) {
-			auto tokenEmbed = embed.slice(0, ids.at(i, j), ids.at(i, j) + 1).contiguous();
-			std::memcpy(&x.at(i, j, 0), tokenEmbed.data(), hidden * sizeof(float));
+			int token = ids.at(i, j);
+			if (embed.stride_(1) == 1) {
+				std::memcpy(&x.at(i, j, 0), embed.data() + token * embed.stride_(0), hidden * sizeof(float));
+			} else {
+				for (int k = 0; k < hidden; ++k) x.at(i, j, k) = embed.at(token, k);
+			}
 		}
 	}
 
@@ -414,6 +426,8 @@ yt::YTensor<float, 3> Qwen3Model::forward(const yt::YTensor<int, 2>& ids, std::v
 
 void Qwen3ForCausalLM::init(const Qwen3Config& cfg) {
 	config = cfg;
+	prefill_threads = yt::blas::default_num_threads();
+	decode_threads = std::min(4, prefill_threads);
 	model.init(cfg);
 
 	kv_caches.resize(cfg.num_hidden_layers);
@@ -447,6 +461,9 @@ int Qwen3ForCausalLM::get_max_context_len() const {
 }
 
 yt::YTensor<float, 2> Qwen3ForCausalLM::forward(const yt::YTensor<int, 2>& ids, bool chat_only) {
+	const bool decode = ids.shape(1) == 1 && get_kv_cache_len() > 0;
+	yt::blas::set_num_threads(decode ? decode_threads : prefill_threads);
+
 	auto h = model.forward(ids, &kv_caches, chat_only);
 	int b = h.shape(0), l = h.shape(1);
 	auto last = h.slice(1, l - 1, l).contiguous().view(b, config.hidden_size);
@@ -463,18 +480,30 @@ std::vector<int> Qwen3ForCausalLM::generate(const std::vector<int>& new_ids, int
 	static std::mt19937 rng(42);
 
 	auto sample_token = [&](const yt::YTensor<float, 2>& logits) -> int {
-		auto probs = yt::function::softmax(logits, -1);
 		constexpr int k = 20;
-		int vocab_size = probs.shape(1);
+		int vocab_size = logits.shape(1);
 		int top_k = std::min(k, vocab_size);
-		std::vector<std::pair<float, int>> prob_idx(vocab_size);
+		std::priority_queue<std::pair<float, int>,
+			std::vector<std::pair<float, int>>, std::greater<std::pair<float, int>>> heap;
 		for (int i = 0; i < vocab_size; ++i) {
-			prob_idx[i] = {probs.at(0, i), i};
+			std::pair<float, int> candidate{logits.at(0, i), i};
+			if (static_cast<int>(heap.size()) < top_k) heap.push(candidate);
+			else if (candidate.first > heap.top().first) {
+				heap.pop();
+				heap.push(candidate);
+			}
 		}
-		std::partial_sort(prob_idx.begin(), prob_idx.begin() + top_k, prob_idx.end(),
-			[](const auto& a, const auto& b) { return a.first > b.first; });
-		float sum = 0;
-		for (int i = 0; i < top_k; ++i) sum += prob_idx[i].first;
+		std::vector<std::pair<float, int>> prob_idx(top_k);
+		for (int i = top_k - 1; i >= 0; --i) {
+			prob_idx[i] = heap.top();
+			heap.pop();
+		}
+		float max_logit = prob_idx[0].first;
+		float sum = 0.0f;
+		for (int i = 0; i < top_k; ++i) {
+			prob_idx[i].first = std::exp(prob_idx[i].first - max_logit);
+			sum += prob_idx[i].first;
+		}
 		std::uniform_real_distribution<float> dist(0.0f, sum);
 		float r = dist(rng);
 		float cumsum = 0;

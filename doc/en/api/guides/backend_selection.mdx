@@ -10,21 +10,21 @@ YTensor supports multiple backends for matrix multiplication:
 | --- | --- | --- | --- |
 | Naive | `MatmulBackend::Naive` | None | Compatibility first, debugging |
 | Eigen | `MatmulBackend::Eigen` | Eigen3 | General high-performance computing |
-| AVX2 | `MatmulBackend::AVX2` | AVX2 + FMA CPU | Extreme performance |
+| YBLAS | `MatmulBackend::YBLAS` | Currently requires an AVX2 + FMA CPU and compiler target | YTensor's FP32/FP16 matrix implementation |
 
-For detailed performance comparisons and memory layout requirements, please refer to the instructions in [YTensor::matmul](../YTensor/math/matmul.mdx).
+The backend argument is a preference. If the requested backend cannot handle the current dtype or build configuration, YTensor falls back to an available implementation. See [YTensor::matmul](../YTensor/math/matmul.mdx) for layout and dtype behavior.
 
 ---
 
 ## Automatic Selection
 
-The default backend is automatically selected based on compile-time macros, with priority: **AVX2 > Eigen > Naive**
+The default backend is automatically selected based on compile-time macros, with priority: **YBLAS > Eigen > Naive**
 
 ```cpp
 // Definition in ytensor_infos.hpp
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen
 #else
@@ -52,18 +52,19 @@ Eigen will be automatically detected:
 #endif
 ```
 
-### Enabling AVX2
+### Enabling YBLAS
 
 ```cmake
 # CMakeLists.txt
 target_compile_options(your_target PRIVATE -mavx2 -mfma)
 ```
 
-Or manually define:
-```cpp
-#define YT_USE_AVX2 1
-#include "ytensor.hpp"
-```
+YBLAS currently has an AVX2+FMA physical kernel. `YT_USE_AVX2` is detected from compiler feature macros,
+and `YT_USE_YBLAS` follows that result by default. Defining `YT_USE_AVX2=1` does not enable CPU
+instructions by itself; YTensor rejects that configuration unless both compiler features are active.
+
+Define `YT_USE_YBLAS=0` before including YTensor to disable the custom backend while keeping the AVX2
+compiler target. Define `YT_USE_AVX2=0` to disable the physical kernels as well.
 
 ---
 
@@ -73,8 +74,8 @@ Or manually define:
 #include "ytensor_infos.hpp"
 
 void check_backend() {
-    #if YT_USE_AVX2
-        std::cout << "Using AVX2 backend" << std::endl;
+    #if YT_USE_YBLAS
+        std::cout << "Using YBLAS backend" << std::endl;
     #elif YT_USE_EIGEN
         std::cout << "Using Eigen backend" << std::endl;
     #else
@@ -87,5 +88,6 @@ void check_backend() {
 
 ## Related Content
 
+- [BLAS Overview](../blas/overview.mdx) - Direct YBLAS linear algebra interfaces
 - [Backend System](../infos/backend.mdx) - MatmulBackend Enum
 - [Matrix Multiplication](../YTensor/math/matmul.mdx) - matmul API and detailed performance notes

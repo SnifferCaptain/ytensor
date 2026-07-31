@@ -1,0 +1,497 @@
+# BLAS Level-3
+
+Level-3 处理矩阵矩阵运算，当前核心是 GEMM：
+
+```text
+C[m,n] = beta*C + alpha*A[m,k]*B[k,n]
+```
+
+它支持 FP32、FP16、任意元素步幅、masked 输出、cache blocking 和 OpenMP 并行。
+
+:::tip
+输入已经是 `YTensor` 时，优先使用 [`YTensor::matmul`](../YTensor/math/matmul.mdx)。本页接口面向裸指针和自定义底层算子，不会替你检查 shape、storage 容量、dtype 或 batch broadcast。
+:::
+
+## 如何选择接口
+
+| 场景 | 推荐接口 |
+| --- | --- |
+| A、B、C 都是紧密行主序 FP32 | `sgemm_rowmajor` |
+| A、B、C 都是紧密列主序 FP32 | `sgemm_colmajor` |
+| FP32 任意布局、转置视图或切片 | `sgemm` |
+| FP16 storage、FP32 compute | `hgemm` |
+| A/B/C 使用不同的 storage type | typed `gemm` |
+| 只更新 C 的部分坐标 | `sgemm_masked` |
+
+`matmul`、`hmatmul` 是固定常见参数的兼容入口；新代码应优先使用语义更明确的 GEMM 接口。
+
+## 紧密行主序 GEMM
+
+最简单的 FP32 接口固定 `alpha = 1`、`beta = 0`：
+
+```cpp
+void yt::blas::sgemm_rowmajor(
+    const float* A,
+    const float* B,
+    float* C,
+    int m,
+    int n,
+    int k
+);
+```
+
+其中：
+
+```text
+A 的形状为 [m,k]
+B 的形状为 [k,n]
+C 的形状为 [m,n]
+```
+
+### 示例
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    // A: 2x3
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+
+    // B: 3x2
+    float B[] = {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f
+    };
+
+    float C[4];
+    yt::blas::sgemm_rowmajor(A, B, C, 2, 2, 3);
+
+    std::cout << C[0] << ", " << C[1] << '\n';  // 22, 28
+    std::cout << C[2] << ", " << C[3] << '\n';  // 49, 64
+}
+```
+
+这里的参数顺序是 `m, n, k`，不是 A、B、C 的元素数量。
+
+## 通用 FP32 GEMM
+
+需要自定义 `alpha/beta` 或 stride 时使用 `sgemm`：
+
+```cpp
+void yt::blas::sgemm(
+    const float* A,
+    const float* B,
+    float* C,
+    int m,
+    int n,
+    int k,
+    float alpha,
+    float beta,
+    int64_t rsa,
+    int64_t csa,
+    int64_t rsb,
+    int64_t csb,
+    int64_t rsc,
+    int64_t csc
+);
+```
+
+### 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `A`、`B` | 输入矩阵的逻辑 `(0,0)` |
+| `C` | 输入/输出矩阵的逻辑 `(0,0)` |
+| `m` | A 和 C 的行数 |
+| `n` | B 和 C 的列数 |
+| `k` | A 的列数、B 的行数 |
+| `alpha` | `A*B` 的缩放系数 |
+| `beta` | 原 C 的缩放系数 |
+| `rsa`、`csa` | A 的行步幅、列步幅 |
+| `rsb`、`csb` | B 的行步幅、列步幅 |
+| `rsc`、`csc` | C 的行步幅、列步幅 |
+
+矩阵地址统一解释为：
+
+```text
+A(i,p) = A[i*rsa + p*csa]
+B(p,j) = B[p*rsb + j*csb]
+C(i,j) = C[i*rsc + j*csc]
+```
+
+所有 stride 的单位都是元素。
+
+### 使用 `alpha` 和 `beta`
+
+```cpp
+// C = 0.5*C + 2*A*B
+yt::blas::sgemm(
+    A, B, C,
+    m, n, k,
+    2.0f,
+    0.5f,
+    k, 1,  // A：行主序
+    n, 1,  // B：行主序
+    n, 1   // C：行主序
+);
+```
+
+当 `beta == 0` 时不会读取 C 的旧值，因此覆盖输出时不需要先清零 C。C 指向的 storage 仍必须有效。
+
+## 常见布局
+
+### 全部为行主序
+
+```text
+A: rsa = k, csa = 1
+B: rsb = n, csb = 1
+C: rsc = n, csc = 1
+```
+
+等价于：
+
+```cpp
+yt::blas::sgemm(A, B, C, m, n, k);
+```
+
+该简化重载默认 `alpha = 1`、`beta = 0`。
+
+### 全部为列主序
+
+```text
+A: rsa = 1, csa = m
+B: rsb = 1, csb = k
+C: rsc = 1, csc = m
+```
+
+当不需要自定义 `alpha/beta` 时，可以直接调用：
+
+```cpp
+yt::blas::sgemm_colmajor(A, B, C, m, n, k);
+```
+
+### 混合布局
+
+A、B、C 不要求使用同一种主序。例如，行主序 A、列主序 B、行主序 C：
+
+```cpp
+yt::blas::sgemm(
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,  // A：行主序 [m,k]
+    1, k,  // B：列主序 [k,n]
+    n, 1   // C：行主序 [m,n]
+);
+```
+
+## 不复制数据地使用转置
+
+GEMM 没有额外的 `transpose` 枚举，因为交换 stride 就能表达转置视图。
+
+假设 X 的 storage 是紧密行主序 `[3,2]`：
+
+```text
+X stride = {2,1}
+```
+
+要计算 `Xᵀ[2,3] * B[3,2]`，将 A 指向 X 的同一段内存，并使用：
+
+```text
+A = Xᵀ
+rsa = 1
+csa = 2
+```
+
+完整调用：
+
+```cpp
+float X[] = {
+    1.0f, 2.0f,
+    3.0f, 4.0f,
+    5.0f, 6.0f
+};
+float B[] = {
+    1.0f, 0.0f,
+    0.0f, 1.0f,
+    1.0f, 1.0f
+};
+float C[4];
+
+yt::blas::sgemm(
+    X, B, C,
+    2, 2, 3,
+    1.0f, 0.0f,
+    1, 2,  // 将 X[3,2] 解释为 Xᵀ[2,3]
+    2, 1,  // B[3,2] 行主序
+    2, 1   // C[2,2] 行主序
+);
+
+// C = [[6, 8],
+//      [8, 10]]
+```
+
+同样的方法适用于带 padding 的矩阵切片，只要 pointer 指向逻辑 `(0,0)`，stride 能正确映射每个坐标。
+
+## FP16 GEMM
+
+`hgemm` 的参数与 `sgemm` 对应：
+
+```cpp
+void yt::blas::hgemm(
+    const yt::float16* A,
+    const yt::float16* B,
+    yt::float16* C,
+    int m,
+    int n,
+    int k,
+    float alpha = 1.0f,
+    float beta = 0.0f
+);
+```
+
+任意 stride 版本在 `alpha/beta` 后继续接收 A、B、C 的六个 stride。
+
+```cpp
+yt::float16 A[] = {
+    yt::float16(1.0f), yt::float16(2.0f),
+    yt::float16(3.0f), yt::float16(4.0f)
+};
+yt::float16 B[] = {
+    yt::float16(5.0f), yt::float16(6.0f),
+    yt::float16(7.0f), yt::float16(8.0f)
+};
+yt::float16 C[4] = {};
+
+yt::blas::hgemm(A, B, C, 2, 2, 2);
+// C 约为 [[19,22], [43,50]]
+```
+
+FP16 仅作为 storage type：
+
+1. A、B 在 packing 或加载时转换为 FP32；
+2. K 方向完整归约使用 FP32；
+3. `alpha/beta` 在 FP32 中合并；
+4. 最后一次性转换回 FP16。
+
+这可以避免每个 `kc` 分块后都发生 FP16 舍入，但最终结果仍受 FP16 输出范围和精度限制。
+
+## 混合 storage type
+
+typed `gemm` 允许 A、B、C 独立使用 `float` 或 `yt::float16`，计算类型保持 FP32：
+
+```cpp
+yt::blas::BlasContext context;
+
+yt::float16 A[/* m*k */];
+yt::float16 B[/* k*n */];
+float C[/* m*n */];
+
+yt::blas::gemm(
+    context,
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,
+    n, 1,
+    n, 1
+);
+```
+
+这类接口适合自定义算子。只需要统一 FP16 输入/输出时，`hgemm` 更简洁。
+
+## Masked GEMM
+
+`sgemm_masked` 只更新 mask 为 `true` 的 C 元素：
+
+- `true`：执行 `C = beta*C + alpha*A*B`；
+- `false`：不读取也不写入该位置，保留原值。
+
+### 布尔矩阵 mask
+
+布尔 mask 必须是紧密行主序 `[m,n]`：
+
+```cpp
+float A[] = {
+    1.0f, 2.0f,
+    3.0f, 4.0f
+};
+float B[] = {
+    5.0f, 6.0f,
+    7.0f, 8.0f
+};
+float C[] = {-1.0f, -1.0f, -1.0f, -1.0f};
+bool mask[] = {
+    true,  false,
+    true,  true
+};
+
+yt::blas::sgemm_masked(
+    A, B, C,
+    2, 2, 2,
+    1.0f, 0.0f,
+    2, 1,
+    2, 1,
+    2, 1,
+    mask
+);
+
+// C == [[19, -1],
+//       [43, 50]]
+```
+
+### 坐标谓词
+
+不想物化 mask 数组时，可以传入 `bool(int row, int column)`：
+
+```cpp
+yt::blas::sgemm_masked(
+    A, B, C,
+    m, n, k,
+    1.0f, 0.0f,
+    k, 1,
+    n, 1,
+    n, 1,
+    [](int row, int column) {
+        return column <= row;  // 只更新下三角
+    }
+);
+```
+
+:::warning
+谓词可能被重复调用，必须无副作用并对同一坐标返回稳定结果。布尔 mask pointer 不能为 `nullptr`。
+:::
+
+## 线程配置
+
+Level-3 默认串行。启用多线程：
+
+```cpp
+yt::blas::set_num_threads(4);
+yt::blas::sgemm_rowmajor(A, B, C, m, n, k);
+```
+
+如果希望使用运行环境建议值，需要显式设置：
+
+```cpp
+yt::blas::set_num_threads(
+    yt::blas::default_num_threads()
+);
+```
+
+`default_num_threads()` 只查询，不会改变当前配置。线程设置是进程级状态，不应在并发 GEMM 调用之间反复修改。
+
+## Context 与分块
+
+默认 `BlasContext` 包含 GEMM 的 `mc/kc/nc` cache block：
+
+```cpp
+struct BlasContext {
+    int mc = 642;
+    int kc = 500;
+    int nc = 4800;
+    int af = 8;
+    int df = 4;
+};
+```
+
+通常不需要修改这些值。需要针对固定硬件和 workload 调优时，建议使用局部 context：
+
+```cpp
+yt::blas::BlasContext context;
+yt::blas::set_gemm_block_sizes(context, 768, 384, 4096);
+
+yt::blas::sgemm_rowmajor(
+    context,
+    A, B, C,
+    m, n, k
+);
+```
+
+也可以根据 cache 容量生成候选分块：
+
+```cpp
+yt::blas::set_gemm_cache_sizes_kb(
+    context,
+    32,    // L1
+    1024,  // L2
+    32768  // L3
+);
+```
+
+:::warning
+Cache setter 使用当前 packed-panel 合同估算 block size，不是硬件自动探测，也不保证比默认值更快。修改后应针对实际矩阵尺寸、线程数和 CPU 做 benchmark。
+:::
+
+## 边界行为与异常
+
+| 情况 | 行为 |
+| --- | --- |
+| `m < 0`、`n < 0` 或 `k < 0` | 抛出 `std::invalid_argument` |
+| `m == 0` 或 `n == 0` | 直接返回，不访问矩阵 |
+| `k == 0` 或 `alpha == 0` | 只对有效输出执行 `C = beta*C` |
+| masked 位置为 `false` | 不读取、不写入对应 C |
+| 布尔 mask 为 `nullptr` | 抛出 `std::invalid_argument` |
+| workspace 分配失败 | 抛出 `std::bad_alloc` |
+| FP16 deferred output 大小溢出 | 抛出 `std::overflow_error` |
+
+接口不会检查 A、B、C 是否为 `nullptr`，也不会验证 storage 是否足以覆盖给定 shape 和 stride。
+
+## 内存重叠
+
+A、B 可以是只读视图，但不能与可写 C 形成会覆盖尚未读取输入的重叠。例如，不应直接让 C 指向 A 并期待原地矩阵乘法：
+
+```cpp
+// 不安全：写 C 可能破坏后续仍要读取的 A。
+yt::blas::sgemm_rowmajor(A, B, A, m, n, k);
+```
+
+需要原地语义时，应由调用方创建临时输出，再在 GEMM 完成后复制回目标。
+
+## 实现架构
+
+GEMM 使用 BLIS 风格的 packing、cache blocking 和固定微内核：
+
+```text
+sgemm / hgemm / gemm
+          │
+          ▼
+参数、alpha/beta、mask、stride
+          │
+          ▼
+nc / kc / mc cache blocking
+          │
+          ├── pack A：任意 stride ──► [kc][MR]
+          └── pack B：任意 stride ──► [kc][NR]
+                                │
+                                ▼
+                    AVX2/FMA FP32 microkernel
+                                │
+                                ▼
+                    edge、mask 与 storage 写回
+```
+
+当前默认物理规格：
+
+```text
+MR = 6
+NR = 16
+vector lanes = 8
+```
+
+typed packer 在输入阶段完成 storage 到 FP32 的转换，避免为每种 `float`/`float16` 组合复制微内核。无 mask GEMM 和 masked GEMM 进入同一个 frame。
+
+普通/分组卷积会复用相同的 packed-panel ABI 和物理微内核，但由卷积自己的输入 panel 生成逻辑处理 padding、stride、dilation 和 groups，不经过完整 GEMM frame。
+
+## 相关内容
+
+- [BLAS 总览](./overview.mdx)
+- [Level-1：向量运算](./level1.mdx)
+- [Level-2：矩阵向量运算](./level2.mdx)
+- [YTensor 矩阵乘法](../YTensor/math/matmul.mdx)
+- [卷积](../function/convolution.mdx)

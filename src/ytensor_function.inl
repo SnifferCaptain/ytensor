@@ -4,10 +4,6 @@
  ***************/
 
 #include "../include/ytensor_concepts.hpp"
-#if YT_USE_AVX2
-#include "../include/function/flash_attention.hpp"
-#endif
-
 namespace yt::function {
 
 // ==================== stable scalar helpers ====================
@@ -176,6 +172,7 @@ inline yt::YTensor<T, dim> _makeAffineView(
 
 // 子模块共享以上internal helper；聚合顺序保证定义在模板实例化前可见。
 #include "function/ops.inl"
+#include "function/convolution.inl"
 #include "function/activation.inl"
 #include "function/normalization.inl"
 #include "function/loss.inl"

@@ -7,7 +7,8 @@ YTensor 提供了多个编译时宏定义，用于控制库的功能和性能特
 | 宏定义 | 默认值 | 说明 |
 | --- | --- | --- |
 | `YT_USE_EIGEN` | 自动检测 | 是否启用 Eigen 库作为矩阵乘法后端 |
-| `YT_USE_AVX2` | 自动检测 | 是否启用 AVX2+FMA SIMD 优化 |
+| `YT_USE_YBLAS` | 跟随 `YT_USE_AVX2` | 是否启用 YBLAS 后端 |
+| `YT_USE_AVX2` | 自动检测 | 是否启用 AVX2+FMA 物理内核 |
 | `YT_PREINSTANTIATE_TEMPLATES` | `1` | 是否预实例化常用类型模板 |
 | `YT_USE_LIB` | `0` | 使用预编译 runtime 后端（需链接 `libytensor`） |
 
@@ -74,7 +75,7 @@ target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
 ### 影响
 
 - **启用时**：`yt::info::MatmulBackend::Eigen` 后端可用，矩阵乘法性能显著提升
-- **禁用时**：仅能使用 `Naive` 和 `AVX2` 后端
+- **禁用时**：不影响 `Naive` 和当前构建中已启用的 YBLAS 后端
 
 :::info
 启用 Eigen 需要确保编译器能找到 Eigen 头文件。Eigen 是纯头文件库，无需链接。
@@ -86,7 +87,7 @@ target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
 
 ### 说明
 
-控制是否启用自定义的 AVX2+FMA SIMD 优化代码，用于加速矩阵乘法和其他运算。
+控制是否编译 AVX2+FMA 物理内核。YBLAS 当前使用这组内核加速矩阵乘法和卷积等运算。
 
 ### 默认行为
 
@@ -107,13 +108,11 @@ YTensor 会根据编译器定义的宏自动检测：
 
 ### 手动设置
 
-**强制启用**:
-```cpp
-#define YT_USE_AVX2 1
-#include "ytensor_single.hpp"
-```
+推荐通过编译选项启用 AVX2 和 FMA，并让 YTensor 自动检测。若编译目标没有同时启用这两个特性，
+手动定义 `YT_USE_AVX2=1` 会在预处理阶段被拒绝。`YT_USE_YBLAS` 默认跟随
+`YT_USE_AVX2`；如果只想禁用 YBLAS 后端，可显式定义 `YT_USE_YBLAS=0`。
 
-**强制禁用**:
+**显式禁用**:
 ```cpp
 #define YT_USE_AVX2 0
 #include "ytensor_single.hpp"
@@ -136,17 +135,17 @@ cl /std:c++20 /O2 /arch:AVX2 main.cpp
 
 1. 必须确保目标 CPU 支持 AVX2 和 FMA 指令集，否则程序会崩溃
 2. 大多数 Intel CPU（Haswell 及更新）和 AMD CPU（Excavator 及更新）支持这些指令
-3. 如果不确定，建议不要强制启用
+3. 宏不能替代编译器 target 选项，不应使用它绕过 feature detection
 :::
 
 ### 影响
 
-- **启用时**：`yt::info::MatmulBackend::AVX2` 后端可用，提供高性能的 SIMD 加速
+- **启用时**：YBLAS 默认可用，`yt::info::MatmulBackend::YBLAS` 可选择自研 SIMD 实现
 - **禁用时**：仅能使用 `Naive` 和 `Eigen` 后端
 
-### 性能对比
+实际性能取决于矩阵 shape、storage layout、线程数、编译器和 CPU。应使用与实际负载一致的 benchmark，而不是假定相对 Naive 或 Eigen 的固定加速倍数。
 
-在支持的硬件上，AVX2 后端通常比 Naive 后端快 4-8 倍，与 Eigen 后端性能相当或略优。
+底层 Level-1/2/3 的启用方式、接口选择、stride 和线程配置见 [BLAS 总览](../api/blas/overview.mdx)。
 
 ---
 
@@ -254,8 +253,8 @@ YTensor 在运行时会根据编译选项自动选择矩阵乘法后端。优先
 
 ```cpp
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2     // 最高优先级
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS    // 最高优先级
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen    // 次优先级
 #else
@@ -360,10 +359,10 @@ int main() {
         std::cout << "  Eigen 后端: 未启用" << std::endl;
     #endif
     
-    #if YT_USE_AVX2
-        std::cout << "  AVX2 后端: 已启用" << std::endl;
+    #if YT_USE_YBLAS
+        std::cout << "  YBLAS 后端: 已启用" << std::endl;
     #else
-        std::cout << "  AVX2 后端: 未启用" << std::endl;
+        std::cout << "  YBLAS 后端: 未启用" << std::endl;
     #endif
     
     #if YT_PREINSTANTIATE_TEMPLATES
@@ -381,8 +380,8 @@ int main() {
         case yt::info::MatmulBackend::Eigen:
             std::cout << "Eigen" << std::endl;
             break;
-        case yt::info::MatmulBackend::AVX2:
-            std::cout << "AVX2" << std::endl;
+        case yt::info::MatmulBackend::YBLAS:
+            std::cout << "YBLAS" << std::endl;
             break;
     }
     
@@ -403,9 +402,10 @@ grep -o 'avx2\|fma' /proc/cpuinfo | sort -u
 
 如果输出包含 `avx2` 和 `fma`，则支持。
 
-### Q: Eigen 和 AVX2 可以同时启用吗？
+### Q: Eigen 和 YBLAS 可以同时启用吗？
 
-**A**: 可以。YTensor 会优先使用 AVX2 后端（优先级更高），但您仍然可以手动指定使用 Eigen 后端。
+**A**: 可以。YTensor 会优先使用 YBLAS 后端，但您仍然可以手动指定 Eigen 后端。YBLAS
+当前的物理实现要求 AVX2+FMA 编译目标。
 
 ### Q: 禁用 YT_PREINSTANTIATE_TEMPLATES 能减少多少编译大小？
 

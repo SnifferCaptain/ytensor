@@ -1,21 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
 
+project(qwen3_chat)
+
 # set(CMAKE_C_COMPILER "clang")
 # set(CMAKE_CXX_COMPILER "clang++")
 set(use_blas 0)
 
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fopenmp=libgomp")
-	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lgomp")
-else()
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -fopenmp")
-endif()
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -g")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall -Wextra -g")
 
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O2 -mavx2 -mfma")
-
-project(qwen3_chat)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +45,9 @@ target_link_libraries(${PROJECT_NAME}
 	OpenMP::OpenMP_CXX
 	pthread
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+	target_link_options(${PROJECT_NAME} PRIVATE -fopenmp=libomp)
+endif()
 
 if(YT_USE_LIB)
 	if(NOT TARGET ytensor)

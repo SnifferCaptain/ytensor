@@ -7,7 +7,8 @@ YTensor provides several compile-time macro definitions to control the library's
 | Macro | Default Value | Description |
 | --- | --- | --- |
 | `YT_USE_EIGEN` | Auto-detected | Whether to enable the Eigen library as a GEMM backend |
-| `YT_USE_AVX2` | Auto-detected | Whether to enable AVX2+FMA SIMD optimizations |
+| `YT_USE_YBLAS` | Follows `YT_USE_AVX2` | Whether to enable the YBLAS backend |
+| `YT_USE_AVX2` | Auto-detected | Whether to enable AVX2+FMA physical kernels |
 | `YT_PREINSTANTIATE_TEMPLATES` | `1` | Whether to pre-instantiate common type templates |
 | `YT_USE_LIB` | `0` | Use precompiled runtime backend (requires linking `libytensor`) |
 
@@ -74,7 +75,7 @@ target_compile_definitions(my_target PRIVATE YT_USE_EIGEN=0)
 ### Impact
 
 - **When enabled**: The `yt::info::MatmulBackend::Eigen` backend becomes available, significantly improving GEMM performance.
-- **When disabled**: Only the `Naive` and `AVX2` backends can be used.
+- **When disabled**: `Naive` and any YBLAS backend enabled by the current build remain available.
 
 :::info
 Enabling Eigen requires ensuring that the compiler can find the Eigen headers. Eigen is a header-only library and does not require linking.
@@ -86,7 +87,8 @@ Enabling Eigen requires ensuring that the compiler can find the Eigen headers. E
 
 ### Description
 
-Controls whether to enable custom AVX2+FMA SIMD optimized code used to accelerate GEMM and other operations.
+Controls whether AVX2+FMA physical kernels are compiled. YBLAS currently uses these kernels for matrix
+multiplication, convolution, and related operations.
 
 ### Default Behavior
 
@@ -107,13 +109,11 @@ YTensor automatically detects this based on compiler-defined macros:
 
 ### Manual Setup
 
-**Force Enable**:
-```cpp
-#define YT_USE_AVX2 1
-#include "ytensor_single.hpp"
-```
+The recommended setup is to enable AVX2 and FMA in the compiler target and let YTensor detect them.
+Defining `YT_USE_AVX2=1` without both compiler features is rejected at preprocessing time.
+`YT_USE_YBLAS` follows `YT_USE_AVX2` by default; define `YT_USE_YBLAS=0` to disable only the YBLAS backend.
 
-**Force Disable**:
+**Explicitly disable**:
 ```cpp
 #define YT_USE_AVX2 0
 #include "ytensor_single.hpp"
@@ -136,17 +136,17 @@ cl /std:c++20 /O2 /arch:AVX2 main.cpp
 
 1. You must ensure the target CPU supports AVX2 and FMA instructions, otherwise the program will crash.
 2. Most Intel CPUs (Haswell and newer) and AMD CPUs (Excavator and newer) support these instructions.
-3. If unsure, it is recommended not to force-enable this.
+3. The macro does not replace compiler target options; do not use it to bypass feature detection.
 :::
 
 ### Impact
 
-- **When enabled**: The `yt::info::MatmulBackend::AVX2` backend becomes available, providing high-performance SIMD acceleration.
+- **When enabled**: YBLAS is available by default, and `yt::info::MatmulBackend::YBLAS` selects the custom SIMD implementation.
 - **When disabled**: Only the `Naive` and `Eigen` backends can be used.
 
-### Performance Comparison
+Actual performance depends on matrix shape, storage layout, thread count, compiler, and CPU. Use a workload-specific benchmark instead of assuming a fixed speedup over Naive or Eigen.
 
-On supported hardware, the AVX2 backend is typically 4–8 times faster than the Naive backend and is comparable to or slightly better than the Eigen backend.
+See [BLAS Overview](../api/blas/overview.mdx) for Level-1/2/3 requirements, interface selection, strides, and thread configuration.
 
 ---
 
@@ -255,8 +255,8 @@ At runtime, YTensor automatically selects a GEMM backend according to the compil
 
 ```cpp
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2     // Highest priority
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS    // Highest priority
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen    // Second priority
 #else
@@ -361,10 +361,10 @@ int main() {
         std::cout << "  Eigen Backend: Disabled" << std::endl;
     #endif
     
-    #if YT_USE_AVX2
-        std::cout << "  AVX2 Backend: Enabled" << std::endl;
+    #if YT_USE_YBLAS
+        std::cout << "  YBLAS Backend: Enabled" << std::endl;
     #else
-        std::cout << "  AVX2 Backend: Disabled" << std::endl;
+        std::cout << "  YBLAS Backend: Disabled" << std::endl;
     #endif
     
     #if YT_PREINSTANTIATE_TEMPLATES
@@ -382,8 +382,8 @@ int main() {
         case yt::info::MatmulBackend::Eigen:
             std::cout << "Eigen" << std::endl;
             break;
-        case yt::info::MatmulBackend::AVX2:
-            std::cout << "AVX2" << std::endl;
+        case yt::info::MatmulBackend::YBLAS:
+            std::cout << "YBLAS" << std::endl;
             break;
     }
     
@@ -404,9 +404,10 @@ grep -o 'avx2\|fma' /proc/cpuinfo | sort -u
 
 If the output contains `avx2` and `fma`, it is supported.
 
-### Q: Can Eigen and AVX2 be enabled simultaneously?
+### Q: Can Eigen and YBLAS be enabled simultaneously?
 
-**A**: Yes. YTensor prefers the AVX2 backend (higher priority), but you can still manually specify the Eigen backend.
+**A**: Yes. YTensor prefers YBLAS, but you can still request Eigen explicitly. The current YBLAS physical
+implementation requires an AVX2+FMA compiler target.
 
 ### Q: How much does disabling YT_PREINSTANTIATE_TEMPLATES reduce binary size?
 

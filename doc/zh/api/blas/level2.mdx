@@ -1,0 +1,370 @@
+# BLAS Level-2
+
+Level-2 处理矩阵与向量之间的 O(mn) 运算。当前提供两种 GEMV 方向和 GER rank-1 更新：
+
+```text
+gemv_col: y = beta*y + alpha*A*x
+gemv_row: y = beta*y + alpha*x*B
+ger:      C = beta*C + alpha*x*yᵀ
+```
+
+如果你的目标是两个矩阵相乘，请使用 [Level-3](./level3.mdx)；如果输入是 `YTensor`，可以用 `matmul` 配合一维或二维张量。
+
+## 如何选择 GEMV
+
+| 数学形式 | 矩阵形状 | 输出长度 | 接口 |
+| --- | --- | ---: | --- |
+| `A[m,k] * x[k]` | A 在左，列向量在右 | `m` | `gemv_col` |
+| `x[k] * B[k,n]` | 行向量在左，B 在右 | `n` | `gemv_row` |
+
+`row` 和 `col` 描述向量参与运算的方向，不表示矩阵必须采用行主序或列主序。两种接口都通过 row/column stride 接受任意物理布局。
+
+## `gemv_col`
+
+计算：
+
+```text
+y[m] = beta*y + alpha*A[m,k]*x[k]
+```
+
+函数签名：
+
+```cpp
+template <typename T>
+void yt::blas::gemv_col(
+    const T* A,
+    const T* x,
+    T* y,
+    int m,
+    int k,
+    float alpha,
+    float beta,
+    int64_t rsa,
+    int64_t csa,
+    int64_t incx,
+    int64_t incy,
+    const yt::blas::BlasContext& context =
+        yt::blas::defaultBlasContext()
+);
+```
+
+### 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `A` | 矩阵 A 的逻辑 `(0,0)` |
+| `x` | 输入向量的逻辑首元素 |
+| `y` | 输入/输出向量的逻辑首元素 |
+| `m` | A 的行数，也是 y 的元素数 |
+| `k` | A 的列数，也是 x 的元素数 |
+| `alpha` | 矩阵向量乘积的缩放系数 |
+| `beta` | 原 y 的缩放系数 |
+| `rsa`、`csa` | A 的行步幅与列步幅 |
+| `incx`、`incy` | x 与 y 的元素步幅 |
+| `context` | 可选的融合宽度等调优参数 |
+
+### 行主序示例
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    // A = [[1, 2, 3],
+    //      [4, 5, 6]]
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+    float x[] = {1.0f, 1.0f, 1.0f};
+    float y[2] = {};
+
+    yt::blas::gemv_col(
+        A,
+        x,
+        y,
+        2,     // m
+        3,     // k
+        1.0f,  // alpha
+        0.0f,  // beta
+        3,     // rsa
+        1,     // csa
+        1,     // incx
+        1      // incy
+    );
+
+    std::cout << y[0] << ", " << y[1] << '\n';  // 6, 15
+}
+```
+
+紧密行主序 A 的 `rsa = k`、`csa = 1`。如果 A 是紧密列主序，则使用 `rsa = 1`、`csa = m`。
+
+## `gemv_row`
+
+计算：
+
+```text
+y[n] = beta*y + alpha*x[k]*B[k,n]
+```
+
+函数签名：
+
+```cpp
+template <typename T>
+void yt::blas::gemv_row(
+    const T* x,
+    const T* B,
+    T* y,
+    int n,
+    int k,
+    float alpha,
+    float beta,
+    int64_t incx,
+    int64_t rsb,
+    int64_t csb,
+    int64_t incy,
+    const yt::blas::BlasContext& context =
+        yt::blas::defaultBlasContext()
+);
+```
+
+### 参数
+
+| 参数 | 说明 |
+| --- | --- |
+| `x` | 输入行向量的逻辑首元素 |
+| `B` | 矩阵 B 的逻辑 `(0,0)` |
+| `y` | 输入/输出向量的逻辑首元素 |
+| `n` | B 的列数，也是 y 的元素数 |
+| `k` | B 的行数，也是 x 的元素数 |
+| `alpha`、`beta` | 乘积和原输出的缩放系数 |
+| `incx`、`incy` | x 与 y 的元素步幅 |
+| `rsb`、`csb` | B 的行步幅与列步幅 |
+| `context` | 可选的融合宽度等调优参数 |
+
+### 行主序示例
+
+```cpp
+// x = [1, 1, 1]
+// B = [[1, 2],
+//      [3, 4],
+//      [5, 6]]
+float x[] = {1.0f, 1.0f, 1.0f};
+float B[] = {
+    1.0f, 2.0f,
+    3.0f, 4.0f,
+    5.0f, 6.0f
+};
+float y[2] = {};
+
+yt::blas::gemv_row(
+    x,
+    B,
+    y,
+    2,     // n
+    3,     // k
+    1.0f,  // alpha
+    0.0f,  // beta
+    1,     // incx
+    2,     // rsb
+    1,     // csb
+    1      // incy
+);
+
+// y == {9, 12}
+```
+
+## 使用已有输出
+
+`alpha` 和 `beta` 可以在一次调用中完成缩放与累加：
+
+```cpp
+float y[] = {10.0f, 20.0f};
+
+yt::blas::gemv_col(
+    A, x, y,
+    2, 3,
+    2.0f,  // alpha
+    0.5f,  // beta
+    3, 1,
+    1, 1
+);
+
+// y = 0.5*[10,20] + 2*[6,15] = [17,40]
+```
+
+当 `beta == 0` 时，数学结果不依赖 y 的旧值。对于 FP32 路径，底层会避免读取旧 y。
+
+:::warning
+FP16 GEMV 的部分布局会先把 y 转换到 FP32 临时缓冲区。即使 `beta == 0`，也应传入已经构造且可读取的 `float16` 对象；最简单的做法是将输出数组零初始化。
+:::
+
+## FP16 GEMV
+
+可以直接使用 typed `gemv_col<yt::float16>`、`gemv_row<yt::float16>`，也可以使用命名 wrapper：
+
+```cpp
+void yt::blas::hgemv_col(...);
+void yt::blas::hgemv_row(...);
+```
+
+紧密行主序的 `A[m,k] * x[k]` 还有简化接口：
+
+```cpp
+void yt::blas::hgemv(
+    const yt::float16* A,
+    const yt::float16* x,
+    yt::float16* y,
+    int m,
+    int k,
+    float alpha = 1.0f,
+    float beta = 0.0f
+);
+```
+
+示例：
+
+```cpp
+yt::float16 A[] = {
+    yt::float16(1.0f), yt::float16(2.0f),
+    yt::float16(3.0f), yt::float16(4.0f)
+};
+yt::float16 x[] = {
+    yt::float16(1.0f),
+    yt::float16(1.0f)
+};
+yt::float16 y[2] = {};
+
+yt::blas::hgemv(A, x, y, 2, 2);
+// y 约为 {3, 7}
+```
+
+每个输出的完整 K 归约使用 FP32，归约完成后才转换回 FP16。
+
+## `ger`
+
+GER 计算向量外积并更新矩阵：
+
+```text
+C(i,j) = beta*C(i,j) + alpha*x(i)*y(j)
+```
+
+函数签名：
+
+```cpp
+template <typename T>
+void yt::blas::ger(
+    int m,
+    int n,
+    float alpha,
+    float beta,
+    const T* x,
+    int64_t incx,
+    const T* y,
+    int64_t incy,
+    T* C,
+    int64_t rsc,
+    int64_t csc
+);
+```
+
+标准 BLAS GER 通常只执行 `C += alpha*x*yᵀ`。YTensor 增加了 `beta`，可以在同一次遍历中缩放或覆盖 C。
+
+### 覆盖生成外积
+
+```cpp
+float x[] = {1.0f, 2.0f};
+float y[] = {3.0f, 4.0f, 5.0f};
+float C[6] = {};
+
+yt::blas::ger(
+    2, 3,
+    1.0f,  // alpha
+    0.0f,  // beta：覆盖 C
+    x, 1,
+    y, 1,
+    C,
+    3, 1   // 2x3 紧密行主序
+);
+
+// C = [[3, 4, 5],
+//      [6, 8, 10]]
+```
+
+兼容接口：
+
+```cpp
+void yt::blas::sger(
+    int m,
+    int n,
+    float alpha,
+    const float* x,
+    const float* y,
+    float* C,
+    int lda
+);
+```
+
+该简化重载固定 `beta = 1`、单位向量步幅以及行主序 C；`lda` 是 C 的行步幅。`hger` 提供对应 FP16 版本。
+
+:::warning
+和 FP16 GEMV 一样，FP16 GER 会把原 C 转换到 FP32 临时缓冲区。即使传入 `beta == 0`，C 中也应是已经构造且可读取的 `float16` 对象。
+:::
+
+## 布局与转置视图
+
+矩阵地址统一为：
+
+```text
+matrix(row, column) =
+    base[row * row_stride + column * column_stride]
+```
+
+因此，转置不需要增加独立的 `transpose` 参数。例如，原矩阵 X 是紧密行主序 `[2,3]`，stride 为 `{3,1}`；将同一内存作为 `Xᵀ[3,2]` 使用时，传入 `{1,3}` 即可。
+
+对于切片矩阵，row stride 可以大于逻辑列数：
+
+```text
+原 storage 每行 8 个元素
+只对每行前 3 个元素做 GEMV
+
+row_stride = 8
+column_stride = 1
+```
+
+## 线程与性能
+
+- GEMV 会读取 `yt::blas::set_num_threads()` 配置，并只并行划分彼此独立的输出块；
+- GER 当前不创建 OpenMP 并行区；
+- `gemv_col` 和 `gemv_row` 会根据矩阵 stride 选择点积式或 AXPY 式遍历，无需用户手动选择；
+- 单位 stride 和连续输出通常具有更好的 SIMD 与缓存行为；
+- 小矩阵的线程调度成本可能超过计算收益。
+
+## 调用方责任
+
+- `m`、`n`、`k`、stride 和实际 storage 必须一致；
+- 所有 stride 以元素为单位；
+- 负 stride 的 pointer 必须指向逻辑首元素；
+- 输入与输出不应发生会影响后续读取的重叠；
+- 接口不会执行容量、shape、dtype 或 alias 检查。
+
+## 实现关系
+
+Level-2 不复制一套独立的 dtype 算法，而是按布局组合 Level-1：
+
+```text
+gemv_col / gemv_row
+├── 点积式遍历 ──► dotxf ──► dotxv
+└── 输出更新式遍历 ──► axpyf ──► axpyv
+
+ger
+└── scalv + axpyv
+```
+
+frame 负责布局选择、输出分块、线程和 FP16 写回；实际向量算术由 Level-1 原语负责。
+
+## 相关内容
+
+- [BLAS 总览](./overview.mdx)
+- [Level-1：向量运算](./level1.mdx)
+- [Level-3：矩阵矩阵运算](./level3.mdx)

@@ -1,0 +1,237 @@
+# YBLAS
+
+YBLAS 是 YTensor 自研的 CPU 线性代数实现，公共命名空间为 `yt::blas`。它适合直接处理裸指针、
+带步幅视图和自定义算子，提供向量、矩阵向量和矩阵矩阵运算，并支持 `float`、`float16`、
+任意元素步幅以及多线程 GEMM。
+
+:::tip
+如果输入已经是 `YTensor`，通常应优先使用 [`matmul`](../YTensor/math/matmul.mdx)。高层接口会处理形状检查、批次广播、后端选择和运行时 dtype；只有在编写底层算子、接入外部内存或需要精确控制布局时，才需要直接调用 `yt::blas`。
+:::
+
+## 使用条件
+
+YBLAS 当前的物理内核在编译目标同时启用 AVX2 和 FMA 时提供。使用源码头文件时：
+
+```cpp
+#include "ytensor.hpp"
+```
+
+GCC 或 Clang 至少需要为对应目标加入：
+
+```bash
+-mavx2 -mfma
+```
+
+需要 OpenMP 并行时再加入：
+
+```bash
+-fopenmp
+```
+
+:::warning
+不要只手动定义 AVX2/FMA 宏而不启用对应编译目标。直接调用 `yt::blas` 不会自动切换到 Naive 或 Eigen 后端；需要跨指令集运行时，应使用 `YTensor::matmul` 或自行提供 fallback。
+:::
+
+## 如何选择接口
+
+| 需求 | 推荐接口 | 文档 |
+| --- | --- | --- |
+| 两个向量的点积 | `sdot`、`hdot` | [Level-1](./level1.mdx) |
+| 矩阵乘向量 `A * x` | `gemv_col` | [Level-2](./level2.mdx) |
+| 行向量乘矩阵 `x * B` | `gemv_row` | [Level-2](./level2.mdx) |
+| rank-1 更新 `x * yᵀ` | `ger`、`sger`、`hger` | [Level-2](./level2.mdx) |
+| 紧密行主序矩阵乘法 | `sgemm_rowmajor` | [Level-3](./level3.mdx) |
+| 任意步幅矩阵乘法 | `sgemm`、`hgemm` | [Level-3](./level3.mdx) |
+| 只更新部分输出位置 | `sgemm_masked` | [Level-3](./level3.mdx) |
+| 在底层算子中执行单个 attention head | `flash_attention` | [SDPA](../function/fused.mdx#scaleddotproductattention) |
+| `YTensor` 矩阵或批量矩阵乘法 | `YTensor::matmul` | [矩阵乘法](../YTensor/math/matmul.mdx) |
+
+## 快速开始
+
+下面的示例分别计算向量点积和紧密行主序矩阵乘法：
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    float x[] = {1.0f, 2.0f, 3.0f};
+    float y[] = {4.0f, 5.0f, 6.0f};
+
+    float dot = yt::blas::sdot(x, y, 3);
+    std::cout << dot << '\n';  // 32
+
+    // A 为 2x3，B 为 3x2，C 为 2x2；三者都是紧密行主序。
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+    float B[] = {
+        1.0f, 2.0f,
+        3.0f, 4.0f,
+        5.0f, 6.0f
+    };
+    float C[4];
+
+    yt::blas::sgemm_rowmajor(A, B, C, 2, 2, 3);
+
+    std::cout << C[0] << ", " << C[1] << '\n';  // 22, 28
+    std::cout << C[2] << ", " << C[3] << '\n';  // 49, 64
+}
+```
+
+这里的 BLAS 接口接收裸指针，不持有 A、B、C 的内存，也不会从指针推断形状。
+
+## 理解步幅
+
+所有 stride 都以“元素”为单位，而不是以字节为单位。二维矩阵元素地址统一解释为：
+
+```text
+matrix(row, column) =
+    base[row * row_stride + column * column_stride]
+```
+
+以形状 `[rows, columns]` 为例：
+
+| 布局 | `row_stride` | `column_stride` |
+| --- | ---: | ---: |
+| 紧密行主序 | `columns` | `1` |
+| 紧密列主序 | `1` | `rows` |
+| 行主序矩阵的转置视图 | `1` | 原矩阵的 `columns` |
+
+例如，一个紧密行主序 `2 x 3` 矩阵：
+
+```text
+[a00, a01, a02,
+  a10, a11, a12]
+```
+
+其 `row_stride = 3`、`column_stride = 1`。如果把同一段内存看作 `3 x 2` 的转置视图，则不需要复制数据，只需交换两个 stride：
+
+```text
+row_stride = 1
+column_stride = 3
+```
+
+向量的 `incx`、`incy` 使用相同规则。`incx = 2` 表示每次前进两个元素。负 stride 也可以使用，但传入的 pointer 必须已经指向逻辑上的第一个元素：
+
+```cpp
+float x[] = {1.0f, 2.0f, 3.0f};
+
+// 逻辑向量为 {3, 2, 1}。
+const float* reversed = x + 2;
+int64_t incx = -1;
+```
+
+## 数据类型与精度
+
+| 接口 | 输入/输出 storage | 计算精度 |
+| --- | --- | --- |
+| `sdot`、`sgemm`、`sger` 等 | `float` | FP32 |
+| `hdot` | `float16` | FP32 累加，返回 `float` |
+| `hgemv`、`hger`、`hgemm` 等 | `float16` | FP32 计算，完成归约后写回 FP16 |
+| typed `gemm` | A/B/C 可独立为 `float` 或 `float16` | FP32 |
+
+FP16 GEMM 不会在每个 K 分块后转换回 FP16，而是在完整 K 归约结束后统一写回，从而避免分块大小改变舍入次数。
+
+## `alpha` 与 `beta`
+
+GEMV、GER 和 GEMM 使用统一形式：
+
+```text
+output = beta * output + alpha * result
+```
+
+常见设置：
+
+| 目标 | `alpha` | `beta` |
+| --- | ---: | ---: |
+| 覆盖输出 | `1` | `0` |
+| 累加到已有输出 | `1` | `1` |
+| 缩放乘积并覆盖 | 自定义值 | `0` |
+
+当 `beta == 0` 时，数学结果不依赖输出原值；FP32 GEMM 也会避免读取旧输出。裸指针所指对象仍必须已经构造且 storage 有效。FP16 Level-2 的临时转换行为见 [Level-2](./level2.mdx) 中的专门说明。
+
+## 线程配置
+
+YBLAS 默认保持串行。需要并行时，应在开始计算前设置进程级线程数：
+
+```cpp
+yt::blas::set_num_threads(4);
+
+yt::blas::sgemm_rowmajor(A, B, C, m, n, k);
+```
+
+相关接口：
+
+```cpp
+int yt::blas::default_num_threads();
+void yt::blas::set_num_threads(int n);
+int yt::blas::get_num_threads();
+```
+
+- `default_num_threads()` 只返回运行环境建议值，不会自动启用多线程；
+- `set_num_threads(n)` 将小于 `1` 的值按 `1` 处理；
+- 线程数和默认 context 都是进程级状态，应在工作线程启动前配置，不要在多个计算任务之间并发修改；
+- 小矩阵使用多线程可能比串行更慢，应以实际 workload 的 benchmark 为准。
+
+## 调用前必须确认
+
+直接使用 `yt::blas` 时，调用方负责以下事项：
+
+1. pointer 指向有效 storage，且形状和 stride 不会访问越界；
+2. stride 使用元素数而不是字节数；
+3. 负 stride 的 pointer 指向逻辑首元素；
+4. GEMM 的 A/B 不与可写 C 形成会覆盖后续输入的重叠；
+5. `m`、`n`、`k` 与实际内存布局一致；
+6. 当前 CPU 和编译目标支持 AVX2/FMA。
+
+这些接口不会执行 `YTensor` 级别的 shape、dtype、backend 或 alias 检查。若不能在调用点证明这些条件，优先使用高层张量接口。
+
+## 架构概览
+
+YBLAS 采用 BLIS 风格分层，但只实现项目实际需要的接口：
+
+```text
+YTensor::matmul                     scaledDotProductAttention
+       │                                      │
+       ▼                                      ▼
+strided：shape/layout/backend       function：broadcast/mask语义/backend
+       │                                      │
+       ├── Naive                              ├── MATH
+       ├── Eigen                              └── FLASH
+       └──────────────┐                           │
+                      ▼                           ▼
+                YBLAS 稳定算子与扩展接口 ◄── 直接调用 yt::blas
+                      │
+          ┌───────────┴────────────┐
+          ▼                        ▼
+    Level-1/2/3                 attention
+   向量、GEMV、GEMM       prefill分块 / decode GEMV
+          │                        │
+          └───────────┬────────────┘
+                      ▼
+             YBLAS 物理内核选择
+                      │
+                      ▼
+             当前：AVX2/FMA 微内核
+```
+
+- `strided` 只选择逻辑后端，不读取 AVX2 tile、寄存器宽度等 ISA 信息；
+- `function` 负责 SDPA 的张量语义和逻辑后端选择，不读取 YBLAS 的 tile 或寄存器字段；
+- YBLAS 在自身边界内选择物理内核；当前实现为 AVX2+FMA，新增 ISA 不改变 `MatmulBackend`；
+- Level-2 通过 Level-1v/1f 组合 GEMV 和 GER，不复制 dtype 专用算法；
+- Level-3 将任意 stride 的 A/B packing 为固定 panel，再调用 GEMM 微内核；
+- attention 是 YBLAS 的非标准扩展：prefill 复用 packing 和 GEMM 微内核并融合在线 softmax、mask 与 V 累加，decode 则复用 GEMV；
+- 整块不可见的 attention score tile 会在QK微内核之前跳过，因此物理后端必须保留 mask 的 tile 查询合同；
+- 普通/分组卷积复用 packed-panel ABI 和物理微内核，但卷积本身不属于 BLAS Level。
+
+这层划分主要解释性能行为和扩展边界；一般用户不需要直接调用 packing 或物理微内核。
+
+## 相关内容
+
+- [Level-1：向量运算](./level1.mdx)
+- [Level-2：矩阵向量运算](./level2.mdx)
+- [Level-3：矩阵矩阵运算](./level3.mdx)
+- [YTensor 矩阵乘法](../YTensor/math/matmul.mdx)
+- [卷积](../function/convolution.mdx)

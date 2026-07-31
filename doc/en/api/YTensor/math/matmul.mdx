@@ -1,87 +1,465 @@
-# Matrix Multiplication (matmul)
+# Matrix Multiplication
+
+## `matmul()`
+
+`matmul` multiplies the final two dimensions, with batch broadcasting over leading dimensions.
+
+### Signature
 
 ```cpp
-YTensor<T, 2> matmul(const YTensor<T, 2>& other) const;
+template <int dim1>
+YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> matmul(
+    const YTensor<T, dim1>& other,
+    yt::info::MatmulBackend backend =
+        yt::info::defaultMatmulBackend
+) const;
 ```
 
-Performs matrix multiplication: `Result = (*this) @ other`.
+### Parameters
 
-## `masked_matmul`
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `other` | `const YTensor<T, dim1>&` | — | Right operand |
+| `backend` | `MatmulBackend` | `defaultMatmulBackend` | Preferred backend; falls back when unsupported |
 
-`masked_matmul` computes matmul only on selected output positions. Unselected positions keep `maskedValue`.
+### Shape Rules
+
+For:
+
+```text
+left:   (..., m, k)
+right:  (..., k, n)
+result: (..., m, n)
+```
+
+- `left.shape(-1)` must equal `right.shape(-2)`;
+- leading batch dimensions follow YTensor broadcasting rules;
+- the result rank is `max(dim, dim1, 2)`.
+
+### Basic Matrix Multiplication
+
+```cpp
+#include "ytensor_single.hpp"
+
+int main() {
+    using namespace yt;
+
+    auto a = YTensor<float, 2>::randn(3, 4);
+    auto b = YTensor<float, 2>::randn(4, 5);
+    auto c = a.matmul(b);  // (3, 5)
+}
+```
+
+### Batched Matrix Multiplication
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 3, 4);
+auto b = YTensor<float, 3>::randn(10, 4, 5);
+auto c = a.matmul(b);  // (10, 3, 5)
+
+// c[i] = a[i] @ b[i]
+```
+
+### Batch Broadcasting
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 3, 4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);  // (10, 3, 5)
+
+// The same b is used for every batch in a.
+```
+
+### Vector-Matrix Product
+
+```cpp
+auto a = YTensor<float, 1>::randn(4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);  // (1, 5)
+```
+
+A rank-1 left operand is treated as a `1 x k` row matrix.
+
+### Matrix-Vector Product
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 4);
+auto b = YTensor<float, 1>::randn(4);
+auto c = a.matmul(b);  // (3, 1)
+```
+
+A rank-1 right operand is treated as a `k x 1` column matrix.
+
+### Higher-Rank Broadcasting
+
+```cpp
+auto a = YTensor<float, 4>::randn(2, 10, 3, 4);
+auto b = YTensor<float, 3>::randn(10, 4, 5);
+auto c = a.matmul(b);  // (2, 10, 3, 5)
+```
+
+## `masked_matmul()`
+
+`masked_matmul` writes matrix-product values only to active output coordinates. Inactive coordinates receive `maskedValue`.
+
+### Boolean Mask
 
 ```cpp
 template <int dim1>
 YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
-	const YTensor<T, dim1>& other,
-	const YTensor<bool, 2>& mask,
-	const T& maskedValue = static_cast<T>(0),
-	yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
+    const YTensor<T, dim1>& other,
+    const YTensor<bool, 2>& mask,
+    const T& maskedValue = static_cast<T>(0),
+    yt::info::MatmulBackend backend =
+        yt::info::defaultMatmulBackend
 ) const;
+```
 
+### Callable Predicate
+
+```cpp
 template <int dim1, typename Func>
 requires (!yt::utils::is_ytensor_v<std::decay_t<Func>>)
 YTensor<T, CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
-	const YTensor<T, dim1>& other,
-	Func&& func,
-	const T& maskedValue = static_cast<T>(0),
-	yt::info::MatmulBackend backend = yt::info::defaultMatmulBackend
+    const YTensor<T, dim1>& other,
+    Func&& func,
+    const T& maskedValue = static_cast<T>(0),
+    yt::info::MatmulBackend backend =
+        yt::info::defaultMatmulBackend
 ) const;
 ```
 
-- `mask` shape must be `[this.shape(-2), other.shape(-1)]`
-- `func` must be callable as `bool(int row, int col)`
-- Broadcast rules are the same as `matmul`
-- Non-selected output positions remain `maskedValue`
+| Parameter | Description |
+| --- | --- |
+| `other` | Right operand |
+| `mask` | 2D boolean tensor with shape `[this.shape(-2), other.shape(-1)]` |
+| `func` | Callable as `bool(int row, int col)` |
+| `maskedValue` | Value written to inactive positions; default `0` |
+| `backend` | Same preferred-backend policy as `matmul` |
 
-Example:
+Behavior:
+
+- output is initially filled with `maskedValue`;
+- active coordinates compute and receive the matrix-product value;
+- inactive coordinates skip multiply-accumulate work;
+- one 2D mask is shared by every broadcast batch.
+
+### Optional YBLAS Tile Classification
+
+A callable predicate may additionally provide:
 
 ```cpp
-auto A = YTensor<float, 2>::randn(4, 8);
-auto B = YTensor<float, 2>::randn(8, 4);
+bool tileAllTrue(
+    int row0,
+    int col0,
+    int mr,
+    int nr
+) const;
 
-auto M = YTensor<bool, 2>::zeros({4, 4});
+bool tileAllFalse(
+    int row0,
+    int col0,
+    int mr,
+    int nr
+) const;
+```
+
+These methods are optional. Without them, YTensor classifies the tile from element predicates.
+
+### Examples
+
+```cpp
+auto a = yt::YTensor<float, 2>::randn(4, 8);
+auto b = yt::YTensor<float, 2>::randn(8, 4);
+
+// Keep the lower triangle.
+auto mask = yt::YTensor<bool, 2>::zeros({4, 4});
 for (int i = 0; i < 4; ++i) {
-	for (int j = 0; j <= i; ++j) M.at(i, j) = true;
+    for (int j = 0; j <= i; ++j) {
+        mask.at(i, j) = true;
+    }
+}
+auto c0 = a.masked_matmul(b, mask, -1e9f);
+
+// Keep only the diagonal.
+auto c1 = a.masked_matmul(
+    b,
+    [](int row, int col) {
+        return row == col;
+    },
+    0.0f
+);
+```
+
+## `matView()`
+
+`matView()` treats the final two dimensions as matrices:
+
+```cpp
+YTensor<
+    YTensor<T, 2>,
+    std::max(1, dim - 2)
+> matView() const;
+```
+
+```cpp
+auto a = YTensor<float, 3>::randn(10, 3, 4);
+auto matrices = a.matView();
+
+// matrices.at(0) is a YTensor<float, 2> with shape (3, 4).
+auto first = matrices.at(0);
+```
+
+:::warning
+`matView()` shares storage with the source tensor. Mutating an inner matrix mutates the original tensor:
+
+```cpp
+auto a = YTensor<float, 3>::randn(2, 3, 4);
+auto matrices = a.matView();
+
+matrices.at(0).at_(1, 2) = 999.0f;
+std::cout << a.at(0, 1, 2);  // 999
+```
+:::
+
+## Matrix Multiplication Backends
+
+The build chooses a default preferred backend. A caller may request another preference, but unsupported dtype, layout, or build combinations fall back to an available implementation.
+
+```cpp
+enum class MatmulBackend {
+    Naive = 0,
+    Eigen = 1,
+    YBLAS = 2
+};
+```
+
+| Backend | Dependency | Implementation | Supported types | Typical use |
+| --- | --- | --- | --- | --- |
+| Naive | None | Reference implementation | All supported types | Compatibility, debugging, custom types |
+| Eigen | Eigen | Eigen implementation | Arithmetic types | Portable optimized path |
+| YBLAS | Currently requires an AVX2+FMA CPU and compiler target | Blocked SIMD | `float`, `float16` | x86_64 matrix workloads |
+
+### Default Preference
+
+```cpp
+static constexpr MatmulBackend defaultMatmulBackend =
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
+```
+
+Preference order: YBLAS, then Eigen, then Naive.
+
+### Requesting a Backend Preference
+
+```cpp
+auto a = YTensor<float, 2>::randn(100, 100);
+auto b = YTensor<float, 2>::randn(100, 100);
+
+auto c0 = a.matmul(
+    b,
+    yt::info::MatmulBackend::Naive
+);
+
+// Falls back when the current build or layout cannot use Eigen.
+auto c1 = a.matmul(
+    b,
+    yt::info::MatmulBackend::Eigen
+);
+
+// Falls back when the current dtype or build cannot use YBLAS.
+auto c2 = a.matmul(
+    b,
+    yt::info::MatmulBackend::YBLAS
+);
+```
+
+## Performance Considerations
+
+Performance depends on shape, storage layout, batch count, threads, compiler, and CPU. Fixed GFLOPS or speedup values are not meaningful without the corresponding benchmark environment.
+
+### Layout Support and Copy Cost
+
+`matmul` accepts arbitrary element strides. A transposed view does not need to be copied before multiplication:
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);
+
+auto a_t = a.transpose(0, 1);
+auto b2 = YTensor<float, 2>::randn(3, 5);
+auto c2 = a_t.matmul(b2);  // No required contiguous().
+```
+
+`transpose()` creates a view. `contiguous()` allocates new storage and copies every element. A contiguous copy may improve later locality, but it also adds a complete copy, so a non-contiguous input is not by itself a reason to materialize one.
+
+### Backend Layout Behavior
+
+| Backend | Left layout | Right layout | Behavior |
+| --- | --- | --- | --- |
+| Naive | Arbitrary | Arbitrary | Reads source strides directly |
+| Eigen | Adapter-supported layout | Adapter-supported layout | Depends on Eigen mapping and access order |
+| YBLAS | Arbitrary | Arbitrary | Packs directly from source strides |
+
+These are support contracts, not universal performance rankings.
+
+## Type Requirements
+
+`matmul` requires addition and multiplication:
+
+```cpp
+static_assert(
+    HAVE_ADD<T> && HAVE_MUL<T>,
+    "Type must have add and mul in matmul"
+);
+```
+
+Supported categories include:
+
+- arithmetic types such as `float`, `double`, `int`, and `int64_t`;
+- YTensor low-precision types such as `float16`, `bfloat16`, and float8;
+- custom types whose `operator+` and `operator*` return the same type.
+
+Custom non-arithmetic types use the Naive backend:
+
+```cpp
+struct Complex {
+    float real;
+    float imag;
+
+    Complex operator+(const Complex& other) const;
+    Complex operator*(const Complex& other) const;
+};
+
+auto a = YTensor<Complex, 2>(3, 4);
+auto b = YTensor<Complex, 2>(4, 5);
+auto c = a.matmul(b);
+```
+
+## Errors
+
+An inner-dimension mismatch throws `std::invalid_argument`:
+
+```cpp
+auto a = YTensor<float, 2>::randn(3, 5);
+auto b = YTensor<float, 2>::randn(4, 7);
+
+try {
+    auto c = a.matmul(b);
+} catch (const std::invalid_argument& e) {
+    std::cout << e.what() << '\n';
+}
+```
+
+Required condition:
+
+```text
+a.shape(-1) == b.shape(-2)
+```
+
+## Comparison with NumPy and PyTorch
+
+```python
+# NumPy/PyTorch
+a = np.random.randn(3, 4)
+b = np.random.randn(4, 5)
+c = a @ b
+```
+
+```cpp
+// YTensor
+auto a = YTensor<float, 2>::randn(3, 4);
+auto b = YTensor<float, 2>::randn(4, 5);
+auto c = a.matmul(b);
+```
+
+| Feature | NumPy/PyTorch | YTensor |
+| --- | --- | --- |
+| Operator | `@` or `matmul()` | `matmul()` |
+| Backend selection | Automatic | Preferred backend may be requested, with fallback |
+| GPU support | Available in PyTorch | Not available |
+| Rank in return type | Runtime | Encoded in the typed result |
+
+## Best Practices
+
+### 1. Preserve Batched Expressions When Data Is Already Batched
+
+```cpp
+auto a = YTensor<float, 3>::randn(100, m, k);
+auto b = YTensor<float, 3>::randn(100, k, n);
+
+// Avoid splitting an existing batch into repeated dispatches.
+auto a_matrices = a.matView();
+auto b_matrices = b.matView();
+std::vector<YTensor<float, 2>> results;
+for (int i = 0; i < 100; ++i) {
+    results.push_back(
+        a_matrices.at(i).matmul(b_matrices.at(i))
+    );
 }
 
-auto C0 = A.masked_matmul(B, M, -1e9f);
-auto C1 = A.masked_matmul(B, [](int r, int c) { return r == c; }, 0.0f);
+// Preserve batch semantics and backend optimization opportunities.
+auto c = a.matmul(b);
 ```
 
-## Rules
+If data begins as separate tensors, `stack()` itself combines and copies storage. Benchmark the total cost of stacking plus one batched operation against repeated independent operations.
 
-1.  Input must be 2D matrices (or viewable as 2D).
-2.  Shapes must satisfy `(M, K) x (K, N) -> (M, N)`.
-3.  Supports mixed Types (auto-promotion).
-
-## Backend Implementation
-
-YTensor automatically selects the optimal backend based on hardware and compilation options:
-
-| Backend | Condition | Features |
-| --- | --- | --- |
-| **AVX2** | `YT_USE_AVX2` + x86 CPU | Blocked optimization, SIMD, max performance. **Requires Row-Major inputs!** |
-| **Eigen** | `YT_USE_EIGEN` | Uses Eigen library. High performance, handles non-contiguous well. |
-| **Naive** | Default | Slow, pure C++ loops. For reference/debugging. |
-
-## Usage
+When every batch shares one right operand, use broadcasting instead of materializing copies:
 
 ```cpp
-auto A = YTensor<float, 2>::rand(100, 50);
-auto B = YTensor<float, 2>::rand(50, 20);
-
-auto C = A.matmul(B); // Shape [100, 20]
+auto a = YTensor<float, 3>::randn(100, m, k);
+auto b = YTensor<float, 2>::randn(k, n);
+auto c = a.matmul(b);
 ```
 
-## Performance Note
-
-If using the **AVX2** backend, ensure input matrices are stored in **Row-Major** order (Contiguous) for best performance. If inputs are Transposed (Column-Major), the backend might need to perform an internal copy/repacking, adding overhead.
+### 2. Do Not Call `contiguous()` Unconditionally
 
 ```cpp
-// AVX2 Prefer:
-A.matmul(B);
+auto view = getTensor().transpose(0, 1);
 
-// Might be slower due to memory layout conversion:
-A.transpose().matmul(B); 
+// One use: avoid forcing a complete copy.
+auto once = view.matmul(b);
+
+// Avoid copying the same view inside a loop.
+for (const auto& weight : weights) {
+    auto result = view.contiguous().matmul(weight);
+}
+
+// If a benchmark shows a reuse benefit, copy once.
+auto prepared = view.contiguous();
+for (const auto& weight : weights) {
+    auto result = prepared.matmul(weight);
+}
 ```
+
+The tradeoff depends on the view strides, matrix shape, backend, and reuse count.
+
+### 3. Start with the Default Preference
+
+```cpp
+auto c = a.matmul(b);
+
+// Pin a preference only after a representative benchmark.
+auto tuned = a.matmul(
+    b,
+    yt::info::MatmulBackend::Eigen
+);
+```
+
+Do not select Naive from an unmeasured fixed threshold such as `m*n*k < 1000`. Backend overhead also depends on batches, strides, dtype, threads, compiler, and CPU.
+
+## See Also
+
+- [BLAS Overview](../../blas/overview.mdx)
+- [BLAS Level-3](../../blas/level3.mdx)
+- [Arithmetic Operations](./arithmetic.mdx)
+- [Broadcasting](./broadcast.mdx)
+- [Backend Selection](../../guides/backend_selection.mdx)
+- [Performance Tips](../../guides/performance_tips.mdx)

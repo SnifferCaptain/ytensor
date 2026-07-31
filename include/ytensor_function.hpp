@@ -10,6 +10,7 @@
 #include "../ytensor.hpp"
 
 #include "function/ops.hpp"
+#include "function/convolution.hpp"
 #include "function/activation.hpp"
 #include "function/normalization.hpp"
 #include "function/loss.hpp"

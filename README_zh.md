@@ -311,173 +311,57 @@ io.close();
 > 适合模型权重、数据集等便捷存储。
 
 ---
-## 🧠 内存存储层
-
-从 `0.14` 版本开始，张量底层存储由 `YMemory` 封装，不再直接在张量中裸持有 `shared_ptr<char[]>` 成员。
-
-- `YMemory` 只封装线性字节存储句柄，并提供 `rawData()`、`get()`、`nbytes()`、`device()`。
-- `YTensorBase` 持有 `_memory`、`_layout`、`_element_size`、`_dtype`；活跃 shape、stride、offset 元数据仅由 `YLayout` 持有。
-- layout 语义与对象构造仍属于 tensor/layout owner，不属于 `YMemory`。
-- `device()` 当前返回底层存储设备字符串，例如 `"cpu"`；不会进行隐式跨设备同步。
-
-这个改动保持用户侧张量 API 不变，同时为未来设备后端扩展预留 storage 层接口。
-
----
-## 📦 可选预编译库
-
-定义 `YT_USE_LIB=1` 并链接库，可减少大型项目的重复编译开销，API 与 header-only 保持一致。
-
-首先构建库：
-```bash
-mkdir build && cd build
-cmake .. && make -j8
-```
-
-库文件输出到 `lib/bin/`。使用时定义宏并链接：
-```cpp
-#define YT_USE_LIB 1
-#include "ytensor.hpp"
-```
-
-```bash
-# Linux 链接示例
-g++ -std=c++20 -O2 -fopenmp main.cpp \
-  -I/path/to/ytensor -I/path/to/ytensor/lib/include \
-  -L/path/to/ytensor/lib/bin -Wl,-rpath,/path/to/ytensor/lib/bin \
-  -lytensor -lz -o main
-```
-
-> **提示**：库模式下统一使用 `YTensor<T>` 而非 `YTensorBase`，以获得对自定义类型的完整支持。
-
----
 
 ## 文件结构
 
 ```tree
 ./
-├─ example/                                         | 示例代码
-│  ├─ convert/                                      | 数据格式转换脚本
-│  │   ├─ __init__.py                               |
-│  │   ├─ numpy2yt.py                               | numpy格式转换为ytensor格式[待完善]
-│  │   ├─ safetensors2yt.py                         | safetensors格式转换为ytensor格式[待完善]
-│  │   └─ ytfile.py                                 | ytensor文件类[待完善]
-│  ├─ qwen3/                                        | Qwen3推理示例
-│  │   ├─ CMakeLists.txt                            | 构建配置文件
-│  │   ├─ include/                                  |
-│  │   │   ├─ json.hpp                              | nlohmann json解析库
-│  │   │   ├─ qwen3.hpp                             | Qwen3 模型接口与推理封装声明
-│  │   │   └─ tokenlizer.hpp                        | 分词器
-│  │   ├─ main.cpp                                  | 程序入口
-│  │   ├─ model/                                    | 模型权重与分词器文件存放目录
-│  │   │   ├─ config.json                           | Qwen3 模型配置文件
-│  │   │   ├─ tokenizer.json                        | 分词器词表文件
-│  │   │   └─ tokenizer_config.json                 | 分词器配置文件
-│  │   └─ src/                                      | 源码实现目录
-│  │       ├─ qwen3.cpp                             | Qwen3 模型推理实现
-│  │       └─ tokenlizer.cpp                        | 分词器实现
-│  └─ ymodel2-s-2/                                  | 推理ymodel2语言模型示例
-│      ├─ CMakeLists.txt                            |
-│      ├─ json.hpp                                  | nlohmann json解析库
-│      ├─ main.cpp                                  | 主程序入口
-│      ├─ model/                                    | 模型权重、分词器文件存储
-│      │   ├─ tokenizer.json                        | 词表文件，需要从huggingface下载
-│      │   ├─ tokenizer_config.json                 | 分词器配置文件，需要从huggingface下载
-│      │   └─ y2_sft_s-2.yt                         | 模型权重文件，需要从huggingface下载
-│      ├─ tokenlizer.cpp                            | 分词器实现
-│      ├─ tokenlizer.hpp                            | 分词器头文件
-│      ├─ ymodel2.cpp                               | 模型实现✨
-│      └─ ymodel2.hpp                               | 模型头文件✨
-├─ include/                                         | 头文件目录
-│  ├─ 3rd/                                          | 第三方依赖
-│  │   └─ backward.hpp                              | google堆栈追踪库，可以移除，方便调试用
-│  ├─ function/                                     | 函数式子模块
-│  │   ├─ activation.hpp                            | 激活相关函数声明
-│  │   ├─ loss.hpp                                  | 损失函数声明
-│  │   ├─ normalization.hpp                         | 归一化相关函数声明
-│  │   └─ ops.hpp                                   | 通用算子与融合算子声明
-│  ├─ kernel/                                       | 内核实现
-│  │   ├─ avx2/                                     | AVX2 内核
-│  │   │   ├─ flash_attention.hpp                   | Flash Attention 内核接口
-│  │   │   ├─ gemm_utils.hpp                        | AVX2 GEMM 辅助工具
-│  │   │   ├─ hdot.hpp                              | 半精度点积内核
-│  │   │   ├─ hgemm.hpp                             | 半精度 GEMM
-│  │   │   ├─ hgemv.hpp                             | 半精度 GEMV
-│  │   │   ├─ hger.hpp                              | 半精度 GER
-│  │   │   ├─ sdot.hpp                              | 单精度点积内核
-│  │   │   ├─ sgemm.hpp                             | 单精度 GEMM
-│  │   │   ├─ sgemv.hpp                             | 单精度 GEMV
-│  │   │   └─ sger.hpp                              | 单精度 GER
-│  │   ├─ broadcast.hpp                             | 广播运算
-│  │   ├─ memory_utils.hpp                          | 内存分配
-│  │   ├─ parallel_for.hpp                          | 并行循环
-│  │   └─ type_dispatch.hpp                         | 类型分发辅助
-│  ├─ types/                                        | 类型相关
-│  │   ├─ bfloat16.hpp                              | bfloat16类型支持
-│  │   └─ float_spec.hpp                            | 多种浮点数类型支持
-│  ├─ ytensor_base.hpp                              | YTensor基类
-│  ├─ ytensor_base_math.hpp                         | YTensor基类数学操作
-│  ├─ ytensor_concepts.hpp                          | 类型检查等概念
-│  ├─ ytensor_core.hpp                              | YTensor核心类
-│  ├─ ytensor_function.hpp                          | 函数式编程
-│  ├─ ytensor_extern_templates.hpp                  | 预实例化模板声明
-│  ├─ ytensor_infos.hpp                             | 全局设置信息
-│  ├─ ytensor_io.hpp                                | 文件存储系统
-│  ├─ ytensor_math.hpp                              | YTensor数学操作
-│  ├─ ytensor_memory.hpp                            | 线性存储与设备句柄
-│  └─ ytensor_types.hpp                             | 类型相关
-├─ lib/                                             | `YT_USE_LIB` 预编译后端
-│  ├─ bin/                                          | 库产物目录（如 libytensor.so）
-│  ├─ CMakeLists.txt                                | 构建配置
-│  └─ src/                                          |
-│      └─ ytensor_library.cpp                       | 库实现入口
-├─ single-header/                                   | 单头文件版本
-│  ├─ ytensor_single.hpp                            | 单头文件版本的YTensor，包含所有功能
-│  └─ packer.py                                     | 单头文件打包脚本
-├─ src/                                             | 源文件实现目录
-│  ├─ function/                                     | 函数式实现
-│  │   ├─ activation.inl                            | 激活相关函数实现
-│  │   ├─ loss.inl                                  | 损失函数实现
-│  │   ├─ normalization.inl                         | 归一化相关函数实现
-│  │   └─ ops.inl                                   | 通用算子与融合算子实现
-│  ├─ kernel/                                       | 底层内核实现
-│  │   ├─ avx2/
-│  │   │   ├─ flash_attention.inl                   | AVX2 Flash Attention 内核
-│  │   │   ├─ gemm_utils.inl                        | AVX2 GEMM 辅助实现
-│  │   │   ├─ hdot.inl                              | 半精度点积内核
-│  │   │   ├─ hgemm.inl                             | 半精度 GEMM 内核
-│  │   │   ├─ hgemv.inl                             | 半精度 GEMV 内核
-│  │   │   ├─ hger.inl                              | 半精度 GER 内核
-│  │   │   ├─ sdot.inl                              | 单精度点积内核
-│  │   │   ├─ sgemm.inl                             | AVX2 GEMM 内核
-│  │   │   ├─ sgemv.inl                             | AVX2 GEMV 内核
-│  │   │   └─ sger.inl                              | 单精度 GER 内核
-│  │   ├─ broadcast.inl                             | 广播内核实现
-│  │   ├─ memory_utils.inl                          | 内存工具实现
-│  │   ├─ parallel_for.inl                          | 并行循环实现
-│  │   └─ type_dispatch.inl                         | 类型分发实现
-│  ├─ ytensor_base.inl                              | YTensor基类
-│  ├─ ytensor_base_math.inl                         | YTensor基类数学操作
-│  ├─ ytensor_base_templates.inl                    | YTensor基类模板实例化
-│  ├─ ytensor_core.inl                              | YTensor实现
-│  ├─ ytensor_function.inl                          | YTensor函数式编程
-│  ├─ ytensor_io.inl                                | YTensor文件存储系统
-│  ├─ ytensor_io_templates.inl                      | YTensor文件存储模板实例化
-│  ├─ ytensor_math.inl                              | YTensor数学操作
-│  └─ ytensor_memory.inl                            | 线性存储实现
-└─ ytensor.hpp                                      | 主头文件，包含所有必要的头文件
+├─ doc/                          | 使用指南与 API 文档
+│  ├─ en/                        | 英文文档
+│  │  ├─ api/                    | 英文 API 文档
+│  │  └─ installation/           | 英文安装与构建说明
+│  └─ zh/                        | 中文文档
+│     ├─ api/                    | 中文 API 文档
+│     └─ installation/           | 中文安装与构建说明
+├─ example/                      | 数据转换与模型推理示例
+│  ├─ convert/                   | YTensor 与其他数据格式的转换工具
+│  ├─ qwen3/                     | Qwen3 CPU 推理示例
+│  │  ├─ include/                | Qwen3 示例声明与第三方头文件
+│  │  ├─ model/                  | Qwen3 配置、权重与分词器资源目录
+│  │  └─ src/                    | Qwen3 示例实现
+│  └─ ymodel2-s-2/               | YModel2 CPU 推理示例
+│     └─ model/                  | YModel2 权重与分词器资源目录
+├─ include/                      | YTensor 公共声明与模板接口
+│  ├─ 3rd/                       | 项目内使用的第三方头文件
+│  ├─ blas/                      | YBLAS 接口与 frame 声明
+│  │  └─ kernels/                | YBLAS 物理微内核声明
+│  │     └─ avx2/                | AVX2/FMA 微内核声明
+│  ├─ function/                  | 神经网络与函数式算子接口
+│  ├─ strided/                   | Strided layout 算法接口
+│  ├─ type/                      | dtype 与数值类型支持
+│  └─ utils/                     | 通用工具接口
+├─ src/                          | YTensor 实现
+│  ├─ blas/                      | YBLAS frame 与算子实现
+│  │  └─ kernels/                | YBLAS 物理微内核实现
+│  │     └─ avx2/                | AVX2/FMA 微内核实现
+│  ├─ function/                  | 神经网络与函数式算子实现
+│  ├─ strided/                   | Strided layout 算法实现
+│  ├─ type/                      | dtype 分发与类型实现
+│  └─ utils/                     | 通用工具实现
+├─ lib/                          | YTensor 库构建目录
+│  └─ src/                       | 库实现入口
+└─ single-header/                | 单头文件版本与打包工具
 ```
-> YTensor 版本：0.14  
+> YTensor 版本：0.16  
 **注意： 当前版本仍在快速迭代中，部分不常用或底层API 可能会有较大变动，请密切关注更新日志。**
 
 ---
 
 ## 最新更新
 
-- 重构张量运行时架构，引入 `YLayoutType`、`YMeta` 与 `YLayout` 管理 layout metadata，并将 Strided 行为拆分为 `broadcast`、`view`、`copy`、`reduce`、`matmul` 五个职责模块。
-- 新增 runtime dtype kernel 与 pairwise cast 注册机制，完善自定义 dtype 的构造、复制、析构、格式化和序列化生命周期支持。
-- 修复广播别名、重叠 view 写入、非 POD 复制、数值转换、归约、矩阵乘法及文件 IO 中的正确性问题，并恢复 typed 访问与 KV-cache 路径性能。
-- 明确普通拷贝共享 values storage、`clone()` 创建独立副本的内存语义，补充中英文 runtime 架构文档与实现注释。
-- 同步生成并验证 `ytensor_single.hpp`；`YT_USE_LIB` 预编译后端保持可选，Qwen3 示例可通过 CMake 开关在 header-only 与 shared-library 模式间切换。
+- 重新设计 BLAS 后端架构，在原有 AVX2 实现之上建立独立的 YBLAS 层，让上层调用不再依赖具体指令集。
+- 优化 Qwen3 的 CPU 推理性能，encode 速度恢复正常。
+- 新增卷积算子。
 
 ---
 如需更多示例、API 细节或贡献建议，欢迎查阅 example/ 目录或提交 issue！

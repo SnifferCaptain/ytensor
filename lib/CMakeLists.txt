@@ -24,6 +24,9 @@ target_link_libraries(ytensor PUBLIC
     OpenMP::OpenMP_CXX
     ZLIB::ZLIB
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    target_link_options(ytensor PRIVATE -fopenmp=libomp)
+endif()
 
 if(WIN32)
     set_target_properties(ytensor PROPERTIES

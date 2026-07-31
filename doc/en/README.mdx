@@ -76,9 +76,17 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 - `yt::function` namespace - Common function library
   - [Activation Functions](./api/function/activation.mdx)
   - [Normalization](./api/function/normalization.mdx)
+  - [Convolution](./api/function/convolution.mdx)
   - [Pooling](./api/function/pooling.mdx)
   - [Loss Functions](./api/function/loss.mdx)
   - [Fused Operators](./api/function/fused.mdx)
+
+#### BLAS Linear Algebra Layer
+
+- [BLAS Overview](./api/blas/overview.mdx) - Requirements, interface selection, strides, precision, and threads
+  - [Level-1](./api/blas/level1.mdx) - Dot products, vector strides, and low-level vector primitives
+  - [Level-2](./api/blas/level2.mdx) - GEMV and GER layouts with usage examples
+  - [Level-3](./api/blas/level3.mdx) - GEMM, mixed precision, and masked output
 
 #### I/O Operations
 
@@ -105,7 +113,7 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 - [Quick Start](./api/guides/quick_start.mdx) - A complete example from scratch
 - [Memory Model](./api/guides/memory_model.mdx) - In-depth analysis of view, copy, contiguous
 - [Broadcasting Mechanism](./api/guides/broadcast_guide.mdx) - How to use broadcasting operations
-- [Backend Selection Strategy](./api/guides/backend_selection.mdx) - Comparison of Naive, Eigen, AVX2
+- [Backend Selection Strategy](./api/guides/backend_selection.mdx) - Comparison of Naive, Eigen, and YBLAS
 - [Performance Optimization Tips](./api/guides/performance_tips.mdx) - How to write efficient code
 - [Differences from Python](./api/guides/python_differences.mdx) - Essential for NumPy/PyTorch users
 - [Common Pitfalls](./api/guides/common_pitfalls.mdx) - Avoid common mistakes
@@ -119,6 +127,8 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 
 ## v0.14 Highlights
 
+- Added a BLIS-style CPU BLAS hierarchy with Level-1v/1f/1m, Level-2, blocked Level-3, typed packing, AVX2 microkernels, and a shared tuning context.
+- Added grouped and depthwise `conv1d` / `conv2d` with bias, asymmetric padding, FP16 storage and FP32 accumulation, plus a non-AVX2 reference path.
 - Added `YMemory`, `YStorageBase`, and `YCpuStorage` as the tensor storage wrapper layer.
 - `YTensorBase` now owns storage through `YMemory`, while shape, stride, offset, dtype, and element semantics remain in the tensor layer.
 - Added `device()` and `nbytes()` storage queries on `YTensorBase`.
@@ -128,7 +138,7 @@ See the [Quick Start Guide](./api/guides/quick_start.mdx) for more examples.
 - `yt::function` is reorganized into `activation`, `normalization`, `ops`, and `loss`.
 - Added `linear`, `rmsNorm`, `normalize`, `instanceNorm`, naive `batchNorm`, and `groupNorm`.
 - Softmax is documented as an activation; non-element-wise ops no longer expose simplified `order` derivative APIs.
-- SDPA now provides `MATH` and `FLASH_AVX2` backends with generic bool-mask, predicate-mask, and bias support.
+- SDPA now provides `MATH` and `FLASH` backends with generic bool-mask, predicate-mask, and bias support.
 
 ## Getting Help
 

@@ -3,6 +3,7 @@
 // #define YT_USE_AVX2 1    // 让库自动查看否支持AVX2加速
 #include "../../ytensor.hpp"
 // #include "../../single-header/ytensor_single.hpp"
+
 #include <vector>
 #include <string>
 #include <cmath>
@@ -49,7 +50,7 @@ struct YConfig2 {
     int intermediate_size = 1024;
     int num_heads = 8;
     int head_dim = 64;
-    int max_position_embeddings = 8192;
+    int max_position_embeddings = 4096;
     
     void scale_lvl(int lvl);
 };

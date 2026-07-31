@@ -295,10 +295,10 @@ int main() {
         std::cout << "Eigen backend: Disabled" << std::endl;
     #endif
     
-    #if YT_USE_AVX2
-        std::cout << "AVX2 backend: Enabled" << std::endl;
+    #if YT_USE_YBLAS
+        std::cout << "YBLAS backend: Enabled" << std::endl;
     #else
-        std::cout << "AVX2 backend: Disabled" << std::endl;
+        std::cout << "YBLAS backend: Disabled" << std::endl;
     #endif
     
     return 0;

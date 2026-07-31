@@ -1,9 +1,11 @@
 #include "ymodel2.hpp"
+#include "../../include/3rd/backward.hpp"
 #include "tokenlizer.hpp"
+
 #include <chrono>
 #include <iostream>
+#include <stdexcept>
 #include <string>
-#include "../../include/3rd/backward.hpp"
 
 backward::SignalHandling sh;
 
@@ -25,8 +27,9 @@ int main() {
     
     // 初始化模型配置
     ymodel2::YConfig2 config;
+    // config.scale_lvl(0);
     config.scale_lvl(-2);
-    
+
     // 初始化并加载模型
     ymodel2::YForCausalLM2 model;
     model.init(config);
@@ -39,11 +42,11 @@ int main() {
     }
     std::cout << "model loaded successfully." << std::endl;
     std::cout << "using backend: ";
-    if(yt::infos::defaultMatmulBackend == yt::infos::MatmulBackend::Naive){
+    if(yt::info::defaultMatmulBackend == yt::info::MatmulBackend::Naive){
         std::cout << "Naive";
-    }else if(yt::infos::defaultMatmulBackend == yt::infos::MatmulBackend::Eigen){
+    }else if(yt::info::defaultMatmulBackend == yt::info::MatmulBackend::Eigen){
         std::cout << "Eigen";
-    }else if(yt::infos::defaultMatmulBackend == yt::infos::MatmulBackend::AVX2){
+    }else if(yt::info::defaultMatmulBackend == yt::info::MatmulBackend::AVX2){
         std::cout << "AVX2";
     }
     std::cout << std::endl;
@@ -59,8 +62,8 @@ int main() {
     
     // 存储对话历史
     std::vector<std::pair<std::string, std::string>> chat_history;
-    // 记录上一次对话结束后的完整token序列（用于计算增量）
-    std::vector<int64_t> prev_tokens;
+    // 精确记录已经写入KV cache的token序列。
+    std::vector<int64_t> cached_tokens;
     
     while (true) {
         std::cout << "You: ";
@@ -85,7 +88,7 @@ int main() {
         // 检查清空历史命令
         if (user_input == "clear") {
             chat_history.clear();
-            prev_tokens.clear();
+            cached_tokens.clear();
             model.reset_kv_cache();
             std::cout << "chat history cleared." << std::endl;
             std::cout << std::endl;
@@ -111,12 +114,12 @@ int main() {
         int decode_len = 0;
         
         // 判断是否可以使用增量生成
-        bool use_incremental = !prev_tokens.empty() && prev_tokens.size() < input_ids.size();
+        bool use_incremental = !cached_tokens.empty() && cached_tokens.size() < input_ids.size();
         
         // 验证前缀是否匹配（确保KV缓存有效）
         if (use_incremental) {
-            for (size_t i = 0; i < prev_tokens.size(); ++i) {
-                if (prev_tokens[i] != input_ids[i]) {
+            for (size_t i = 0; i < cached_tokens.size(); ++i) {
+                if (cached_tokens[i] != input_ids[i]) {
                     use_incremental = false;
                     break;
                 }
@@ -127,28 +130,37 @@ int main() {
         
         if (use_incremental) {
             // 增量生成：只处理新增的token
-            for (size_t i = prev_tokens.size(); i < input_ids.size(); ++i) {
+            for (size_t i = cached_tokens.size(); i < input_ids.size(); ++i) {
                 new_ids.push_back(static_cast<int>(input_ids[i]));
             }
         } else {
             // 首次对话或前缀不匹配：重置KV cache，完整处理
             model.reset_kv_cache();
-            prev_tokens.clear();
+            cached_tokens.clear();
             new_ids = std::vector<int>(input_ids.begin(), input_ids.end());
         }
         
         encode_len = new_ids.size();
         
         // 统一使用generate函数（自动处理KV缓存复用和上下文溢出）
-        model.generate(new_ids, 8192, eos_id, [&](int token_id) {
-            std::string token_str = tokenizer.decode({token_id});
-            response += token_str;
-            std::cout << token_str << std::flush;
-            if(!decode_len++){
-                et1 = std::chrono::system_clock::now();
-                dt0 = std::chrono::system_clock::now();
-            }
-        });
+        auto generated_ids = model.generate(
+            new_ids, model.get_max_context_len(), eos_id, [&](int token_id) {
+                std::string token_str = tokenizer.decode({token_id});
+                response += token_str;
+                std::cout << token_str << std::flush;
+                if (!decode_len++) {
+                    et1 = std::chrono::system_clock::now();
+                    dt0 = std::chrono::system_clock::now();
+                }
+            });
+
+        cached_tokens.insert(cached_tokens.end(), new_ids.begin(), new_ids.end());
+        cached_tokens.insert(cached_tokens.end(), generated_ids.begin(), generated_ids.end());
+        size_t expected_cache_len = std::min(
+            cached_tokens.size(), static_cast<size_t>(model.get_max_context_len()));
+        if (expected_cache_len != static_cast<size_t>(model.get_kv_cache_len())) {
+            throw std::logic_error("YModel2 cached token sequence diverged from KV cache");
+        }
         
         auto dt1 = std::chrono::system_clock::now();
         float etps = static_cast<float>(encode_len) / std::chrono::duration<float>(et1 - et0).count();
@@ -165,10 +177,6 @@ int main() {
         // 添加助手回复到历史
         chat_history.push_back({"assistant", response});
         
-        // 更新prev_tokens：当前完整对话（包含assistant回复）的token序列
-        // 这样下次用户输入时，可以只处理新增的user消息部分
-        std::string full_chat_with_response = tokenizer.apply_chat_template(chat_history, false);
-        prev_tokens = tokenizer.encode(full_chat_with_response);
     }
     
     return 0;

@@ -20,7 +20,7 @@ namespace yt::function {
 
     enum struct sdpaBackend {
         MATH,
-        FLASH_AVX2
+        FLASH
     };
 
     template<typename T, int dim>

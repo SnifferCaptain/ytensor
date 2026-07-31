@@ -169,6 +169,10 @@ public:
 	void reset_kv_cache();          // 重置KV cache（清空对话历史）
 	int get_kv_cache_len() const;   // 获取当前KV缓存的token长度
 	int get_max_context_len() const;// 获取最大上下文长度
+
+private:
+	int prefill_threads = 1;
+	int decode_threads = 1;
 };
 
 namespace ops {

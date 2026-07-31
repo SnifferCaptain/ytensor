@@ -1,28 +1,55 @@
 # Backend System
 
-## MatmulBackend Enum
+This page describes matrix-multiplication backend configuration in the `yt::info` namespace.
 
-Defined in `ytensor_infos.hpp`, specifies the implementation used for matrix multiplication.
+## `MatmulBackend`
 
 ```cpp
 enum class MatmulBackend {
-    Naive,  // Plain implementation (slow, reference)
-    Eigen,  // Usually used when AVX2 is not available
-    AVX2    // Highly optimized (requires hardware support)
+    Naive = 0,  // Dependency-free reference implementation
+    Eigen = 1,  // Eigen implementation
+    YBLAS = 2   // YTensor's BLAS implementation
 };
 ```
 
-## Global Configuration
-
-The default backend is determined at compilation time:
+## Default Backend Preference
 
 ```cpp
-// Check the default backend
-constexpr MatmulBackend defaultBackend = yt::info::defaultMatmulBackend;
+static constexpr MatmulBackend defaultMatmulBackend =
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
+#elif YT_USE_EIGEN
+    MatmulBackend::Eigen
+#else
+    MatmulBackend::Naive
+#endif
+;
 ```
 
-You can compile with macros to control this:
-*   `YT_NO_AVX2`: Disable AVX2 (fallback to Eigen or Naive).
-*   `YT_NO_EIGEN`: Disable Eigen (fallback to Naive).
+Preference order: YBLAS, then Eigen, then Naive.
 
-See [Backend Selection](../guides/backend_selection.mdx) for more details.
+## Build Macros
+
+| Macro | Description |
+| --- | --- |
+| `YT_USE_EIGEN` | Enables the Eigen backend |
+| `YT_USE_YBLAS` | Enables the YBLAS backend |
+| `YT_USE_AVX2` | Enables the AVX2+FMA physical kernel currently used by YBLAS |
+
+YBLAS currently has an AVX2+FMA physical kernel, so `YT_USE_YBLAS` follows `YT_USE_AVX2` by default.
+`YT_USE_AVX2` is detected from the compiler's AVX2 and FMA feature macros. Defining it as `1` without
+the matching compiler target is not supported.
+
+A `MatmulBackend` argument expresses a preference. If the requested backend does not support the current dtype or build configuration, YTensor falls back to an available implementation.
+
+## Performance and Selection
+
+For layout behavior, performance boundaries, and selection guidance, see:
+
+- [YTensor::matmul](../YTensor/math/matmul.mdx)
+- [Backend Selection Guide](../guides/backend_selection.mdx)
+
+## See Also
+
+- [Performance Tips](../guides/performance_tips.mdx)
+- [Backend Selection Guide](../guides/backend_selection.mdx)

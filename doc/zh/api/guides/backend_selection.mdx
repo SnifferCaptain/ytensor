@@ -10,21 +10,21 @@ YTensor 的矩阵乘法支持多个后端：
 | --- | --- | --- | --- |
 | Naive | `MatmulBackend::Naive` | 无 | 兼容性优先、调试 |
 | Eigen | `MatmulBackend::Eigen` | Eigen3 | 一般高性能计算 |
-| AVX2 | `MatmulBackend::AVX2` | AVX2 + FMA CPU | 极致性能 |
+| YBLAS | `MatmulBackend::YBLAS` | 当前需要支持 AVX2+FMA 的 CPU 与编译目标 | YTensor 自研的 FP32/FP16 矩阵运算 |
 
-详细的性能对比和内存主序要求，请参阅 [YTensor::matmul](../YTensor/math/matmul.mdx) 中的说明。
+`backend` 参数表示后端偏好，而不是必须使用的实现。如果指定后端不支持当前 dtype 或构建配置，YTensor 会回退到可用实现。布局和 dtype 行为见 [YTensor::matmul](../YTensor/math/matmul.mdx)。
 
 ---
 
 ## 自动选择
 
-默认后端根据编译时宏自动选择，优先级：**AVX2 > Eigen > Naive**
+默认后端根据编译时宏自动选择，优先级：**YBLAS > Eigen > Naive**
 
 ```cpp
 // ytensor_infos.hpp 中的定义
 static constexpr MatmulBackend defaultMatmulBackend = 
-#if YT_USE_AVX2
-    MatmulBackend::AVX2
+#if YT_USE_YBLAS
+    MatmulBackend::YBLAS
 #elif YT_USE_EIGEN
     MatmulBackend::Eigen
 #else
@@ -52,18 +52,19 @@ Eigen 会被自动检测：
 #endif
 ```
 
-### 启用 AVX2
+### 启用 YBLAS
 
 ```cmake
 # CMakeLists.txt
 target_compile_options(your_target PRIVATE -mavx2 -mfma)
 ```
 
-或手动定义：
-```cpp
-#define YT_USE_AVX2 1
-#include "ytensor.hpp"
-```
+YBLAS 当前只有 AVX2+FMA 物理内核。`YT_USE_AVX2` 根据编译器 feature macro 自动检测，
+`YT_USE_YBLAS` 默认跟随该检测结果。单独定义 `YT_USE_AVX2=1` 不会启用 CPU 指令；如果编译目标
+没有同时启用 AVX2 和 FMA，YTensor 会拒绝该配置。
+
+如需保留 AVX2 编译目标但禁用自研后端，可在包含 YTensor 前定义 `YT_USE_YBLAS=0`。如需同时
+禁用 AVX2 物理内核，则定义 `YT_USE_AVX2=0`。
 
 ---
 
@@ -73,8 +74,8 @@ target_compile_options(your_target PRIVATE -mavx2 -mfma)
 #include "ytensor_infos.hpp"
 
 void check_backend() {
-    #if YT_USE_AVX2
-        std::cout << "Using AVX2 backend" << std::endl;
+    #if YT_USE_YBLAS
+        std::cout << "Using YBLAS backend" << std::endl;
     #elif YT_USE_EIGEN
         std::cout << "Using Eigen backend" << std::endl;
     #else
@@ -87,5 +88,6 @@ void check_backend() {
 
 ## 相关内容
 
+- [BLAS 总览](../blas/overview.mdx) - 直接使用 YBLAS 线性代数接口
 - [后端系统](../infos/backend.mdx) - MatmulBackend 枚举
 - [矩阵乘法](../YTensor/math/matmul.mdx) - matmul API 与详细性能说明

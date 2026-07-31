@@ -529,14 +529,15 @@ YT_IMPL_INLINE void validateTypedBinaryOperation(const YTensor<T, Dim>& left, co
     }
 }
 
-template <int _resultDim, typename Func, typename... Args>
+template <int requestedResultDim, typename Func, typename... Args>
 auto broadcast(Func&& func, Args&&... tensors) {
     using namespace ::yt::utils;
 
     constexpr int computedDim = max_dim<Args...>();
-    constexpr int resultDim = (_resultDim > 0) ? _resultDim : (computedDim > 0 ? computedDim : 1);
+    constexpr int resultDim =
+        (requestedResultDim > 0) ? requestedResultDim : (computedDim > 0 ? computedDim : 1);
     static_assert(
-        _resultDim > 0 || all_ytensor_template<Args...>(),
+        requestedResultDim > 0 || all_ytensor_template<Args...>(),
         "broadcast: when using YTensorBase, you must explicitly specify resultDim, "
     );
 
@@ -566,10 +567,10 @@ auto broadcast(Func&& func, Args&&... tensors) {
     auto broadcastShape = yt::strided::computeBroadcastShape(shapes);
     int opdim = static_cast<int>(broadcastShape.size());
 
-    if constexpr (_resultDim > 0) {
-        if (opdim != _resultDim) {
+    if constexpr (requestedResultDim > 0) {
+        if (opdim != requestedResultDim) {
             throw std::runtime_error(
-                "broadcast: specified resultDim (" + std::to_string(_resultDim) +
+                "broadcast: specified resultDim (" + std::to_string(requestedResultDim) +
                 ") does not match actual broadcast dimension (" + std::to_string(opdim) + ")"
             );
         }
@@ -712,7 +713,7 @@ auto broadcast(Func&& func, Args&&... tensors) {
 
 // typed原地广播核心；调用方必须先处理与target重叠的输入快照。
 template <typename TensorType, typename Func, typename... Args>
-TensorType& broadcastInplaceImpl(TensorType& target, Func&& func, Args&&... tensors) {
+TensorType& applyTypedBroadcastInplace(TensorType& target, Func&& func, Args&&... tensors) {
     using namespace ::yt::utils;
     using T = typename TensorType::scalarType;
     constexpr int dim = TensorType::ndim;
@@ -873,23 +874,27 @@ TensorType& broadcastInplaceImpl(TensorType& target, Func&& func, Args&&... tens
 
 template <typename TensorType, typename Func, typename... Args>
 TensorType& broadcastInplace(TensorType& target, Func&& func, Args&&... tensors) {
-    // 原地写入可能污染重叠slice/transpose/unfold输入；dispatch前先快照这些参数。
-    auto prepare = [&target](auto&& arg) {
-        using Arg = std::decay_t<decltype(arg)>;
-        if constexpr (yt::utils::is_ytensor_v<Arg>) {
-            if (yt::strided::physicalSpansOverlap(target, arg)) {
-                return Arg(arg.clone());
+    if constexpr (sizeof...(Args) == 0) {
+        return applyTypedBroadcastInplace(target, std::forward<Func>(func));
+    } else {
+        // 原地写入可能污染重叠slice/transpose/unfold输入；dispatch前先快照这些参数。
+        auto prepare = [&target](auto&& arg) {
+            using Arg = std::decay_t<decltype(arg)>;
+            if constexpr (yt::utils::is_ytensor_v<Arg>) {
+                if (yt::strided::physicalSpansOverlap(target, arg)) {
+                    return Arg(arg.clone());
+                }
             }
-        }
-        return Arg(std::forward<decltype(arg)>(arg));
-    };
-    auto prepared = std::tuple{prepare(std::forward<Args>(tensors))...};
-    return std::apply(
-        [&](auto&... args) -> TensorType& {
-            return broadcastInplaceImpl(target, std::forward<Func>(func), args...);
-        },
-        prepared
-    );
+            return Arg(std::forward<decltype(arg)>(arg));
+        };
+        auto prepared = std::tuple{prepare(std::forward<Args>(tensors))...};
+        return std::apply(
+            [&](auto&... args) -> TensorType& {
+                return applyTypedBroadcastInplace(target, std::forward<Func>(func), args...);
+            },
+            prepared
+        );
+    }
 }
 
 template <typename DType, typename Func, size_t N, size_t... I>
@@ -901,7 +906,9 @@ YT_IMPL_INLINE void invokeBroadcastArguments(
 
 // runtime callable原地广播核心，执行dtype/layout/shape校验和一次性索引分发。
 template <typename Func, typename... Args>
-yt::YTensorBase& broadcastInplaceBaseImpl(yt::YTensorBase& target, Func&& func, Args&&... tensors) {
+yt::YTensorBase& applyTypeErasedBroadcastInplace(
+    yt::YTensorBase& target, Func&& func, Args&&... tensors
+) {
     using namespace ::yt::utils;
 
     if (!target.isStrided()) {
@@ -1070,7 +1077,7 @@ yt::YTensorBase& broadcastInplaceBase(yt::YTensorBase& target, Func&& func, Args
     auto prepared = std::tuple{prepare(std::forward<Args>(tensors))...};
     return std::apply(
         [&](auto&... args) -> YTensorBase& {
-            return broadcastInplaceBaseImpl(target, std::forward<Func>(func), args...);
+            return applyTypeErasedBroadcastInplace(target, std::forward<Func>(func), args...);
         },
         prepared
     );

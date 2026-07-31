@@ -144,6 +144,10 @@ Masking behavior:
 - Additive `bias` remains independent from mask semantics and uses shape `[n0, n1]`.
 - If an entire query row is masked out, the output row is zeroed.
 
+`FLASH` is a logical backend name and does not expose the physical instruction set. A multi-row query uses YBLAS tiled QK, online softmax, and fused V accumulation. A single-row decode uses two GEMV operations instead of tiled Flash Attention. During prefill, masks that can report a fully hidden tile allow YBLAS to skip that score tile before invoking the QK microkernel and to skip the corresponding PV accumulation as well.
+
+The QK stage of `MATH` also uses masked matmul to skip fully hidden compute tiles, but it still materializes the complete score tensor and performs a separate score-by-V operation after softmax. The main benefit of `FLASH` therefore comes from reducing intermediate storage and memory traffic, improving cache locality, and fusing softmax with V accumulation; it does not change the asymptotic arithmetic complexity of attention. A causal mask can additionally eliminate complete QK and PV tiles, so the observed speedup depends on sequence length, tile geometry, and the amount of work the mask can skip.
+
 ### Signature
 
 ```cpp
@@ -197,7 +201,7 @@ auto v = yt::YTensor<float, 2>({3, 5}, {1,0,0,0,0,  0,1,0,0,0,  0,0,1,0,0});
 auto mask = yt::YTensor<bool, 2>({2, 3}, {true,true,false,  true,true,true});
 
 auto out0 = yt::function::scaledDotProductAttention(q, k, v, 0.0f, &mask, nullptr, yt::function::sdpaBackend::MATH);
-auto out1 = yt::function::scaledDotProductAttention(q, k, v, 0.0f, [](int i, int j){ return j <= i; }, nullptr, yt::function::sdpaBackend::FLASH_AVX2);
+auto out1 = yt::function::scaledDotProductAttention(q, k, v, 0.0f, [](int i, int j){ return j <= i; }, nullptr, yt::function::sdpaBackend::FLASH);
 ```
 
 ---
@@ -213,7 +217,7 @@ Backend enum used by `scaledDotProductAttention()`.
 ```cpp
 enum struct sdpaBackend {
     MATH,
-    FLASH_AVX2
+    FLASH
 };
 ```
 
@@ -224,7 +228,7 @@ enum struct sdpaBackend {
 ### Returns
 
 - `MATH`: generic math path.
-- `FLASH_AVX2`: AVX2 Flash Attention backend.
+- `FLASH`: YBLAS attention backend. YBLAS selects tiled Flash Attention or the decode GEMV path internally; the physical instruction set is not part of this API.
 
 ---
 

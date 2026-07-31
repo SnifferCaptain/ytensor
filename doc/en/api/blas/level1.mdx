@@ -1,0 +1,299 @@
+# BLAS Level-1
+
+Level-1 contains O(n) vector operations. Most users only need `sdot` and `hdot`. The `dotxv`, `axpyv`, `dotxf`, `axpyf`, and panel-packing interfaces are building blocks for new BLAS frames and high-performance operators.
+
+## Interface Summary
+
+| Interface | Operation | Typical use |
+| --- | --- | --- |
+| `sdot` | FP32 dot product | Direct `float*` input |
+| `hdot` | FP16 input with FP32 accumulation | Direct `float16*` input |
+| `dotxv` | Dot primitive with `alpha/beta` | Composing a low-level operator |
+| `axpyv` | `y += alpha * x` | Building GEMV, GER, and related frames |
+| `scalv`, `setv` | Scale or initialize a vector | Output preparation |
+| `dotxf`, `axpyf` | Fuse several vector operations | Building Level-2 frames |
+| `pack_a_typed_panel`, `pack_b_typed_panel` | Matrix-panel packing | Building Level-3 or GEMM-like operators |
+
+## `sdot`
+
+```cpp
+float yt::blas::sdot(
+    const float* x,
+    const float* y,
+    int n,
+    int64_t incx = 1,
+    int64_t incy = 1
+);
+```
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `x`, `y` | First logical element of each vector |
+| `n` | Number of elements |
+| `incx`, `incy` | Element stride for x and y; default `1` |
+
+It returns:
+
+```text
+Σ x[i * incx] * y[i * incy]
+```
+
+When `n <= 0`, it returns `0`.
+
+### Dense Vectors
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    float x[] = {1.0f, 2.0f, 3.0f};
+    float y[] = {4.0f, 5.0f, 6.0f};
+
+    float result = yt::blas::sdot(x, y, 3);
+    std::cout << result << '\n';  // 32
+}
+```
+
+### Skipping Elements
+
+```cpp
+float x[] = {1.0f, 99.0f, 2.0f, 99.0f, 3.0f};
+float y[] = {4.0f, 5.0f, 6.0f};
+
+float result = yt::blas::sdot(x, y, 3, 2, 1);
+// 1*4 + 2*5 + 3*6 = 32
+```
+
+`incx = 2` means two `float` elements, not `2 * sizeof(float)` bytes.
+
+### Reverse Traversal
+
+The pointer must be moved to the first logical element before using a negative stride:
+
+```cpp
+float x[] = {1.0f, 2.0f, 3.0f};
+float y[] = {10.0f, 20.0f, 30.0f};
+
+float result = yt::blas::sdot(x + 2, y, 3, -1, 1);
+// 3*10 + 2*20 + 1*30 = 100
+```
+
+Passing `x` with `incx = -1` would move outside the array after the first element.
+
+## `hdot`
+
+`hdot` reads FP16 storage, accumulates in FP32, and returns `float`:
+
+```cpp
+float yt::blas::hdot(
+    const yt::float16* x,
+    const yt::float16* y,
+    int n,
+    int64_t incx = 1,
+    int64_t incy = 1
+);
+```
+
+```cpp
+yt::float16 x[] = {
+    yt::float16(1.0f),
+    yt::float16(2.0f),
+    yt::float16(3.0f)
+};
+yt::float16 y[] = {
+    yt::float16(4.0f),
+    yt::float16(5.0f),
+    yt::float16(6.0f)
+};
+
+float result = yt::blas::hdot(x, y, 3);
+// result == 32.0f
+```
+
+Values are rounded when stored as `float16`, but the dot product itself does not use FP16 accumulation.
+
+## Low-Level Vector Primitives
+
+These interfaces are intended for composition inside new frames. They do not allocate memory, create threads, or validate storage capacity.
+
+### `dotxv`
+
+```cpp
+template <typename Storage>
+float yt::blas::dotxv(
+    int n,
+    float alpha,
+    const Storage* x,
+    int64_t incx,
+    const Storage* y,
+    int64_t incy,
+    float beta,
+    float rho
+);
+```
+
+```text
+rho_out = beta * rho + alpha * Σ(x[i] * y[i])
+```
+
+When `beta == 0`, `rho` is not read.
+
+### `axpyv`
+
+```cpp
+template <typename XStorage, typename YStorage>
+void yt::blas::axpyv(
+    int n,
+    float alpha,
+    const XStorage* x,
+    int64_t incx,
+    YStorage* y,
+    int64_t incy
+);
+```
+
+```text
+y[i] = y[i] + alpha * x[i]
+```
+
+Supported storage combinations:
+
+| x | y |
+| --- | --- |
+| `float` | `float` |
+| `float16` | `float16` |
+| `float16` | `float` |
+
+### `scalv` and `setv`
+
+```cpp
+template <typename Storage>
+void yt::blas::scalv(
+    int n,
+    float beta,
+    Storage* x,
+    int64_t incx
+);
+
+template <typename Storage>
+void yt::blas::setv(
+    int n,
+    float value,
+    Storage* x,
+    int64_t incx
+);
+```
+
+`scalv` computes `x *= beta`; `setv` assigns one value to every logical element. `scalv` does not read the previous value when `beta == 0`.
+
+## Fused Vector Primitives
+
+Level-1f computes several related outputs in one traversal and is primarily used by GEMV frames.
+
+### `dotxf`
+
+```cpp
+template <typename Storage>
+void yt::blas::dotxf(
+    const yt::blas::BlasContext& context,
+    int n,
+    int f,
+    float alpha,
+    const Storage* x,
+    int64_t incx,
+    const Storage* a,
+    int64_t rsa,
+    int64_t csa,
+    float beta,
+    float* y,
+    int64_t incy
+);
+```
+
+```text
+a(i,j) = a[i * rsa + j * csa]
+y[j] = beta*y[j] + alpha*Σ_i(x[i] * a(i,j))
+```
+
+`f` is the number of fused outputs. The default context uses `df = 4`. If the fast-path conditions are not met, the operation composes multiple `dotxv` calls without changing the numerical contract.
+
+### `axpyf`
+
+```cpp
+template <typename Storage>
+void yt::blas::axpyf(
+    const yt::blas::BlasContext& context,
+    int n,
+    int f,
+    float alpha,
+    const Storage* a,
+    int64_t rsa,
+    int64_t csa,
+    const Storage* x,
+    int64_t incx,
+    float* y,
+    int64_t incy
+);
+```
+
+```text
+y[i] += alpha * Σ_j(a(i,j) * x[j])
+```
+
+The default fusion width is `af = 8`. The `y` output of `dotxf` and `axpyf` uses FP32 storage; Level-2 performs final FP16 conversion when required.
+
+## Panel Packing
+
+Level-1m typed packers are internal building blocks for Level-3 and convolution-like operators. `sgemm` and `hgemm` already perform packing; ordinary GEMM callers should not pack manually.
+
+```cpp
+template <typename SourceType, typename ComputeType, GemmKernelSpec Spec>
+void yt::blas::pack_a_typed_panel(
+    const SourceType* A,
+    ComputeType* packed,
+    int mc,
+    int kc,
+    int64_t rsa,
+    int64_t csa
+);
+
+template <typename SourceType, typename ComputeType, GemmKernelSpec Spec>
+void yt::blas::pack_b_typed_panel(
+    const SourceType* B,
+    ComputeType* packed,
+    int kc,
+    int nc,
+    int64_t rsb,
+    int64_t csb
+);
+```
+
+The default packed layout uses `MR = 6` and `NR = 16`:
+
+```text
+A panel: [kc][MR]
+B panel: [kc][NR]
+```
+
+Packers zero-fill edge positions. FP16 sources are converted to FP32 while packing, avoiding a duplicated FP16 physical GEMM algorithm.
+
+:::warning
+The caller owns the destination buffer and must guarantee capacity, alignment, and non-overlap with the source. Use the public Level-3 interface unless you are implementing a new low-level operator.
+:::
+
+## Performance and Usage
+
+- Unit strides provide the best opportunity for SIMD and contiguous memory access.
+- Large or negative strides preserve semantics but usually reduce locality.
+- Level-1 does not create threads, so short vectors do not pay parallel scheduling overhead.
+- Compose storage templates instead of duplicating `dotxv` or `axpyv` algorithms by dtype.
+- Use `YTensor` interfaces when storage bounds cannot be proven.
+
+## See Also
+
+- [BLAS Overview](./overview.mdx)
+- [Level-2: Matrix-Vector Operations](./level2.mdx)
+- [Level-3: Matrix-Matrix Operations](./level3.mdx)

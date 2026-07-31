@@ -29,29 +29,29 @@ constexpr const char* getDTypeName() {
     else return nullptr;
 }
 
-// ======================== 分发实现（折叠表达式） ========================
+// ======================== 类型列表分发（折叠表达式） ========================
 
-template<typename Func, typename... Ts>
-bool dispatchImpl(const std::string& dtype, Func&& func, yt::type::TypeList<Ts...>) {
+template <typename Func, typename... Ts>
+bool dispatchRegisteredTypeList(const std::string& dtype, Func&& func, yt::type::TypeList<Ts...>) {
     // || 折叠表达式：左到右短路求值，找到匹配后立即停止
     return ((dtype == getDTypeName<Ts>() && (func.template operator()<Ts>(), true)) || ...);
 }
 
-template<typename TypeListT, typename Func>
+template <typename TypeListT, typename Func>
 void dispatch(const std::string& dtype, Func&& func, const std::string& opName) {
     // 首先尝试直接匹配
-    if (dispatchImpl(dtype, std::forward<Func>(func), TypeListT{})) {
+    if (dispatchRegisteredTypeList(dtype, std::forward<Func>(func), TypeListT{})) {
         return;
     }
     // 如果直接匹配失败，尝试解析嵌套类型
     std::string baseDtype = yt::type::getBaseDtype(dtype);
     if (baseDtype != dtype) {
         // dtype是嵌套类型，尝试用基础类型匹配
-        if(dispatchImpl(baseDtype, std::forward<Func>(func), TypeListT{})) {
+        if (dispatchRegisteredTypeList(baseDtype, std::forward<Func>(func), TypeListT{})) {
             return;
         }
     }
     throw std::runtime_error(opName + ": unsupported dtype: " + dtype);
 }
 
-} // namespace yt::type
+}  // namespace yt::type

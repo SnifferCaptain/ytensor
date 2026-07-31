@@ -1,0 +1,341 @@
+# BLAS Level-2
+
+Level-2 contains O(mn) matrix-vector operations:
+
+```text
+gemv_col: y = beta*y + alpha*A*x
+gemv_row: y = beta*y + alpha*x*B
+ger:      C = beta*C + alpha*x*yᵀ
+```
+
+Use [Level-3](./level3.mdx) for matrix-matrix products. When inputs are `YTensor` objects, `matmul` can also handle one- and two-dimensional operands.
+
+## Choosing a GEMV Direction
+
+| Expression | Matrix shape | Output length | Interface |
+| --- | --- | ---: | --- |
+| `A[m,k] * x[k]` | A on the left | `m` | `gemv_col` |
+| `x[k] * B[k,n]` | B on the right | `n` | `gemv_row` |
+
+`row` and `col` describe the vector's role, not the physical matrix order. Both interfaces accept arbitrary layouts through row and column strides.
+
+## `gemv_col`
+
+```text
+y[m] = beta*y + alpha*A[m,k]*x[k]
+```
+
+```cpp
+template <typename T>
+void yt::blas::gemv_col(
+    const T* A,
+    const T* x,
+    T* y,
+    int m,
+    int k,
+    float alpha,
+    float beta,
+    int64_t rsa,
+    int64_t csa,
+    int64_t incx,
+    int64_t incy,
+    const yt::blas::BlasContext& context =
+        yt::blas::defaultBlasContext()
+);
+```
+
+### Parameters
+
+| Parameter | Description |
+| --- | --- |
+| `A` | Logical `(0,0)` of matrix A |
+| `x`, `y` | First logical element of the input and input/output vectors |
+| `m` | Rows in A and elements in y |
+| `k` | Columns in A and elements in x |
+| `alpha`, `beta` | Product and previous-output scale |
+| `rsa`, `csa` | Row and column strides of A |
+| `incx`, `incy` | Element strides of x and y |
+| `context` | Optional fusion-width tuning parameters |
+
+### Row-Major Example
+
+```cpp
+#include <iostream>
+#include "ytensor.hpp"
+
+int main() {
+    // A = [[1, 2, 3],
+    //      [4, 5, 6]]
+    float A[] = {
+        1.0f, 2.0f, 3.0f,
+        4.0f, 5.0f, 6.0f
+    };
+    float x[] = {1.0f, 1.0f, 1.0f};
+    float y[2] = {};
+
+    yt::blas::gemv_col(
+        A, x, y,
+        2,     // m
+        3,     // k
+        1.0f,  // alpha
+        0.0f,  // beta
+        3, 1,  // A row/column strides
+        1, 1   // x/y strides
+    );
+
+    std::cout << y[0] << ", " << y[1] << '\n';  // 6, 15
+}
+```
+
+Dense row-major A uses `rsa = k`, `csa = 1`. Dense column-major A uses `rsa = 1`, `csa = m`.
+
+## `gemv_row`
+
+```text
+y[n] = beta*y + alpha*x[k]*B[k,n]
+```
+
+```cpp
+template <typename T>
+void yt::blas::gemv_row(
+    const T* x,
+    const T* B,
+    T* y,
+    int n,
+    int k,
+    float alpha,
+    float beta,
+    int64_t incx,
+    int64_t rsb,
+    int64_t csb,
+    int64_t incy,
+    const yt::blas::BlasContext& context =
+        yt::blas::defaultBlasContext()
+);
+```
+
+| Parameter | Description |
+| --- | --- |
+| `x`, `y` | First logical element of the input and input/output vectors |
+| `B` | Logical `(0,0)` of matrix B |
+| `n` | Columns in B and elements in y |
+| `k` | Rows in B and elements in x |
+| `alpha`, `beta` | Product and previous-output scale |
+| `incx`, `incy` | Element strides of x and y |
+| `rsb`, `csb` | Row and column strides of B |
+| `context` | Optional fusion-width tuning parameters |
+
+### Row-Major Example
+
+```cpp
+// x = [1, 1, 1]
+// B = [[1, 2],
+//      [3, 4],
+//      [5, 6]]
+float x[] = {1.0f, 1.0f, 1.0f};
+float B[] = {
+    1.0f, 2.0f,
+    3.0f, 4.0f,
+    5.0f, 6.0f
+};
+float y[2] = {};
+
+yt::blas::gemv_row(
+    x, B, y,
+    2,     // n
+    3,     // k
+    1.0f,  // alpha
+    0.0f,  // beta
+    1,     // incx
+    2, 1,  // B row/column strides
+    1      // incy
+);
+
+// y == {9, 12}
+```
+
+## Reusing Existing Output
+
+`alpha` and `beta` combine scaling and accumulation:
+
+```cpp
+float y[] = {10.0f, 20.0f};
+
+yt::blas::gemv_col(
+    A, x, y,
+    2, 3,
+    2.0f,  // alpha
+    0.5f,  // beta
+    3, 1,
+    1, 1
+);
+
+// y = 0.5*[10,20] + 2*[6,15] = [17,40]
+```
+
+With `beta == 0`, the mathematical result does not depend on the old y value. The FP32 path avoids reading it.
+
+:::warning
+Some FP16 GEMV layouts first stage y into an FP32 buffer. Even with `beta == 0`, pass constructed and readable `float16` objects; zero-initializing the output array is the simplest option.
+:::
+
+## FP16 GEMV
+
+Use typed `gemv_col<yt::float16>` and `gemv_row<yt::float16>`, or the named wrappers:
+
+```cpp
+void yt::blas::hgemv_col(...);
+void yt::blas::hgemv_row(...);
+```
+
+Dense row-major `A[m,k] * x[k]` also has:
+
+```cpp
+void yt::blas::hgemv(
+    const yt::float16* A,
+    const yt::float16* x,
+    yt::float16* y,
+    int m,
+    int k,
+    float alpha = 1.0f,
+    float beta = 0.0f
+);
+```
+
+```cpp
+yt::float16 A[] = {
+    yt::float16(1.0f), yt::float16(2.0f),
+    yt::float16(3.0f), yt::float16(4.0f)
+};
+yt::float16 x[] = {
+    yt::float16(1.0f),
+    yt::float16(1.0f)
+};
+yt::float16 y[2] = {};
+
+yt::blas::hgemv(A, x, y, 2, 2);
+// y is approximately {3, 7}
+```
+
+Each complete K reduction uses FP32 and converts to FP16 only after the output is finished.
+
+## `ger`
+
+GER performs an outer-product update:
+
+```text
+C(i,j) = beta*C(i,j) + alpha*x(i)*y(j)
+```
+
+```cpp
+template <typename T>
+void yt::blas::ger(
+    int m,
+    int n,
+    float alpha,
+    float beta,
+    const T* x,
+    int64_t incx,
+    const T* y,
+    int64_t incy,
+    T* C,
+    int64_t rsc,
+    int64_t csc
+);
+```
+
+Standard BLAS GER normally performs only `C += alpha*x*yᵀ`. YTensor adds `beta` so C can be scaled or replaced in the same traversal.
+
+```cpp
+float x[] = {1.0f, 2.0f};
+float y[] = {3.0f, 4.0f, 5.0f};
+float C[6] = {};
+
+yt::blas::ger(
+    2, 3,
+    1.0f, 0.0f,
+    x, 1,
+    y, 1,
+    C,
+    3, 1
+);
+
+// C = [[3, 4, 5],
+//      [6, 8, 10]]
+```
+
+The compatibility overload:
+
+```cpp
+void yt::blas::sger(
+    int m,
+    int n,
+    float alpha,
+    const float* x,
+    const float* y,
+    float* C,
+    int lda
+);
+```
+
+fixes `beta = 1`, unit vector strides, and row-major C. `lda` is C's row stride. `hger` is the corresponding FP16 wrapper.
+
+:::warning
+FP16 GER stages the previous C values into FP32. Even with `beta == 0`, C should contain constructed and readable `float16` objects.
+:::
+
+## Layout and Transposed Views
+
+```text
+matrix(row, column) =
+    base[row * row_stride + column * column_stride]
+```
+
+No separate transpose flag is needed. A dense row-major X with shape `[2,3]` has strides `{3,1}`; use `{1,3}` to treat the same storage as `Xᵀ[3,2]`.
+
+A matrix slice may have a row stride larger than its logical width:
+
+```text
+physical row width = 8
+GEMV uses the first 3 elements of each row
+
+row_stride = 8
+column_stride = 1
+```
+
+## Threads and Performance
+
+- GEMV reads the process-wide setting configured through `yt::blas::set_num_threads()`.
+- GER currently does not create an OpenMP parallel region.
+- `gemv_col` and `gemv_row` choose dot-product or AXPY traversal from matrix strides.
+- Unit strides and contiguous output normally provide better SIMD and cache behavior.
+- Thread scheduling may cost more than it saves for small matrices.
+
+## Caller Responsibilities
+
+- Dimensions, strides, and storage capacity must agree.
+- Strides are measured in elements.
+- A negative-stride pointer must refer to the first logical element.
+- Inputs and outputs must not overlap in a way that changes future reads.
+- The interface does not validate capacity, shape, dtype, or aliases.
+
+## Implementation Relationship
+
+Level-2 composes Level-1 rather than duplicating dtype-specific algorithms:
+
+```text
+gemv_col / gemv_row
+├── dot traversal ──► dotxf ──► dotxv
+└── output update ──► axpyf ──► axpyv
+
+ger
+└── scalv + axpyv
+```
+
+The frame owns layout selection, output blocking, threading, and FP16 writeback; Level-1 owns vector arithmetic.
+
+## See Also
+
+- [BLAS Overview](./overview.mdx)
+- [Level-1: Vector Operations](./level1.mdx)
+- [Level-3: Matrix-Matrix Operations](./level3.mdx)

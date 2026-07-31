@@ -32,14 +32,8 @@
     #endif
 #endif
 
-/// @brief 控制是否启用AVX2+FMA优化的宏，默认根据编译器支持自动检测
-#ifndef YT_USE_AVX2
-    #if defined(__AVX2__) && defined(__FMA__)
-        #define YT_USE_AVX2 1
-    #else
-        #define YT_USE_AVX2 0
-    #endif
-#endif
+// YBLAS统一管理物理指令集能力；其他AVX2专用算子复用其检测结果。
+#include "blas/config.hpp"
 
 #ifndef YT_IMPL_INLINE
     #if defined(YT_LIBRARY_IMPLEMENTATION)
@@ -92,14 +86,14 @@ namespace yt::info{
     enum class MatmulBackend {
         Naive = 0,  // naive实现，无依赖
         Eigen = 1,  // Eigen库实现
-        AVX2 = 2    // 自定义AVX2+FMA实现
+        YBLAS = 2   // YTensor自研线性代数实现
     };
 
     /// @brief 默认矩阵乘法后端，根据编译环境自动选择
-    /// 优先级：AVX2 > Eigen > Naive
+    /// 优先级：YBLAS > Eigen > Naive
     static constexpr MatmulBackend defaultMatmulBackend =
-    #if YT_USE_AVX2
-        MatmulBackend::AVX2
+    #if YT_USE_YBLAS
+        MatmulBackend::YBLAS
     #elif YT_USE_EIGEN
         MatmulBackend::Eigen
     #else

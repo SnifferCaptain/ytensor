@@ -1,0 +1,219 @@
+# 卷积
+
+YTensor 在 `yt::function` 命名空间中提供一维和二维互相关算子。与常见深度学习框架一致，计算时不会翻转卷积核。
+
+## 支持范围
+
+| 函数 | 输入布局 | 权重布局 | 输出布局 |
+| --- | --- | --- | --- |
+| `conv1d` | `[N, C_in, L]` | `[C_out, C_in / groups, K]` | `[N, C_out, L_out]` |
+| `conv2d` | `[N, C_in, H, W]` | `[C_out, C_in / groups, K_h, K_w]` | `[N, C_out, H_out, W_out]` |
+
+当前支持 `float` 和 `yt::float16` storage。FP16 输入和权重使用 FP32 累加，完成归约后再转换为 FP16 输出。
+
+当前 public contract 不包含 NLC、NHWC、转置卷积、反向传播或量化卷积布局。
+
+## `conv1d`
+
+### 函数签名
+
+```cpp
+template <typename T>
+yt::YTensor<T, 3> conv1d(
+    const yt::YTensor<T, 3>& input,
+    const yt::YTensor<T, 3>& weight,
+    int stride = 1,
+    const std::vector<int>& padding = {0, 0},
+    int dilation = 1,
+    int groups = 1
+);
+
+template <typename T>
+yt::YTensor<T, 3> conv1d(
+    const yt::YTensor<T, 3>& input,
+    const yt::YTensor<T, 3>& weight,
+    const yt::YTensor<T, 1>& bias,
+    int stride = 1,
+    const std::vector<int>& padding = {0, 0},
+    int dilation = 1,
+    int groups = 1
+);
+```
+
+`padding` 使用与 `torch.nn.functional.pad` 相同的顺序：
+
+```text
+{left, right}
+```
+
+输出长度为：
+
+```text
+effective_kernel = dilation * (K - 1) + 1
+L_out = floor((L + left + right - effective_kernel) / stride) + 1
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor.hpp"
+
+auto input = yt::YTensor<float, 3>::randn(2, 4, 32);
+auto weight = yt::YTensor<float, 3>::randn(6, 2, 3);
+auto bias = yt::YTensor<float, 1>::zeros(6);
+
+auto output = yt::function::conv1d(
+    input,
+    weight,
+    bias,
+    2,
+    {1, 2},
+    1,
+    2
+);
+// output shape: [2, 6, 17]
+```
+
+## `conv2d`
+
+### 函数签名
+
+```cpp
+template <typename T>
+yt::YTensor<T, 4> conv2d(
+    const yt::YTensor<T, 4>& input,
+    const yt::YTensor<T, 4>& weight,
+    std::array<int, 2> stride = {1, 1},
+    const std::vector<int>& padding = {0, 0, 0, 0},
+    std::array<int, 2> dilation = {1, 1},
+    int groups = 1
+);
+
+template <typename T>
+yt::YTensor<T, 4> conv2d(
+    const yt::YTensor<T, 4>& input,
+    const yt::YTensor<T, 4>& weight,
+    const yt::YTensor<T, 1>& bias,
+    std::array<int, 2> stride = {1, 1},
+    const std::vector<int>& padding = {0, 0, 0, 0},
+    std::array<int, 2> dilation = {1, 1},
+    int groups = 1
+);
+```
+
+`stride` 和 `dilation` 使用 `{height, width}` 顺序。`padding` 使用与 `torch.nn.functional.pad` 相同的顺序：
+
+```text
+{left, right, top, bottom}
+```
+
+输出高度和宽度分别计算：
+
+```text
+effective_h = dilation_h * (K_h - 1) + 1
+effective_w = dilation_w * (K_w - 1) + 1
+
+H_out = floor((H + top + bottom - effective_h) / stride_h) + 1
+W_out = floor((W + left + right - effective_w) / stride_w) + 1
+```
+
+### 使用示例
+
+```cpp
+#include "ytensor.hpp"
+
+auto input = yt::YTensor<float, 4>::randn(2, 4, 16, 20);
+auto weight = yt::YTensor<float, 4>::randn(8, 2, 3, 3);
+
+auto output = yt::function::conv2d(
+    input,
+    weight,
+    std::array{2, 1},
+    {1, 2, 1, 0},
+    std::array{1, 2},
+    2
+);
+// output shape: [2, 8, 8, 19]
+```
+
+## Groups 与 Depthwise
+
+通道必须满足：
+
+```text
+C_in % groups == 0
+C_out % groups == 0
+weight.shape(1) == C_in / groups
+```
+
+- `groups == 1` 表示普通卷积。
+- `groups > 1` 时，输入和输出通道被划分为彼此独立的组。
+- `groups == C_in` 表示 depthwise 卷积；`C_out / C_in` 是 channel multiplier，可以大于一。
+
+传入 `bias` 时，其 shape 必须为 `[C_out]`。支持带非 unit stride 的 bias view。
+
+## 实现架构
+
+卷积公共接口只描述互相关、layout、padding、stride、dilation、groups 和 bias 合同。具体执行路径由构建能力和 groups 关系决定：
+
+```text
+conv1d / conv2d
+        │
+        ▼
+参数、shape、通道与输出尺寸校验
+        │
+        ├── groups == C_in
+        │       │
+        │       ▼
+        │   depthwise direct
+        │   按 batch/channel/output 遍历
+        │
+        ├── AVX2 + FMA
+        │       │
+        │       ▼
+        │   ordinary/grouped packed-panel
+        │   ├── 每组打包 weight panel
+        │   ├── 按输出空间 tile 融合生成 input panel
+        │   └── 复用 BLAS dispatcher 与 row microkernel
+        │
+        └── 非 AVX2
+                │
+                ▼
+            strided reference
+```
+
+普通/分组优化路径采用 blockwise implicit-im2col，但不会物化完整 columns，也不会物化 padded input：
+
+1. weight 按 group 转换并打包为 FP32 panel，打包位置在 batch 循环外；
+2. input packer 按当前输出 tile 即时应用 padding、stride 和 dilation；
+3. panel 使用与 BLAS GEMM 相同的 `GemmKernelSpec` 和 packed-panel ABI；
+4. 卷积直接调用 dispatcher/microkernel，不经过完整的公开 GEMM frame；
+5. bias 和 storage type 转换在卷积输出提交阶段完成。
+
+Depthwise 路径是独立 direct kernel，不会为了统一形式转成 GEMM。这个边界使卷积能够复用成熟的物理计算内核，同时保留自身的数据遍历语义。
+
+## Stride 与后端行为
+
+算子支持连续张量，也支持由 `permute`、`slice`、负步长 slice 和 `unfold` 等操作产生的只读 view。连续空间布局通常更快，但调用方不需要为了正确性主动复制成 contiguous tensor。
+
+在 AVX2+FMA 构建中，YTensor 会在满足条件时使用优化的 depthwise 或 packed-panel 路径；其他构建使用标量 reference 路径。后端选择不会改变公开的 layout、padding、groups 或累加合同。
+
+## 异常
+
+以下情况抛出 `std::invalid_argument`：
+
+- `stride` 或 `dilation` 不是正数；
+- padding 值为负数，或 padding vector 长度错误；
+- `groups` 不是正数，或不能整除通道数；
+- weight 或 bias 的通道维度与输入合同不匹配；
+- effective kernel 大于补零后的输入尺寸。
+
+当输出尺寸或 workspace 尺寸无法安全表示时，抛出 `std::overflow_error`。
+
+## 相关内容
+
+- [BLAS 框架](../blas/overview.mdx)
+- [BLAS Level-3](../blas/level3.mdx)
+- [矩阵乘法](../YTensor/math/matmul.mdx)
+- [池化](./pooling.mdx)
+- [后端选择](../guides/backend_selection.mdx)

@@ -115,7 +115,7 @@ yt::YTensor<T, dim> yt::function::linear(const yt::YTensor<T, dim>& x, const yt:
 
 // ========== scaledDotProductAttention ==========
 
-// AVX2 Flash Attention编排；仅float可用，二维mask/bias在所有广播batch间共享。
+// YBLAS Flash Attention编排；仅float可用，二维mask/bias在所有广播batch间共享。
 // 注意：output batch shape由Q/K/V matrix wrapper共同广播，kernel调用在函数返回前同步完成。
 template<typename T, int dim>
 yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
@@ -126,9 +126,9 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     const yt::YTensor<bool, 2>* mask,
     yt::YTensor<T, 2>* bias
 ) {
-#if YT_USE_AVX2
+#if YT_USE_YBLAS
     if constexpr (!std::is_same_v<T, float>) {
-        throwNotSupport("yt::function::scaledDotProductAttention", "FLASH_AVX2 backend only supports float");
+        throwNotSupport("yt::function::scaledDotProductAttention", "FLASH backend only supports float");
         return yt::YTensor<T, dim>();
     } else {
         if (mask != nullptr && (mask->shape(0) != query.shape(-2) || mask->shape(1) != key.shape(-2))) {
@@ -204,7 +204,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 auto kStride = kKernel->stride_();
                 auto vStride = vKernel->stride_();
                 auto oStride = o.stride_();
-                yt::function::flash_attention(
+                yt::blas::flash_attention(
                     qKernel->data(),
                     kKernel->data(),
                     vKernel->data(),
@@ -240,12 +240,14 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     (void)scale;
     (void)mask;
     (void)bias;
-    throwNotSupport("yt::function::scaledDotProductAttention", "FLASH_AVX2 backend requires AVX2/FMA");
+    throwNotSupport(
+        "yt::function::scaledDotProductAttention", "FLASH backend requires YBLAS"
+    );
     return yt::YTensor<T, dim>();
 #endif
 }
 
-// callable mask的AVX2 Flash Attention编排；callback在同步kernel期间按坐标调用。
+// callable mask的YBLAS Flash Attention编排；callback在同步kernel期间按坐标调用。
 // 注意：callback可能被backend并发调用，状态型实现必须自行保证线程安全。
 template<typename T, int dim, typename MaskFunc>
 requires (!yt::utils::is_ytensor_v<std::decay_t<MaskFunc>> && !std::is_pointer_v<std::decay_t<MaskFunc>>)
@@ -257,9 +259,9 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     MaskFunc&& mask,
     yt::YTensor<T, 2>* bias
 ) {
-#if YT_USE_AVX2
+#if YT_USE_YBLAS
     if constexpr (!std::is_same_v<T, float>) {
-        throwNotSupport("yt::function::scaledDotProductAttention", "FLASH_AVX2 backend only supports float");
+        throwNotSupport("yt::function::scaledDotProductAttention", "FLASH backend only supports float");
         return yt::YTensor<T, dim>();
     } else {
         auto queryMatView = query.matView();
@@ -319,7 +321,7 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
                 auto kStride = kKernel->stride_();
                 auto vStride = vKernel->stride_();
                 auto oStride = o.stride_();
-                yt::function::flash_attention(
+                yt::blas::flash_attention(
                     qKernel->data(),
                     kKernel->data(),
                     vKernel->data(),
@@ -354,7 +356,9 @@ yt::YTensor<T, dim> yt::function::_scaledDotProductAttentionFlash(
     (void)scale;
     (void)mask;
     (void)bias;
-    throwNotSupport("yt::function::scaledDotProductAttention", "FLASH_AVX2 backend requires AVX2/FMA");
+    throwNotSupport(
+        "yt::function::scaledDotProductAttention", "FLASH backend requires YBLAS"
+    );
     return yt::YTensor<T, dim>();
 #endif
 }
@@ -434,7 +438,7 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
         }
         return output;
     }
-    if (backend == sdpaBackend::FLASH_AVX2) {
+    if (backend == sdpaBackend::FLASH) {
         return yt::function::_scaledDotProductAttentionFlash(query, key, value, scale, mask, bias);
     }
 
@@ -506,7 +510,7 @@ yt::YTensor<T, dim> yt::function::scaledDotProductAttention(
         yt::function::_zeroFullyMaskedSdpaRows(output, std::forward<MaskFunc>(mask), key.shape(-2));
         return output;
     }
-    if (backend == sdpaBackend::FLASH_AVX2) {
+    if (backend == sdpaBackend::FLASH) {
         return yt::function::_scaledDotProductAttentionFlash(
             query,
             key,

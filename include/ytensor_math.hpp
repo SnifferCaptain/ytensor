@@ -83,7 +83,7 @@ yt::YTensor<T, yt::utils::CONSTEXPR_MAX({dim, dim1, 2})> masked_matmul(
 /// @brief 对张量的最后两个维度进行带可调用输出掩码的广播矩阵乘法运算。
 /// @param other 右张量输入。
 /// @param func 任意可调用对象，签名要求为 bool func(int row, int col)。
-///             若同时提供 tileAllTrue(row0, col0, mr, nr) / tileAllFalse(...)，AVX2后端会用它们做块级剪枝。
+///             若同时提供 tileAllTrue(row0, col0, mr, nr) / tileAllFalse(...)，YBLAS后端会用它们做块级剪枝。
 /// @param maskedValue 输出张量的默认填充值，仅func(row, col)为true的位置会被矩阵乘法结果覆盖。
 /// @param backend 矩阵乘法后端，默认使用编译时自动选择的最优后端。
 template <int dim1, typename Func>

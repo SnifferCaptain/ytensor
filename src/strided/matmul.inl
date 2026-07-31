@@ -7,9 +7,8 @@
 #include <bit>
 
 #include "../../include/type/type_dispatch.hpp"
-#if YT_USE_AVX2
-#include "../../include/blas/avx2/hgemm.hpp"
-#include "../../include/blas/avx2/sgemm.hpp"
+#if YT_USE_YBLAS
+#include "../../include/blas/level3.hpp"
 #endif
 
 namespace yt::strided {
@@ -550,12 +549,41 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
 }
 #endif
 
-#if YT_USE_AVX2
-// float AVX2实现；flatten条件和offset计算必须与typed Eigen路径保持同步。
+#if YT_USE_YBLAS
+template <typename T>
+YT_IMPL_INLINE void dispatchTypedMatmulYblas(
+    const T* A, const T* B, T* C, int m, int n, int k, int64_t rsa, int64_t csa, int64_t rsb,
+    int64_t csb, int64_t rsc, int64_t csc
+) requires(std::is_same_v<T, float> || std::is_same_v<T, yt::float16>) {
+    const auto& context = yt::blas::defaultBlasContext();
+    if (m > 0 && n > 0 && k > 0) {
+        if (m == 1 && n == 1) {
+            *C = T(yt::blas::dotxv(k, 1.0f, A, csa, B, rsb, 0.0f, 0.0f));
+            return;
+        }
+        if (k == 1) {
+            yt::blas::ger(m, n, 1.0f, 0.0f, A, rsa, B, csb, C, rsc, csc);
+            return;
+        }
+        if (m == 1) {
+            yt::blas::gemv_row(A, B, C, n, k, 1.0f, 0.0f, csa, rsb, csb, csc, context);
+            return;
+        }
+        if (n == 1) {
+            yt::blas::gemv_col(A, B, C, m, k, 1.0f, 0.0f, rsa, csa, rsb, rsc, context);
+            return;
+        }
+    }
+    yt::blas::gemm(
+        context, A, B, C, m, n, k, 1.0f, 0.0f, rsa, csa, rsb, csb, rsc, csc
+    );
+}
+
+// float/float16 YBLAS实现；flatten条件和offset计算必须与typed Eigen路径保持同步。
 template <typename T, int leftDim, int rightDim>
-YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMatmulAvx2(
+YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMatmulYblas(
     const YTensor<T, leftDim>& left, const YTensor<T, rightDim>& right
-) requires std::is_same_v<T, float> {
+) requires(std::is_same_v<T, float> || std::is_same_v<T, yt::float16>) {
     constexpr int outDim = yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2});
     int aw = left.shape(-1);
     int bw = right.shape(-1);
@@ -575,9 +603,9 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
             // 将连续batch-row suffix折叠成更大的M维，减少小型GEMM调用和调度开销。
             int contiguousStart = left.isContiguousFrom(0, -1);
             if (contiguousStart < leftDim - 1) {
-                int outerSize = checkedShapeProduct(left, 0, contiguousStart, "typed AVX2 matmul");
+                int outerSize = checkedShapeProduct(left, 0, contiguousStart, "typed YBLAS matmul");
                 int innerRows =
-                    checkedShapeProduct(left, contiguousStart, leftDim - 1, "typed AVX2 matmul");
+                    checkedShapeProduct(left, contiguousStart, leftDim - 1, "typed YBLAS matmul");
 
                 std::vector<int> outShape;
                 for (int i = 0; i < leftDim - 1; ++i) {
@@ -614,17 +642,17 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
                         leftFlat, {innerRows, aw}, {innerStride, left.stride_(-1)},
                         checkedMatmulOffset(
                             static_cast<int64_t>(TensorAccess<T, leftDim>::offsetOf(left)) + leftOffset,
-                            "typed AVX2 matmul"
+                            "typed YBLAS matmul"
                         ),
                         TensorAccess<T, leftDim>::memoryOf(left)
                     );
                     TensorAccess<T, 2>::setView(
                         outFlat, {innerRows, bw}, {outInnerStride, 1},
-                        checkedMatmulOffset(outOffset, "typed AVX2 matmul"),
+                        checkedMatmulOffset(outOffset, "typed YBLAS matmul"),
                         TensorAccess<T, outDim>::memoryOf(out)
                     );
 
-                    yt::blas::matmul(
+                    dispatchTypedMatmulYblas(
                         leftFlat.data(), right2D.data(), outFlat.data(), innerRows, bw, aw,
                         static_cast<int64_t>(leftFlat.stride_(0)), static_cast<int64_t>(leftFlat.stride_(1)),
                         static_cast<int64_t>(right2D.stride_(0)), static_cast<int64_t>(right2D.stride_(1)),
@@ -655,7 +683,7 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
             auto aStride = A.stride_();
             auto bStride = B.stride_();
             auto cStride = C.stride_();
-            yt::blas::matmul(
+            dispatchTypedMatmulYblas(
                 A.data(), B.data(), C.data(), A.shape(0), B.shape(1), A.shape(1),
                 static_cast<int64_t>(aStride[0]), static_cast<int64_t>(aStride[1]),
                 static_cast<int64_t>(bStride[0]), static_cast<int64_t>(bStride[1]),
@@ -668,7 +696,7 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
 }
 
 template <typename T, int leftDim, int rightDim>
-YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMaskedMatmulAvx2(
+YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMaskedMatmulYblas(
     const YTensor<T, leftDim>& left, const YTensor<T, rightDim>& right, const YTensor<bool, 2>& mask,
     const T& maskedValue
 ) requires std::is_same_v<T, float> {
@@ -712,7 +740,7 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> type
 // dense 2-D callable mask专用入口，避免构造batch wrapper和broadcast调度。
 template <typename Func>
 requires(!yt::utils::is_ytensor_v<std::decay_t<Func>>)
-    YT_IMPL_INLINE YTensor<float, 2> typedMaskedMatmulAvx2Dense2D(
+    YT_IMPL_INLINE YTensor<float, 2> typedMaskedMatmulYblasDense2D(
         const YTensor<float, 2>& left, const YTensor<float, 2>& right, Func&& func, const float& maskedValue
     ) {
     auto&& predicate = std::forward<Func>(func);
@@ -729,7 +757,7 @@ requires(!yt::utils::is_ytensor_v<std::decay_t<Func>>)
 
 template <int leftDim, int rightDim, typename Func>
 requires(!yt::utils::is_ytensor_v<std::decay_t<Func>>)
-    YT_IMPL_INLINE YTensor<float, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMaskedMatmulAvx2(
+    YT_IMPL_INLINE YTensor<float, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> typedMaskedMatmulYblas(
         const YTensor<float, leftDim>& left, const YTensor<float, rightDim>& right, Func&& func,
         const float& maskedValue
     ) {
@@ -778,19 +806,21 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> matm
         (void)backend;
         return typedMatmulNaive(left, right);
     } else {
-        // backend是偏好：AVX2不支持当前T时尝试Eigen，layout不满足Eigen时回退naive。
+        // backend是偏好：YBLAS不支持当前T时尝试Eigen，layout不满足Eigen时回退naive。
         switch (backend) {
-#if YT_USE_AVX2
-            case yt::info::MatmulBackend::AVX2:
-                if constexpr (std::is_same_v<T, float>) {
-                    return typedMatmulAvx2(left, right);
+#if YT_USE_YBLAS
+            case yt::info::MatmulBackend::YBLAS:
+                if constexpr (std::is_same_v<T, float> || std::is_same_v<T, yt::float16>) {
+                    return typedMatmulYblas(left, right);
                 }
                 [[fallthrough]];
 #endif
 #if YT_USE_EIGEN
             case yt::info::MatmulBackend::Eigen:
-                if (eigenMatrixLayoutSupported(left) && eigenMatrixLayoutSupported(right)) {
-                    return typedMatmulEigen(left, right);
+                if constexpr (std::is_arithmetic_v<T>) {
+                    if (eigenMatrixLayoutSupported(left) && eigenMatrixLayoutSupported(right)) {
+                        return typedMatmulEigen(left, right);
+                    }
                 }
                 return typedMatmulNaive(left, right);
 #endif
@@ -815,12 +845,12 @@ YT_IMPL_INLINE YTensor<T, yt::utils::CONSTEXPR_MAX({leftDim, rightDim, 2})> mask
         (void)backend;
         return typedMaskedMatmulNaive(left, right, mask, maskedValue);
     } else {
-        // 当前没有masked Eigen实现，Eigen偏好和不支持的AVX2 dtype都安全回退naive。
+        // 当前没有masked Eigen实现，Eigen偏好和不支持的YBLAS dtype都安全回退naive。
         switch (backend) {
-#if YT_USE_AVX2
-            case yt::info::MatmulBackend::AVX2:
+#if YT_USE_YBLAS
+            case yt::info::MatmulBackend::YBLAS:
                 if constexpr (std::is_same_v<T, float>) {
-                    return typedMaskedMatmulAvx2(left, right, mask, maskedValue);
+                    return typedMaskedMatmulYblas(left, right, mask, maskedValue);
                 }
                 [[fallthrough]];
 #endif
@@ -841,10 +871,10 @@ requires(!yt::utils::is_ytensor_v<std::decay_t<Func>>)
     requireTypedMatmulInputs(left, right, "yt::strided::masked_matmul");
     if constexpr (yt::type::is_builtin_numeric_v<T>) {
         switch (backend) {
-#if YT_USE_AVX2
-            case yt::info::MatmulBackend::AVX2:
+#if YT_USE_YBLAS
+            case yt::info::MatmulBackend::YBLAS:
                 if constexpr (std::is_same_v<T, float>) {
-                    return typedMaskedMatmulAvx2(left, right, std::forward<Func>(func), maskedValue);
+                    return typedMaskedMatmulYblas(left, right, std::forward<Func>(func), maskedValue);
                 }
                 [[fallthrough]];
 #endif
@@ -866,14 +896,14 @@ YT_IMPL_INLINE YTensorBase
 matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBackend backend) {
     requireStridedMatmulInputs(left, right, "yt::strided::matmul");
 
-    bool canUseFp16Avx2 = false;
-#if YT_USE_AVX2
-    canUseFp16Avx2 = (left.dtype() == "float16" && backend == yt::info::MatmulBackend::AVX2);
+    bool canUseFp16Yblas = false;
+#if YT_USE_YBLAS
+    canUseFp16Yblas = (left.dtype() == "float16" && backend == yt::info::MatmulBackend::YBLAS);
 #endif
 
-    // low precision默认以float32累加再cast回原dtype；仅AVX2 float16保留native hgemm路径。
+    // low precision默认以float32累加再cast回原dtype；YBLAS float16直接进入typed GEMM frame。
     bool needsCastToFloat32 =
-        (left.dtype() == "bfloat16" || (left.dtype() == "float16" && !canUseFp16Avx2) ||
+        (left.dtype() == "bfloat16" || (left.dtype() == "float16" && !canUseFp16Yblas) ||
          left.dtype() == "float8_e5m2" || left.dtype() == "float8_e4m3" || left.dtype() == "float8_e8m0" ||
          left.dtype() == "float8_ue8m0");
     if (needsCastToFloat32) {
@@ -896,9 +926,9 @@ matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBacken
         return out;
     };
 
-#if YT_USE_AVX2
-    // runtime版flatten优化与typedMatmulAvx2共享相同shape/stride不变量；修改时必须同步两处。
-    auto runAvx2TypedMatmul = [&]<typename T>(const char* dtypeName, auto&& kernel) -> YTensorBase {
+#if YT_USE_YBLAS
+    // runtime版flatten优化与typedMatmulYblas共享相同shape/stride不变量；修改时必须同步两处。
+    auto runYblasTypedMatmul = [&]<typename T>(const char* dtypeName, auto&& kernel) -> YTensorBase {
         int leftDim = left.ndim();
         int rightDim = right.ndim();
         int aw = left.shape(leftDim - 1);
@@ -917,9 +947,9 @@ matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBacken
             if (rightIs2D) {
                 int contiguousStart = left.isContiguousFrom(0, -1);
                 if (contiguousStart < leftDim - 1) {
-                    int outerSize = checkedShapeProduct(left, 0, contiguousStart, "runtime AVX2 matmul");
+                    int outerSize = checkedShapeProduct(left, 0, contiguousStart, "runtime YBLAS matmul");
                     int innerRows =
-                        checkedShapeProduct(left, contiguousStart, leftDim - 1, "runtime AVX2 matmul");
+                        checkedShapeProduct(left, contiguousStart, leftDim - 1, "runtime YBLAS matmul");
 
                     std::vector<int> opShape;
                     for (int i = 0; i < leftDim - 1; ++i) opShape.push_back(left.shape(i));
@@ -953,7 +983,7 @@ matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBacken
                             leftFlat, {innerRows, aw}, {innerStride, left.stride_(leftDim - 1)},
                             checkedMatmulOffset(
                                 static_cast<int64_t>(left.stridedOffset()) + leftOffset,
-                                "runtime AVX2 matmul"
+                                "runtime YBLAS matmul"
                             ),
                             left._memory, sizeof(T), dtypeName
                         );
@@ -961,7 +991,7 @@ matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBacken
                         YTensorBase outFlat;
                         BaseViewAccess::setView(
                             outFlat, {innerRows, bw}, {outInnerStride, 1},
-                            checkedMatmulOffset(outOffset, "runtime AVX2 matmul"), out._memory, sizeof(T),
+                            checkedMatmulOffset(outOffset, "runtime YBLAS matmul"), out._memory, sizeof(T),
                             dtypeName
                         );
 
@@ -1114,18 +1144,23 @@ matmul(const YTensorBase& left, const YTensorBase& right, yt::info::MatmulBacken
     switch (backend) {
         case yt::info::MatmulBackend::Naive:
             return runNaive();
-        case yt::info::MatmulBackend::AVX2:
-#if YT_USE_AVX2
+        case yt::info::MatmulBackend::YBLAS: {
+#if YT_USE_YBLAS
+            auto kernel = [](
+                              auto* A, auto* B, auto* C, int m, int n, int k, int64_t rsa, int64_t csa,
+                              int64_t rsb, int64_t csb, int64_t rsc, int64_t csc
+                          ) {
+                dispatchTypedMatmulYblas(A, B, C, m, n, k, rsa, csa, rsb, csb, rsc, csc);
+            };
             if (left.dtype() == "float16") {
-                auto hKernel = [](auto... args) { yt::blas::hmatmul(args...); };
-                return runAvx2TypedMatmul.template operator()<yt::float16>("float16", hKernel);
+                return runYblasTypedMatmul.template operator()<yt::float16>("float16", kernel);
             }
             if (left.dtype() == "float32") {
-                auto sKernel = [](auto... args) { yt::blas::matmul(args...); };
-                return runAvx2TypedMatmul.template operator()<float>("float32", sKernel);
+                return runYblasTypedMatmul.template operator()<float>("float32", kernel);
             }
 #endif
             [[fallthrough]];
+        }
         case yt::info::MatmulBackend::Eigen:
 #if YT_USE_EIGEN
             // Eigen整数乘加不提供owner规定的同宽模累加语义，因此必须走naive kernel。
@@ -1168,7 +1203,7 @@ YT_IMPL_INLINE YTensorBase masked_matmul(
         );
     }
 
-    // masked AVX2只有float32 kernel，所有low precision输入统一提升后再cast回原dtype。
+    // masked YBLAS只有float32 kernel，所有low precision输入统一提升后再cast回原dtype。
     bool needsCastToFloat32 =
         (left.dtype() == "bfloat16" || left.dtype() == "float16" || left.dtype() == "float8_e5m2" ||
          left.dtype() == "float8_e4m3" || left.dtype() == "float8_e8m0" || left.dtype() == "float8_ue8m0");
@@ -1192,8 +1227,8 @@ YT_IMPL_INLINE YTensorBase masked_matmul(
         return out;
     };
 
-#if YT_USE_AVX2
-    auto runMaskedAvx2 = [&]() {
+#if YT_USE_YBLAS
+    auto runMaskedYblas = [&]() {
         auto leftMatView = yt::strided::matView(left);
         auto rightMatView = yt::strided::matView(right);
         YTensorBase out(makeMatmulOutputShape(left, right, leftMatView, rightMatView), "float32");
@@ -1224,14 +1259,14 @@ YT_IMPL_INLINE YTensorBase masked_matmul(
     };
 #endif
 
-    // 无masked Eigen实现；Eigen偏好或不支持的AVX2 dtype最终使用注册naive kernel。
+    // 无masked Eigen实现；Eigen偏好或不支持的YBLAS dtype最终使用注册naive kernel。
     switch (backend) {
         case yt::info::MatmulBackend::Naive:
             return runNaive();
-        case yt::info::MatmulBackend::AVX2:
-#if YT_USE_AVX2
+        case yt::info::MatmulBackend::YBLAS:
+#if YT_USE_YBLAS
             if (left.dtype() == "float32") {
-                return runMaskedAvx2();
+                return runMaskedYblas();
             }
 #endif
             [[fallthrough]];
